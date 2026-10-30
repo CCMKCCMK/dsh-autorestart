@@ -14,7 +14,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { apply, detectManualRestart, normalizeConfig, resolveStateFile } from '../index.js'
+import { apply, detectManualRestart, normalizeConfig, planWatchdogArmCommand, PLUGIN_VERSION_FALLBACK, pluginVersion, resolveStateFile } from '../index.js'
 import { DEFAULTS } from '../index.js'
 import { writeState, createEmptyState, entryFor, markPendingResume, markRunning, requestRestart, setDisarmedGoal, setGoal, setParkedGoal } from '../lib/checkpoint.js'
 
@@ -1600,3 +1600,263 @@ test('force re-opens a session whose stale over-limit mark would otherwise skip 
   assert.equal(state.sessions['sess-stale'].resumeAttempts, 1, 'the attempt counter was reset before the retry');
   assert.equal(agent.followups.length, 1, 'the session got its continuation message');
 });
+
+// ---------------------------------------------------------------------------
+// THE WATCHDOG COMMAND (2026-10-30): a resolved node, never the client exe,
+// never a shell in between, and the pending marker carries `maxAttempts`.
+//
+// The arming code used to build the command line itself:
+//   '"' + process.execPath + '" "' + script + '" --state-dir "' + stateDir + '"'
+// In the desktop app `process.execPath` IS `DeepSeek Harness.exe`, so the
+// one-off task started a whole second client and the watchdog never ran.
+// ---------------------------------------------------------------------------
+
+const APP_EXE = 'C:\\Program Files\\DeepSeek Harness\\DeepSeek Harness.exe'
+
+test('the watchdog arm command runs a REAL node, never the client executable', () => {
+  const planned = planWatchdogArmCommand({
+    scriptPath: 'C:\\plugin\\scripts\\watchdog.mjs',
+    stateDir: 'C:\\state',
+    execPath: process.execPath,
+    platform: 'win32',
+  })
+  assert.equal(planned.ok, true, 'a real node interpreter is available in the tests')
+  assert.equal(planned.file, process.execPath, 'the program of the task is the node interpreter');
+  assert.notEqual(path.basename(planned.file).toLowerCase(), 'deepseek harness.exe');
+  assert.deepEqual(planned.args, ['C:\\plugin\\scripts\\watchdog.mjs', '--state-dir', 'C:\\state']);
+});
+
+test('with no node interpreter the arm command REFUSES instead of falling back to the exe', () => {
+  const planned = planWatchdogArmCommand({
+    scriptPath: 'C:\\plugin\\scripts\\watchdog.mjs',
+    stateDir: 'C:\\state',
+    execPath: APP_EXE,
+    platform: 'win32',
+    env: { PATH: '' },
+    existsSyncFn: () => false,
+  })
+  assert.equal(planned.ok, false, 'the desktop executable is never a stand-in for node')
+  assert.equal(planned.file, '')
+  assert.equal(planned.commandLine, '')
+  assert.match(planned.reason, /node/)
+  assert.doesNotMatch(planned.reason === '' ? 'x' : planned.reason, /^$/);
+});
+
+test('the arm command line is quoted and carries no cmd /c wrapper', () => {
+  const planned = planWatchdogArmCommand({
+    scriptPath: 'C:\\plugin dir\\scripts\\watchdog.mjs',
+    stateDir: 'C:\\state dir',
+    execPath: process.execPath,
+    platform: 'win32',
+  })
+  assert.equal(planned.ok, true)
+  assert.ok(planned.commandLine.startsWith('"'), 'the interpreter is quoted')
+  assert.ok(planned.commandLine.includes('"C:\\plugin dir\\scripts\\watchdog.mjs"'), 'a path with a space stays quoted')
+  assert.equal(planned.commandLine.includes('cmd /c'), false, 'no shell may sit between the task and node')
+  assert.equal(planned.commandLine.includes('cmd.exe'), false, 'no shell may sit between the task and node')
+  assert.equal(planned.commandLine.includes('DeepSeek Harness.exe'), false, 'the client must not appear at all')
+});
+
+test('armWatchdog no longer concatenates the command and passes {file, args} to the task', () => {
+  const source = fs.readFileSync(new URL('../index.js', import.meta.url), 'utf8')
+  // The old line, character for character: it must be gone.
+  assert.equal(
+    source.includes("'\"' + process.execPath + '\"'"),
+    false,
+    'the hand-built command line must be gone from the arming code',
+  )
+  assert.ok(source.includes('const armCommand = planWatchdogArmCommand({'), 'the arming code must call the planner')
+  assert.ok(
+    source.includes('command: { file: armCommand.file, args: armCommand.args }'),
+    'the scheduled task must get {file, args}: the XML carries the program and the arguments separately',
+  )
+  assert.ok(
+    source.includes('command: [armCommand.file, ...armCommand.args]'),
+    'the systemd tier must get the resolved interpreter as argv[0]',
+  )
+  assert.ok(
+    source.includes('command: armCommand.commandLine'),
+    'the detached tier gets the quoted line built from the resolved interpreter',
+  )
+  assert.equal(
+    /command:\s*watchdogCommand/.test(source),
+    false,
+    'no tier may use the old hand-built string',
+  )
+});
+
+test('the pending marker the arming writes carries maxAttempts', () => {
+  const source = fs.readFileSync(new URL('../index.js', import.meta.url), 'utf8')
+  const call = source.slice(source.indexOf('const pending = buildPending({'));
+  const pendingCall = call.slice(0, call.indexOf('})'))
+  assert.match(pendingCall, /maxAttempts:\s*DEFAULT_MAX_ATTEMPTS/, 'the arming must not drop the bounded-attempt field')
+});
+
+test('the plugin reports the version of the package, and the health route reports the same', async () => {
+  const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+  assert.equal(pluginVersion(), pkg.version, 'the loaded plugin must report the package version')
+  assert.equal(PLUGIN_VERSION_FALLBACK, pkg.version, 'the fallback must follow the package (a failed read must not lie)')
+  assert.equal(pkg.version, '0.8.6', 'the version whose health route proves the new code is loaded')
+
+  // The health route is a custom route, so the version it reports is read from
+  // the running plugin — the one thing a real machine can check.
+  const { ctx, routes } = createRouteContext()
+  apply(ctx, { stateFile: tempStateFile('health-version').file, recoveryDelayMs: 0, enabled: true })
+  const route = routes.find((entry) => entry.path === '/__dsh_autorestart/health')
+  assert.ok(route, 'the health route must be registered')
+  const res = fakeResponse()
+  route.handler({ url: '/__dsh_autorestart/health', socket: { remoteAddress: '127.0.0.1' } }, res)
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  const body = JSON.parse(res.body)
+  assert.equal(body.version, pkg.version, 'the health route must report the package version')
+});
+
+test('the health route reports the LAST cookie cleanup, never a live count', async () => {
+  const { dir, file } = tempStateFile('cookie-clear')
+  const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+  assert.equal(typeof pkg.version, 'string')
+
+  const { ctx, routes } = createRouteContext()
+  apply(ctx, { stateFile: file, recoveryDelayMs: 0, enabled: true })
+  const route = routes.find((entry) => entry.path === '/__dsh_autorestart/health')
+  assert.ok(route)
+
+  const first = fakeResponse()
+  route.handler({ url: '/__dsh_autorestart/health', socket: { remoteAddress: '127.0.0.1' } }, first)
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  const before = JSON.parse(first.body)
+  assert.ok(before.cookieClear, 'the health route must report the cleanup state');
+  assert.equal(before.cookieClear.ok, null, 'no cleanup ran yet: not a success, not a failure');
+  assert.equal(before.cookieClear.live, null, 'a live count must never be reported');
+  assert.match(String(before.cookieClear.liveNote), /locked/)
+
+  // Now write the record the cleanup script would have written, and ask again.
+  const { writeCookieClearReport } = await import('../lib/cookie-clear.js')
+  writeCookieClearReport(dir, { at: 1_700_000_000_000, ok: true, removed: 5, reason: '' })
+  const second = fakeResponse()
+  route.handler({ url: '/__dsh_autorestart/health', socket: { remoteAddress: '127.0.0.1' } }, second)
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  const after = JSON.parse(second.body)
+  assert.equal(after.cookieClear.ok, true)
+  assert.equal(after.cookieClear.removed, 5, 'the number of cookies the LAST cleanup deleted')
+  assert.equal(after.cookieClear.at, 1_700_000_000_000)
+  assert.equal(after.cookieClear.live, null)
+});
+
+// ---------------------------------------------------------------------------
+// The output schema of every tool is STRICT (`additionalProperties: false`):
+// a key that is not declared is refused by the registry, so "the branch
+// returns a value nobody declared" is a real break, not a cosmetic one
+// (t7 finding F2: the dry run of `continuum_supervisor` returned seven
+// undeclared fields).
+//
+// Only the READ-ONLY actions are executed here: `install` / `uninstall` /
+// `apply` / `revert` register things on this machine and `continuum_restart`
+// asks for a restart, so a test may not touch them.
+// ---------------------------------------------------------------------------
+
+const READ_ONLY_ACTIONS = ['status', 'plan', 'dry-run', 'derive']
+
+test('every key a tool returns is declared in its output schema', async () => {
+  const { file } = tempStateFile('tool-output-schema')
+  const fake = createFakeContext()
+  apply(fake.ctx, { stateFile: file, recoveryDelayMs: 0, enabled: true })
+
+  let checked = 0
+  for (const tool of fake.tools) {
+    const schema = tool.output && tool.output.schema ? tool.output.schema : null
+    assert.ok(schema, `${tool.name} must declare an output schema`)
+    assert.equal(schema.additionalProperties, false, `${tool.name} must stay strict`)
+    const properties = schema.properties && typeof schema.properties === 'object' ? schema.properties : {}
+
+    const enumActions = tool.parameters
+      && tool.parameters.properties
+      && tool.parameters.properties.action
+      && Array.isArray(tool.parameters.properties.action.enum)
+      ? tool.parameters.properties.action.enum
+      : []
+    // The declared actions are the contract; the ones we may actually run are
+    // the read-only ones (and only those exist on this tool today).
+    const runnable = enumActions.filter((action) => READ_ONLY_ACTIONS.includes(action))
+    if (runnable.length === 0) continue
+    assert.ok(enumActions.length > 0)
+
+    for (const action of runnable) {
+      const value = await tool.execute({ action })
+      assert.ok(value && typeof value === 'object', `${tool.name}(${action}) must answer with an object`)
+      for (const key of Object.keys(value)) {
+        assert.ok(
+          Object.prototype.hasOwnProperty.call(properties, key),
+          `${tool.name}(${action}) returned "${key}", which its output schema does not declare`,
+        )
+        // A declared type must also accept the VALUE: `null` under
+        // `{type:'string'}` is refused exactly like an undeclared key, so the
+        // dry run omits a nullable answer instead of sending null.
+        assert.notEqual(
+          value[key],
+          null,
+          `${tool.name}(${action}).${key} must not be null (the schema declares ${JSON.stringify(properties[key])})`,
+        )
+      }
+      checked += 1
+    }
+  }
+  assert.ok(checked >= 3, 'the read-only actions of the supervisor tool must have been executed')
+});
+
+test('the dry run of the supervisor declares everything it returns', async () => {
+  const { file } = tempStateFile('dry-run-schema')
+  const fake = createFakeContext()
+  apply(fake.ctx, { stateFile: file, recoveryDelayMs: 0, enabled: true })
+  const tool = fake.tools.find((entry) => entry.name === 'continuum_supervisor')
+  assert.ok(tool, 'continuum_supervisor must be registered')
+  const properties = tool.output.schema.properties
+
+  const value = await tool.execute({ action: 'dry-run' })
+  // The seven fields F2 was about: they are either declared or absent.
+  for (const key of ['level', 'mode', 'command', 'plan', 'needsConfirmation', 'writes', 'compose']) {
+    if (Object.prototype.hasOwnProperty.call(value, key)) {
+      assert.ok(
+        Object.prototype.hasOwnProperty.call(properties, key),
+        `the dry run returned "${key}" but the output schema does not declare it`,
+      )
+      assert.notEqual(value[key], null, `the dry run must omit "${key}" rather than send null`)
+    }
+  }
+  for (const key of ['level', 'mode', 'plan', 'needsConfirmation']) {
+    assert.ok(
+      Object.prototype.hasOwnProperty.call(value, key),
+      `the dry run must always carry "${key}" (it is never null)`,
+    )
+  }
+  assert.equal(typeof value.needsConfirmation, 'boolean')
+  assert.ok(Array.isArray(value.plan))
+});
+
+/** A fake Cordis context that collects the routes the plugin registers. */function createRouteContext() {
+  const routes = []
+  const webServer = {
+    register: (route) => {
+      routes.push(route)
+      return () => {}
+    },
+    getOrigin: () => 'http://127.0.0.1:1234',
+    tapIndex: () => () => {},
+  }
+  const ctx = {
+    logger: { info: () => undefined, warn: () => undefined, error: () => undefined },
+    fiber: { state: 2 },
+    agents: { list: () => [], roots: () => [], get: () => undefined },
+    goals: { get: () => undefined, resume: () => undefined },
+    tools: { register: () => () => {}, guard: () => () => {} },
+    on: () => () => {},
+    effect: (fn) => {
+      fn()
+      return () => {}
+    },
+    interval: () => () => {},
+    timeout: () => () => {},
+    get: (name) => (name === 'webServer' ? webServer : undefined),
+  }
+  return { ctx, routes }
+}

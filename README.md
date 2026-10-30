@@ -201,7 +201,7 @@ what it adds before you install it.
 
 ## Install
 
-Current version: **0.8.5**.
+Current version: **0.8.6**.
 
 From npm — the package is published under the name `dsh-autorestart`:
 
@@ -304,7 +304,7 @@ Two blocks of the settings page are worth a word, because they show facts instea
   matters ("may this one be restored?"), then two labelled rows, so nothing runs into anything else:
 
   ```
-  Identity  Known good · version 0.8.5
+  Identity  Known good · version 0.8.6
   Backup time 2026-10-29 22:08
   Backup size 156 MB (plugins included)
   ```
@@ -669,10 +669,52 @@ instance alive? (then there is nothing to restore) → **ask the health route of
 the host itself** (only a host that does not answer may be rolled back; when
 there is no port to ask, one more round is waited and the markers are looked at
 again) → take the shared lock (`rollback.lock`, so exactly one of us restores) →
-restore the snapshot → start the host again → wait for the ready marker once
-more. At most **one** restore and **one** start; then the watchdog stops and
-writes what happened into `<stateDir>/last-watchdog-report.json` (which tier it
-used, `healthCheck`, and why).
+and then, **in this order**: restore the snapshot → **remove the stale
+`dsh-auth-*` handshake cookies** → start the host again → wait for the ready
+marker.
+
+Each pass tries up to **`maxAttempts`** times (3 by default, with a hard ceiling
+— never endless): a pass that did not come up backs off (5s / 10s / 20s, capped)
+and the three questions above are asked AGAIN before the next start, because the
+world changed in between (a slow boot is `not-needed`, an instance that came up
+is `abandoned`). The snapshot is restored on the **first** try only (copying the
+same tree twice changes nothing), **but the cookies are cleared before every
+single start**: starting the host with 71 stale cookies is starting it to die
+again (the Cookie header overflows 16 KB and the host answers 431).
+
+**A failure always leaves a report.** Whatever the outcome — recovered,
+not-needed, abandoned, decided, failed, or out of attempts — every pass writes
+`<stateDir>/last-watchdog-report.json`: which tier it used, `healthCheck`, how
+many attempts, and per attempt `restored` / `cookieClear` / `relaunched` /
+`ready` / the backoff, plus why it stopped. A report that never reaches the disk
+is a report that never happened; that was one of the three defects 0.8.6 fixes.
+
+### What the watchdog does NOT cover
+
+Be clear about the window, because the whole thing is a **window**:
+
+- the watchdog is armed **only while this plugin is restarting the host** — it is
+  a one-off item scheduled just before the kill, and the host disarms it at boot
+  (`watchdog-pending.json` gone, ready marker written, the scheduling item
+  deleted);
+- **outside that window nobody is watching.** A host that is killed by the system
+  at 03:00, a client that is start-and-die on a manual double-click, or a machine
+  that is found with 0 processes in the morning has **no watchdog to bring it
+  back**: the plugin is not running (it died with the host) and no one-off item
+  was ever registered. What is left in that case is `scripts/restore-profile.cmd`
+  (double-click it) and, when the profile itself was emptied, nothing at all;
+- the watchdog restores **one snapshot** and starts the host — it repairs no bug
+  of the host. A host that dies for the same reason every time ends as `failed`
+  with a report that names the attempts;
+- `watchdogEnabled: false` (and a machine whose tier is `none`) means no
+  automatic rollback at all, and the settings page says so.
+
+A resident watchman that covers the window **outside** a restart (0 processes,
+plus a profile emptied by the official `sanitizeProfile`) exists in this
+repository as an **unwired standby** — see [`docs/sentry.md`](docs/sentry.md).
+It registers no tool, installs nothing by itself, and is not part of the flow
+described here.
+
 
 **The disarming is the host's job, and it does it at boot.** As soon as this
 plugin is loaded, it writes the ready marker, removes `watchdog-pending.json` and

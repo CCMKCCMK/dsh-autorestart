@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.8.6 — 2026-10-30
+
+### 看门狗：修掉「只许跑一次 / 拉起前不通行证 / 报告不落盘」三个毛病（用户拍板：只改看门狗，守夜人不进主线）
+
+- **① 看门狗任务用真 node 启动，不再拿客户端当解释器。** 注册一次性任务时原来是手拼命令：`'"' + process.execPath + '" "…watchdog.mjs" …'`。在桌面版里 `process.execPath` 就是 `DeepSeek Harness.exe`（Electron 客户端），于是这个"看门狗"每次都会**再开一整个客户端**，看门狗根本没跑过。现在统一走 `buildWatchdogTaskCommand`（`lib/watchdog-schedule.js`）：解析到**真 node**（进程本身是 node → 安装目录自带的 runtime node → PATH），解析不到就**拒绝注册**并把原因写进日志，**绝不退回 exe**。Windows 计划任务把程序与参数交给 XML 的 `<Command>` / `<Arguments>`（不再 `cmd /c` 套壳，引号不会被吃掉）；systemd 那档拿 `[node, script, --state-dir, …]` 数组；detached 那档拿按 `CommandLineToArgvW` 规则加引号的命令行。
+- **② 每一轮拉起之前先清 `dsh-auth-*` 通行证 cookie。** 清理顺序固定在 `lib/watchdog.js` 里：还原快照 → **清 cookie** → 拉起 → 等 ready。带着 71 个过期 cookie 拉起来就是再死一次（Cookie 头撑过 16 KB → 431 → 客户端报 "Web authentication failed"）。清理脚本永不阻塞救援（自己 exit 0），但**结果一定写进报告**：清不掉绝不能看起来像清过。
+- **③ 失败也一定落报告。** 无论 recovered / not-needed / abandoned / decided / failed / 次数用尽，每一轮都写 `<stateDir>/last-watchdog-report.json`（哪一档、`healthCheck`、试了几次、每次的 `restored` / `cookieClear` / `relaunched` / `ready` / 退避、以及为什么停）。
+- **可在有上限的次数内重试，不再"只许一次"**：`maxAttempts`（默认 **3** 次，硬上限 **10** 次 —— `lib/watchdog.js` 的 `DEFAULT_MAX_ATTEMPTS` / `MAX_ATTEMPTS_CEILING`）声明在 pending 标记里；每轮开始前重新问那三个问题（ready / 有实例活着 / health 应答），两次尝试之间的退避是 **15s → 45s**（封顶 45s，`DEFAULT_BACKOFF_MS = [15000, 45000]`；尝试次数更多时沿用最后一档）。快照只在第一轮还原（同一快照再拷一遍改变不了什么），**cookie 每次拉起前都清**。
+
+### cookie 清理：可覆盖 / 可观测 / 可自证
+
+- **删除条件放宽**：`host_key = '127.0.0.1' AND name LIKE 'dsh-auth-%'`，**不再要求 `path = '/'`**。官方代码总是写 `Path=/`，但漏删一个 cookie 它照样会发到 127.0.0.1、照样占满 16 KB 头；多删一个的代价只是一次重新登录。
+- **可观测**：清理脚本把结果写成 `<stateDir>/last-cookie-clear.json`（`{at, atIso, ok, removed, reason}`，`.tmp` + rename 原子写），插件健康路由新增 `cookieClear` 字段暴露「上次清理结果」。**不谎报当前 cookie 张数**：运行中的浏览器锁着 cookie 库，所以 `live` 恒为 `null`，`liveNote` 写明原因；"还没清理过"和"清理失败"是两个不同答案，都不当成成功。
+- **可自证**：版本号升到 **0.8.6**；`health` 的 `version` 与 `package.json` 一致（`pluginVersion()` / `PLUGIN_VERSION_FALLBACK` / 包版本三者对齐，有单测钉住），真机上一眼能看出新代码是否真的被加载。
+
+### 覆盖边界（这次也写进 README 与中文 README）
+
+看门狗是一个**窗口**，不是常驻保安：它只在**我们自己要重启宿主**的那一刻布防，宿主起来后立刻撤掉。**窗口之外没有任何人看着** —— 凌晨被系统杀掉的宿主、手动双击启动即崩的客户端、早上发现 0 进程，都不会被拉回来（插件随宿主一起死了，也没有一次性项被注册过）；那时只剩 `scripts/restore-profile.cmd` 可以手动双击。看门狗也只还原一份快照 + 拉起宿主，修不了宿主自己的 bug。
+
+> 覆盖"窗口之外"的常驻守夜人（0 进程 + profile 被 `sanitizeProfile` 清空）在本仓库里是一份**未接线的备用件**（`lib/sentry.js` / `lib/sentry-install.js` / `supervisor/sentry.js`，见 `docs/sentry.md`）：**不注册任何工具、不会自动安装、没有 clean-exit 钩子**，启用需要另开任务。
+
 ## 0.8.5 — 2026-10-30
 
 ### 备份

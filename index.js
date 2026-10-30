@@ -134,6 +134,7 @@ import {
   buildPending,
   clearPending,
   clearReady,
+  DEFAULT_MAX_ATTEMPTS,
   readPending,
   readReport,
   writePending,
@@ -149,9 +150,11 @@ import {
   planWatchdogArbiter,
 } from './lib/watchdog-arbiter.js'
 import {
+  buildWatchdogTaskCommand,
   cleanupSystemdUnit,
   detachedPidPath,
   localIso,
+  quoteArgv,
   registerDetachedProcess,
   registerScheduledTask,
   registerSystemdRun,
@@ -194,6 +197,7 @@ import {
   writeTextFileAtomic,
 } from './lib/restart.js'
 import { compareSemver } from './lib/semver.js'
+import { buildCookieClearCommand, readCookieClearReport, summarizeCookieClear } from './lib/cookie-clear.js'
 import { isWorkSessionEvent } from './lib/activity.js'
 import {
   createQueuedTracker,
@@ -394,7 +398,7 @@ function snapGraceChoice(value, fallback = DEFAULT_RESTART_GRACE_MS) {
  * `pluginVersion()`), but a bundled installation may not ship that file — so
  * the constant below is the last resort. A test keeps the two in sync.
  */
-const PLUGIN_VERSION_FALLBACK = '0.8.5'
+const PLUGIN_VERSION_FALLBACK = '0.8.6'
 
 /**
  * The version of the graceful-shutdown FEATURE, not the version of the package.
@@ -1714,6 +1718,69 @@ function findOwnEntry(editor) {
     }
   }
   return null
+}
+
+/**
+ * WHAT THE WATCHDOG TASK RUNS: a resolved node interpreter + the script.
+ *
+ * WHY THIS IS A FUNCTION OF ITS OWN (the 2026-10-30 incident):
+ *
+ * The arming code used to build the command itself:
+ *
+ *   '"' + process.execPath + '" "' + script + '" --state-dir "' + stateDir + '"'
+ *
+ * In the DESKTOP app `process.execPath` is `DeepSeek Harness.exe` — the Electron
+ * client — so the one-off task started a WHOLE SECOND CLIENT instead of the
+ * watchdog, and the watchdog never ran at all. `buildWatchdogTaskCommand` (t9)
+ * resolves a REAL node (never the application executable) and answers with a
+ * refusal + reason when there is none; this wrapper adds the two things the
+ * caller needs:
+ *
+ *   - `{ok:false, reason}` — the arming MUST refuse, never fall back to the exe;
+ *   - a quoted `commandLine` for the tiers that hand a command line to a shell
+ *     (`registerDetachedProcess` builds `sh -c 'sleep N; <command>'`), while the
+ *     task/scheduler tiers take `{file, args}` / `[file, ...args]` so NO shell
+ *     is involved and no quote can be eaten.
+ *
+ * @param {{
+ *   scriptPath?: string, stateDir?: string, execPath?: string,
+ *   platform?: string, env?: object, existsSyncFn?: Function,
+ * }} [options]
+ * @returns {{
+ *   ok: boolean, file: string, args: string[], commandLine: string,
+ *   reason: string, tried: string[],
+ * }}
+ */
+export function planWatchdogArmCommand(options = {}) {
+  const scriptPath = typeof options.scriptPath === 'string' ? options.scriptPath : ''
+  const stateDir = typeof options.stateDir === 'string' ? options.stateDir : ''
+  const planned = buildWatchdogTaskCommand({
+    scriptPath,
+    args: ['--state-dir', stateDir],
+    execPath: typeof options.execPath === 'string' && options.execPath !== '' ? options.execPath : process.execPath,
+    platform: typeof options.platform === 'string' ? options.platform : process.platform,
+    env: options.env && typeof options.env === 'object' ? options.env : process.env,
+    existsSyncFn: options.existsSyncFn,
+  })
+  if (planned.ok !== true) {
+    return {
+      ok: false,
+      file: '',
+      args: [],
+      commandLine: '',
+      reason: planned.reason || 'no node interpreter was found for the watchdog',
+      tried: Array.isArray(planned.tried) ? planned.tried : [],
+    }
+  }
+  const args = Array.isArray(planned.args) ? planned.args.map((entry) => String(entry)) : []
+  return {
+    ok: true,
+    file: planned.file,
+    args,
+    commandLine: quoteArgv([planned.file, ...args]),
+    reason: '',
+    tried: Array.isArray(planned.tried) ? planned.tried : [],
+  }
 }
 
 /**
@@ -3321,6 +3388,29 @@ const titleOfSummary = (item) => {
   })
 
   /**
+   * THE LAST COOKIE CLEANUP, as the health route and the settings page see it.
+   *
+   * WHY IT IS A RECORD AND NOT A COUNT. The stale `dsh-auth-*` cookies are what
+   * make the desktop app die on startup (71 of them -> a 16559-byte Cookie
+   * header -> 431 -> "Web authentication failed" -> the official recovery
+   * wipes the profile). The cleanup runs BETWEEN the kill and the relaunch,
+   * inside its own process, and it is the only thing that knows how many rows
+   * it deleted — so it WRITES that down (`last-cookie-clear.json`) and this
+   * function reads it back.
+   *
+   * The live number of cookies is NOT reported, and must not be: the jar is an
+   * open SQLite database of a RUNNING browser. Reading it would either fail or
+   * report a number that is stale before it reaches the browser. "No cleanup
+   * has run yet" is its own answer, never a fake success.
+   *
+   * @returns {object} `{at, atIso, ok, removed, reason, live, liveNote, source}`
+   */
+  const cookieClearInfo = () => {
+    const read = readCookieClearReport(stateDirOf())
+    return summarizeCookieClear(read.report, { readError: read.ok === true ? null : read.error })
+  }
+
+  /**
    * THE CAPABILITIES of this machine: can it create a one-off scheduled
    * task?
    *
@@ -3451,7 +3541,24 @@ const titleOfSummary = (item) => {
     const taskName = 'dsh-autorestart-watchdog'
     const unitId = 'dsh-autorestart-watchdog'
     const pidPath = detachedPidPath(stateDir)
-    const watchdogCommand = '"' + process.execPath + '" "' + path.join(PLUGIN_DIR, 'scripts', 'watchdog.mjs') + '" --state-dir "' + stateDir + '"'
+    // THE COMMAND IS PLANNED, NOT CONCATENATED. `process.execPath` is the
+    // Electron client in the desktop app, and a task that starts the client is
+    // not a watchdog (2026-10-30). With no real node there is NO task at all:
+    // the arming refuses and says why — it never falls back to the exe.
+    const scriptPath = path.join(PLUGIN_DIR, 'scripts', 'watchdog.mjs')
+    const armCommand = planWatchdogArmCommand({
+      scriptPath,
+      stateDir,
+      execPath: env.execPath && typeof env.execPath === 'string' ? env.execPath : process.execPath,
+      platform: env.platform,
+      env: process.env,
+    })
+    if (armCommand.ok !== true) {
+      const reason = 'the watchdog was not armed: no node interpreter could be resolved ('
+        + String(armCommand.reason) + ')'
+      log.warn(reason)
+      return { ok: false, tier: info.tier, reason: info.tierReason, error: reason }
+    }
     const pending = buildPending({
       tier: info.tier,
       tierReason: info.tierReason,
@@ -3468,6 +3575,10 @@ const titleOfSummary = (item) => {
       timeoutMs,
       recheckMs: 20000,
       readyTimeoutMs: 90000,
+      // THE PASS IS BOUNDED (t9): the attempt loop of the watchdog reads this
+      // from the marker, and a marker without it silently means "3". Writing it
+      // here keeps the number visible in the file the operator reads.
+      maxAttempts: DEFAULT_MAX_ATTEMPTS,
       hostKind: hostKindOf().kind,
       now: Date.now(),
     })
@@ -3478,11 +3589,13 @@ const titleOfSummary = (item) => {
       if (info.tier === TIERS.SCHEDULED_TASK) {
         const start = new Date(Date.now() + Math.ceil(timeoutMs / 1000) * 1000);
         const end = new Date(start.getTime() + 30 * 60 * 1000);
+        // `{file, args}`: the XML carries the program and its arguments in
+        // separate elements, so no shell and no quote stripping is involved.
         registered = registerScheduledTask({
           taskName,
           startIso: localIso(start),
           endIso: localIso(end),
-          command: watchdogCommand,
+          command: { file: armCommand.file, args: armCommand.args },
           xmlPath: path.join(stateDir, 'watchdog-task.xml'),
         });
       } else if (info.tier === TIERS.SYSTEMD_RUN) {
@@ -3492,12 +3605,14 @@ const titleOfSummary = (item) => {
         registered = registerSystemdRun({
           unitId,
           delaySeconds: Math.ceil(timeoutMs / 1000),
-          command: [process.execPath, path.join(PLUGIN_DIR, 'scripts', 'watchdog.mjs'), '--state-dir', stateDir],
+          command: [armCommand.file, ...armCommand.args],
         });
       } else if (info.tier === TIERS.DETACHED_PROCESS) {
+        // This tier runs the command line inside `sh -c '…'`, so it gets the
+        // quoted one — built from the resolved interpreter, never from the exe.
         registered = registerDetachedProcess({
           delaySeconds: Math.ceil(timeoutMs / 1000),
-          command: process.execPath + ' "' + path.join(PLUGIN_DIR, 'scripts', 'watchdog.mjs') + '" --state-dir "' + stateDir + '"',
+          command: armCommand.commandLine,
           pidPath,
         });
       }
@@ -4517,6 +4632,7 @@ const titleOfSummary = (item) => {
           scriptPath: gateScriptPath,
           watchScriptPath,
           watchScript,
+          cookieClearCommand: buildCookieClearCommand(),
         })
         log.warn('scheduled detached restart:', result)
         if (!result || result.ok !== true) {
@@ -5043,6 +5159,14 @@ const titleOfSummary = (item) => {
     acknowledgeSchedulerWarning,
     // The watchdog: which tier this machine uses, and what the last run did.
     watchdogInfo,
+    // THE LAST COOKIE CLEANUP (the stale `dsh-auth-*` cookies that make the
+    // desktop app die on startup). It is the result the cleanup script wrote
+    // down, never a live count: the jar is locked by the running browser.
+    cookieClearInfo,
+    // The arm command planner, exposed so a test (and the diagnostics) can see
+    // WHICH interpreter a watchdog task would run — a real node, never the
+    // client executable.
+    planWatchdogArmCommand,
     /**
      * THE DIAGNOSTICS of "report a problem" (the text the user copies).
      */
@@ -6543,6 +6667,20 @@ function registerTools(ctx, runtime, config) {
           steps: { type: 'array', items: { type: 'object' } },
           previous: { type: 'object' },
           pending: { type: 'object' },
+          // THE DRY RUN ANSWERS (2026-10-30 repair): the branch below returns
+          // these seven values, and `additionalProperties: false` means every
+          // one of them must be DECLARED here — an undeclared key is a schema
+          // violation the registry refuses, not a cosmetic detail.
+          // `command`, `writes` and `compose` are OMITTED when they are null
+          // (a null value would violate `{type:'string'}` / `{type:'object'}`),
+          // and the client already renders `dryRun.command || fallback`.
+          level: { type: 'string' },
+          mode: { type: 'string' },
+          command: { type: 'string' },
+          plan: { type: 'array', items: { type: 'object' } },
+          needsConfirmation: { type: 'boolean' },
+          writes: { type: 'object' },
+          compose: { type: 'string' },
         },
       },
       (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }],
@@ -6555,20 +6693,26 @@ function registerTools(ctx, runtime, config) {
       }
       if (action === 'dry-run' || action === 'derive') {
         // B: the dry run. It reports what WOULD be written; it writes nothing.
+        //
+        // ONLY DECLARED KEYS LEAVE THIS BRANCH. A nullable value is left OUT
+        // instead of being sent as `null`: the output schema is strict
+        // (`additionalProperties: false`, plain `{type: …}`), so `null` under
+        // `{type:'string'}` would be refused exactly like an undeclared key.
         const plan = await runtime.deriveStartCommand()
-        return {
+        const answer = {
           ok: plan.ok === true,
           action,
-          level: plan.level,
-          mode: plan.mode,
-          reason: plan.reason,
-          command: plan.command,
-          plan: plan.plan,
+          level: typeof plan.level === 'string' ? plan.level : '',
+          mode: typeof plan.mode === 'string' ? plan.mode : '',
+          reason: typeof plan.reason === 'string' ? plan.reason : '',
+          plan: Array.isArray(plan.plan) ? plan.plan : [],
           needsConfirmation: plan.needsConfirmation !== false,
-          writes: plan.writes,
-          compose: plan.compose,
           supervisor,
         }
+        if (typeof plan.command === 'string') answer.command = plan.command
+        if (plan.writes && typeof plan.writes === 'object') answer.writes = plan.writes
+        if (typeof plan.compose === 'string') answer.compose = plan.compose
+        return answer
       }
       if (action === 'plan') {
         const plan = planSupervisorInstall({
@@ -8620,6 +8764,12 @@ function registerHealthRoute(ctx, runtime, config, sleep) {
             // The watchdog: which tier this machine uses to trigger it, and
             // what the last run did.
             watchdog: runtime.watchdogInfo(),
+            // THE LAST COOKIE CLEANUP: `{at, atIso, ok, removed, reason}` of the
+            // run that happened between the kill and the relaunch. `removed` is
+            // the number of stale `dsh-auth-*` cookies deleted BY THAT RUN — it
+            // is NOT a live count, and cannot be: the cookie jar of a running
+            // browser is locked, so a live number would be a guess.
+            cookieClear: runtime.cookieClearInfo(),
             // THE RESTART COMMAND that is in effect: what is written, and what
             // an undo would restore. The settings page shows it in a folded
             // "for a technical colleague" section.
@@ -8786,6 +8936,12 @@ function registerHealthRoute(ctx, runtime, config, sleep) {
         // out there; it must be visible from outside the process, not only in
         // a log line nobody reads.
         watchdog: summarizeDisarm(runtime.watchdogDisarm),
+        // THE LAST COOKIE CLEANUP, on the short route as well: a script (or the
+        // user) can see whether the stale `dsh-auth-*` cookies were really
+        // removed before the relaunch, without opening the interface. The
+        // numbers are those of the last run, never a live count (the jar of a
+        // running browser is locked).
+        cookieClear: runtime.cookieClearInfo(),
         // THE FIRST SAFE COPY: what happened when this machine looked for a
         // known-good backup and found none (user decision, 2026-10-30). Absent
         // when nothing was ever tried.

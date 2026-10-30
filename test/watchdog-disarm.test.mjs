@@ -46,10 +46,31 @@ import {
   writeReady,
 } from '../lib/watchdog.js';
 
-/** A temporary state directory. */
+/** Every directory this file created, so a FAILING test cannot leak one. */
+const createdDirs = [];
+
+/**
+ * A temporary state directory.
+ *
+ * It is REGISTERED here, not only cleaned by the test itself: a test that
+ * throws before its own cleanup used to leave its state directory in %TEMP%
+ * for ever (the residue check of the drill found exactly that).
+ */
 function tempDir(label) {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-autorestart-disarm-' + label + '-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-autorestart-disarm-' + label + '-'));
+  createdDirs.push(dir);
+  return dir;
 }
+
+test.after(() => {
+  for (const dir of createdDirs) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // A directory that cannot be removed is not a test failure.
+    }
+  }
+});
 
 /** The pending marker an armed watchdog leaves behind. */
 function armedPending(dir, overrides = {}) {
@@ -332,6 +353,10 @@ async function flow(options) {
     timeoutMs: 0,
     recheckMs: 0,
     readyTimeoutMs: 0,
+    // ONE attempt here on purpose: these tests are about the QUESTIONS the flow
+    // asks before it touches anything, not about how often it tries again (that
+    // is covered in test/watchdog.test.mjs).
+    maxAttempts: 1,
     now: Date.now(),
     ...(options.pending || {}),
   });

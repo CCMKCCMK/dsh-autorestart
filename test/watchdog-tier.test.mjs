@@ -106,12 +106,18 @@ test('the task XML has an end boundary and ignores new instances', () => {
     startIso: '2026-10-29T18:00:00',
     endIso: '2026-10-29T18:10:00',
     command: 'node watchdog.mjs --state-dir C:\\state',
+    // A command line that names a bare `node` is resolved to the absolute path
+    // of a real interpreter: a scheduled task must not depend on its PATH.
+    planOptions: { execPath: 'C:\\tools\\nodejs\\node.exe', platform: 'win32', env: { Path: '' } },
   });
   // A one-off task without an EndBoundary is refused by Windows.
   assert.match(xml, /<EndBoundary>2026-10-29T18:10:00<\/EndBoundary>/);
   assert.match(xml, /<StartBoundary>2026-10-29T18:00:00<\/StartBoundary>/);
   assert.match(xml, /<MultipleInstancesPolicy>IgnoreNew<\/MultipleInstancesPolicy>/);
-  assert.match(xml, /<Command>cmd<\/Command>/);
+  // NO SHELL IN BETWEEN: `cmd /c` is what stripped the quotes and turned the
+  // first token into `...\Programs\DeepSeek` (exit code 9009).
+  assert.doesNotMatch(xml, /<Command>\s*cmd\s*<\/Command>/, 'the task must not be wrapped in cmd');
+  assert.match(xml, /<Command>C:\\tools\\nodejs\\node\.exe<\/Command>/, 'the interpreter is the program of the task');
 });
 
 test('the task is registered, read back and only accepted when the trigger is right', () => {
