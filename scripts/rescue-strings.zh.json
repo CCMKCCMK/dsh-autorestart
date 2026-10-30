@@ -5,14 +5,12 @@
     "placeholders": "Values may contain {0}, {1} ... placeholders that the scripts fill in with -f formatting.",
     "fallback": "Every key has an English fallback inside the .ps1. If this file is missing or broken, the scripts say so in English and keep working in English."
   },
-
   "common": {
     "stringsMissing": "中文文案文件不在：{0}（改用英文兜底）",
     "stringsBroken": "中文文案文件读不出来：{0}（改用英文兜底）",
     "stringsMissingEn": "the Chinese strings file is missing: {0} (falling back to English messages)",
     "stringsBrokenEn": "the Chinese strings file could not be read: {0} (falling back to English messages)"
   },
-
   "restore": {
     "title": "dsh-autorestart —— profile 快照还原器",
     "failPrefix": "还原失败：",
@@ -30,7 +28,7 @@
     "usingSnapshot": "要用快照：{0}（{1}）",
     "snapshotMissing": "找不到这份快照：{0}",
     "snapshotNoManifest": "这份快照没有 manifest.json，不是一份快照：{0}",
-    "snapshotSuffix": "{0}（快照：{1}）",
+    "snapshotSuffix": "{0}（这份快照）",
     "dryRunMove": "[试运行] 会先把现在的 profile 挪到：{0}",
     "dryRunCopy": "[试运行] 会把 {0} 里的配置和插件复制回：{1}",
     "dryRunVerify": "[试运行] 会回读校验 package.json / dsh.profile.bundles / {0} 的版本号。",
@@ -47,20 +45,17 @@
     "noteNoPlugins": "（只有配置文件，没有插件）",
     "done": "已还原到 {0} 的快照{1}；现在可以重新打开 DSH。",
     "brokenLeft": "原来那份留在了：{0}（确认没问题之后可以自己删掉它）",
-
     "gateEmptyPath": "目标路径是空的",
     "gateDriveRoot": "拒绝动盘符根目录",
     "gateFsRoot": "拒绝动文件系统根目录",
     "gateHome": "拒绝动用户主目录本身",
     "gateSystemDir": "拒绝动系统目录：{0}",
     "gateOtherUser": "拒绝动别人的用户目录",
-
     "fingerprintNotProfile": "这里没有 package.json —— 不像 DSH profile",
     "fingerprintProfile": "profile 的 package.json 里有 dsh.profile",
     "fingerprintBrokenNoDsh": "profile 坏了（package.json 不再是 profile），但 profile 的文件还在",
     "fingerprintBrokenNoPkg": "profile 坏了（package.json 没了），但 profile 的文件还在",
     "fingerprintNotDshProfile": "package.json 里没有 dsh.profile，也没有别的东西能证明这是 profile",
-
     "snapshotDirMissing": "找不到快照目录：{0}",
     "snapshotNone": "这个目录里没有一份带 manifest 的快照：{0}",
     "snapshotNoConfigPkg": "这份快照里没有 config\\package.json",
@@ -68,7 +63,6 @@
     "snapshotNoDshProfile": "这份快照的 package.json 里没有 dsh.profile",
     "snapshotIsProfile": "这份快照里装的是一个 DSH profile",
     "snapshotUnknownTime": "时间不明",
-
     "verifyPkgLabel": "package.json 能解析",
     "verifyPkgMissing": "package.json 不存在",
     "verifyPkgBad": "不是合法的 JSON",
@@ -78,9 +72,20 @@
     "verifyPluginLabel": "{0} 的版本号读得到",
     "verifyPluginNotDeclared": "这个 profile 没有声明要装 {0}（没什么可读）",
     "verifyPluginMissing": "profile 里写着要装 {0}，但 node_modules\\{0} 不在 —— 配置说一套、磁盘是另一套",
-    "verifyPluginNoVersion": "读不到版本号"
+    "verifyPluginNoVersion": "读不到版本号",
+    "linkNone": "本快照里没有链接安装的插件",
+    "linkHeader": "本快照里链接安装的插件：{0} 个",
+    "linkKept": "  [ok] {0}：保留链接（目标目录还在）",
+    "linkReplaced": "  [ok] {0}：已用快照内容顶替链接（{1}）",
+    "linkDryRunReplaced": "  [演练] {0}：会用快照内容顶替",
+    "linkTargetMissing": "  [bad] {0}：链接目标已不存在，快照里也没有它的副本",
+    "linkNoBackup": "  [warn] {0}：快照里没有这个插件的副本，链接保持原样",
+    "linkRemoveFailed": "  [bad] {0}：删不掉这个链接，副本没有放进去",
+    "linkCopyFailed": "  [bad] {0}：副本放不进去：{1}",
+    "linkEvidence": "  （链接处置结论已写到 {0}）",
+    "linkEvidenceFailed": "  [warn] 链接处置结论没能写下来。",
+    "linkManifestUnreadable": "  [warn] 读不了备份的 manifest.json，无法检查链接安装的插件。"
   },
-
   "drill": {
     "dir": "演练目录：{0}",
     "broke": "已经故意弄坏：package.json 写成非法 JSON，插件目录删掉了。",
@@ -102,7 +107,6 @@
     "error": "演练出错：{0}",
     "noScript": "演练失败：找不到 {0}",
     "dirOccupied": "演练失败：这个演练目录已经被占用了：{0}",
-
     "assertDryRunExit": "试运行退出码是 0",
     "assertDryRunUntouched": "试运行没有改动 package.json",
     "assertDryRunNoBroken": "试运行没有留下 broken 目录",
@@ -128,17 +132,31 @@
     "assertCmdAscii": "restore-profile.cmd 是纯 ASCII",
     "assertOnlyTemp": "演练只在临时目录里动手（broken 目录在临时目录下面）",
     "assertLockFile": "演练目录里有锁文件",
-
     "keywords": {
-      "notProfile": ["不像", "不是 profile"],
-      "driveRoot": ["盘符", "根目录"],
-      "systemDir": ["系统目录", "不允许"],
-      "missingDir": ["不存在"],
-      "notValidated": ["没通过校验", "校验"],
-      "dryRun": ["试运行"]
+      "notProfile": [
+        "不像",
+        "不是 profile"
+      ],
+      "driveRoot": [
+        "盘符",
+        "根目录"
+      ],
+      "systemDir": [
+        "系统目录",
+        "不允许"
+      ],
+      "missingDir": [
+        "不存在"
+      ],
+      "notValidated": [
+        "没通过校验",
+        "校验"
+      ],
+      "dryRun": [
+        "试运行"
+      ]
     }
   },
-
   "emergency": {
     "failed": "急救开关失败：{0}",
     "notFound": "找不到 profile 的 package.json：{0}",

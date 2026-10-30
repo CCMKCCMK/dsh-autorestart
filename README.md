@@ -563,6 +563,16 @@ it was started from, so a restart that leaves the host unable to boot can be und
   `backupIncludePlugins` is turned off — the installed plugin tree (`node_modules`). Snapshots live in
   `<storage>/dsh-autorestart/backups/<timestamp>/` with a `manifest.json` next to them. On a profile
   like this one the full snapshot measures about 117 MB and takes under three seconds.
+- **PLUGINS INSTALLED WITH `link:` ARE BACKED UP TOO** (2026-10-30, measured gap). Five plugins on
+  this machine were installed as links/junctions (`dsh-autorestart` itself among them), and the tree
+  copy recorded the LINK and not one byte behind it — so the plugin that does the rescuing could not
+  be put back. The manifest now carries `links: [{name, target, kind, exists, readable, copied, files,
+  bytes}]` (+ `linkFiles` / `linkBytes`) and the CONTENTS of every enabled linked plugin are kept in
+  `node_modules-link/<name>/` (1 216 files / 69.5 MB for these five). On restore each link gets one
+  decision, printed as its own line — `kept` (target still there: the development directory keeps
+  working), `replaced` (the copy takes its place), `target-missing`, `no-backup`. The restore script
+  has `-ForceLinkPlugins` for "replace them all"; the watchdog uses the same rules
+  (`decideLinkRestore`) and does not give a link a second chance (`attempts >= 2` ⇒ replaced).
 - **The rollback target is the newest PROVEN copy, not the newest copy** (user decision,
   2026-10-30). Every copy carries its identity in a `meta.json`: `known-good` (a copy a boot has
   already survived), `snapshot` (taken right before a restart, not proven yet) or `unknown` (written

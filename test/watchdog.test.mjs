@@ -29,6 +29,7 @@ import {
   readReport,
   readReady,
   reportPath,
+  restoreFromSnapshot,
   runWatchdogFlow,
   writePending,
   writeReady,
@@ -402,4 +403,98 @@ test('readPendingState: a corrupt marker is reported as corrupt, not as missing'
   // And the old accessor keeps its contract for the plugin side (index.js).
   assert.equal(readPending(dir), null);
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// ---------------------------------------------------------------------------
+// THE LINKED PLUGINS IN THE RESCUE PATH (user decision, 2026-10-30).
+//
+// A `link:` plugin is a REPARSE POINT: copying node_modules back puts the link
+// back and nothing behind it. The plugin that does the rescuing is installed
+// that way, so a restore that cannot put it back is a restore that never runs.
+// The decision is the one from lib/backup.js (decideLinkRestore), and these two
+// tests are the two branches that matter at 3 a.m.: target there -> keep the
+// link; target gone -> replace it with what the backup holds.
+// ---------------------------------------------------------------------------
+
+/**
+ * A snapshot with one linked plugin, plus a profile that has the link.
+ *
+ * @param {string} name test name
+ * @param {{ targetExists?: boolean }} [options]
+ */
+function linkRestoreFixture(name, options = {}) {
+  const base = tempDir('link-' + name);
+  const snapshot = path.join(base, 'snapshot');
+  const profile = path.join(base, 'profile');
+  const dev = path.join(base, 'dev', 'dsh-autorestart');
+  const targetExists = options.targetExists !== false;
+
+  // The backup: the tree copy (with the LINK in it) and the contents.
+  fs.mkdirSync(path.join(profile, 'node_modules'), { recursive: true });
+  fs.mkdirSync(path.join(snapshot, 'node_modules'), { recursive: true });
+  fs.mkdirSync(path.join(snapshot, 'node_modules-link', 'dsh-autorestart'), { recursive: true });
+  fs.writeFileSync(
+    path.join(snapshot, 'node_modules-link', 'dsh-autorestart', 'package.json'),
+    '{"name":"dsh-autorestart","version":"0.8.6"}\n',
+    'utf8',
+  );
+  fs.writeFileSync(
+    path.join(snapshot, 'manifest.json'),
+    JSON.stringify({
+      stamp: '20261030-000000',
+      links: [{ name: 'dsh-autorestart', target: dev, kind: 'junction', exists: targetExists }],
+    }, null, 2),
+    'utf8',
+  );
+  if (targetExists) {
+    fs.mkdirSync(dev, { recursive: true });
+    fs.writeFileSync(path.join(dev, 'package.json'), '{"name":"dsh-autorestart","dev":true}\n', 'utf8');
+  }
+  fs.symlinkSync(dev, path.join(profile, 'node_modules', 'dsh-autorestart'), 'junction');
+  return { base, snapshot, profile, dev };
+}
+
+test('restoreFromSnapshot: a link whose target is still there is KEPT', (t) => {
+  const { base, snapshot, profile } = linkRestoreFixture('kept');
+  const result = restoreFromSnapshot({ snapshotDir: snapshot, profileDir: profile });
+  assert.equal(result.links.length, 1, 'one line per linked plugin, never a silent skip');
+  assert.equal(result.links[0].name, 'dsh-autorestart');
+  assert.equal(result.links[0].action, 'kept');
+  const live = path.join(profile, 'node_modules', 'dsh-autorestart');
+  assert.equal(fs.lstatSync(live).isSymbolicLink(), true, 'the development link is untouched');
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('restoreFromSnapshot: a link whose target is GONE is replaced by the backup contents', (t) => {
+  const { base, snapshot, profile } = linkRestoreFixture('replaced', { targetExists: false });
+  const result = restoreFromSnapshot({ snapshotDir: snapshot, profileDir: profile });
+  assert.equal(result.links.length, 1);
+  assert.equal(result.links[0].action, 'replaced');
+  assert.equal(result.links[0].replaced, true);
+  const live = path.join(profile, 'node_modules', 'dsh-autorestart');
+  assert.equal(fs.lstatSync(live).isSymbolicLink(), false, 'the dead link is gone');
+  const packageJson = path.join(live, 'package.json');
+  assert.ok(fs.existsSync(packageJson), 'the contents from the backup are there now');
+  assert.match(fs.readFileSync(packageJson, 'utf8'), /"version":"0\.8\.6"/);
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('restoreFromSnapshot: forced, or a second attempt, replaces a healthy link too', (t) => {
+  const forced = linkRestoreFixture('forced');
+  const forcedResult = restoreFromSnapshot({
+    snapshotDir: forced.snapshot,
+    profileDir: forced.profile,
+    forceLinkPlugins: true,
+  });
+  assert.equal(forcedResult.links[0].action, 'replaced');
+  fs.rmSync(forced.base, { recursive: true, force: true });
+
+  const second = linkRestoreFixture('attempt2');
+  const secondResult = restoreFromSnapshot({
+    snapshotDir: second.snapshot,
+    profileDir: second.profile,
+    attempts: 2,
+  });
+  assert.equal(secondResult.links[0].action, 'replaced', 'the link had its chance on the first attempt');
+  fs.rmSync(second.base, { recursive: true, force: true });
 });

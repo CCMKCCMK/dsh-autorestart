@@ -1696,7 +1696,11 @@ test('the plugin reports the version of the package, and the health route report
   const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
   assert.equal(pluginVersion(), pkg.version, 'the loaded plugin must report the package version')
   assert.equal(PLUGIN_VERSION_FALLBACK, pkg.version, 'the fallback must follow the package (a failed read must not lie)')
-  assert.equal(pkg.version, '0.8.6', 'the version whose health route proves the new code is loaded')
+  // The version is NOT written down here a second time: a literal in a test is
+  // a second place to forget during a release (0.8.7 bumped the package and the
+  // fallback together, and this line was the only thing that disagreed). The
+  // shape of the version is what matters.
+  assert.match(pkg.version, /^\d+\.\d+\.\d+$/, 'the package carries a semantic version')
 
   // The health route is a custom route, so the version it reports is read from
   // the running plugin — the one thing a real machine can check.

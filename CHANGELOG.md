@@ -1,5 +1,20 @@
 # Changelog
 
+## 未发布 — 链接安装的插件现在也进备份、也能被还原
+
+### 缺口（实测发现的真问题，不是为实验造的）
+
+profile 的 `node_modules` 里有 **5 个插件是符号链接/联接**（`dsh-autorestart`、`dsh-codekg`、`dsh-github-guard`、`dsh-release-board`、`dsh-secret-vault`，都指向 `Documents\deepseek-harness\default-workspace\plugins\<name>`），而 known-good 备份里 **118 个真副本、0 个链接插件**：备份把链接本身记下来了，链接**背后的内容一个字节都没有**。后果是**负责救命的 dsh-autorestart 自己也救不回来**。
+
+### 现在
+
+- **备份**（`lib/backup.js`）：新增 `collectLinkedPlugins`（只收 `dsh.profile.bundles` 里启用的、指向目录的 reparse point），`manifest.json` 新增 `links: [{name, target, kind, exists, readable, copied, files, bytes}]` + `linkFiles` / `linkBytes`，链接的**内容**另存 `node_modules-link/<name>/`（不和真副本混在一起）。本机实测 5 个插件 1216 个文件 / 69.5 MB。清单只加字段、不改名 —— 三个读者（还原脚本、看门狗、`lib/rescue.js`）都不受影响。
+- **还原**（`scripts/restore-profile.ps1`，仍是纯 ASCII 无 BOM）：新增 `-ForceLinkPlugins` 开关；**默认档**保留健康的链接（开发目录继续“改完即生效”），**force 档**用备份内容顶替。每个链接插件都打印一行结论 `kept` / `replaced` / `target-missing` / `no-backup`（**不许静默跳过**），顶替原因写进 `links-restore.txt`。
+- **看门狗**（`lib/watchdog.js`）：和脚本共用同一套判定（`decideLinkRestore`）——目标不存在/读不了 → 顶替；**第一次给链接一次机会，`attempts >= 2` 就顶替**；没有副本 → 不动它（**绝不删掉放不回去的东西**）。
+- **顺手修掉两个真机踩到的坑**：
+  - `fs.cpSync` 往一个**带死链接**的 `node_modules` 里写会直接把 Node 进程打死（Windows，`0xC0000409`，无栈无消息），而 `fs.existsSync` 对死链接返回 **false** —— 现在先按 `lstat` 认出死链接、清掉再复制；
+  - `rescue-strings.zh.json` 的 `restore.snapshotSuffix` 有 2 个占位符、调用只传 1 个参数 → 快照配置坏了的时候脚本不是报「这份快照不是 profile」而是格式化报错直接挂掉。
+
 ## 0.8.6 — 2026-10-30
 
 ### 看门狗：修掉「只许跑一次 / 拉起前不通行证 / 报告不落盘」三个毛病（用户拍板：只改看门狗，守夜人不进主线）

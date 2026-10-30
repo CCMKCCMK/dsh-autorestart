@@ -66,7 +66,12 @@ param(
   [string] $ProfileDir = '',
 
   # The plugin state directory (default: <DSH_HOME>\storages\dsh-autorestart).
-  [string] $StateDir = ''
+  [string] $StateDir = '',
+
+  # Replace EVERY linked plugin with the copy from the snapshot, even when its
+  # link target is still there. Without this switch a link whose target works is
+  # KEPT, so a `link:` installation keeps pointing at its development directory.
+  [switch] $ForceLinkPlugins
 )
 
 $ErrorActionPreference = 'Stop'
@@ -140,6 +145,173 @@ function Fail {
     Write-Host (T 'restore.brokenUntouched' '(that directory was not touched, it still looks like it did before the failure.)') -ForegroundColor Yellow
   }
   exit 1
+}
+
+# ---------------------------------------------------------------------------
+# THE LINKED PLUGINS (user decision, 2026-10-30)
+#
+# A `link:` installation puts a REPARSE POINT in node_modules\<name> instead of
+# a plugin: the directory is somewhere else (a development checkout). The old
+# version of this script copied node_modules as a tree, so it put the LINK back
+# and none of its contents - and dsh-autorestart itself is installed that way,
+# so the plugin that does the rescuing could not be restored at all.
+#
+# The backup now records every linked plugin and keeps its CONTENTS in
+# node_modules-link\<name>. This part decides, per plugin, whether the link may
+# stay or the contents must take its place. The same four answers are used by
+# the watchdog (lib/backup.js, decideLinkRestore), so a manual restore and an
+# automatic one cannot disagree:
+#
+#   kept           - the target is there and readable: the link stays (the
+#                    development directory keeps working);
+#   replaced       - the contents from the backup take the link's place;
+#   target-missing - the target is gone AND there is no copy to put back;
+#   no-backup      - this backup holds no contents for it, so it is left alone.
+#
+# NOTHING IS EVER SKIPPED SILENTLY: every linked plugin prints one line.
+# ---------------------------------------------------------------------------
+
+# The pure decision (mirrors decideLinkRestore in lib/backup.js).
+function Get-LinkDecision {
+  param(
+    [bool] $TargetExists,
+    [bool] $TargetReadable,
+    [bool] $HasBackup,
+    [bool] $Forced,
+    [int] $Attempts = 1
+  )
+  if ((-not $TargetExists) -and (-not $HasBackup)) { return 'target-missing' }
+  if (-not $HasBackup) { return 'no-backup' }
+  if ($Forced) { return 'replaced' }
+  if (-not $TargetExists) { return 'replaced' }
+  if (-not $TargetReadable) { return 'replaced' }
+  if ($Attempts -ge 2) { return 'replaced' }
+  return 'kept'
+}
+
+# Can this directory be read at all?
+function Test-DirectoryReadable {
+  param([string] $Path)
+  if ($Path -eq '') { return $false }
+  if (-not (Test-Path -LiteralPath $Path -PathType Container)) { return $false }
+  try {
+    Get-ChildItem -LiteralPath $Path -Force -ErrorAction Stop | Out-Null
+    return $true
+  } catch {
+    return $false
+  }
+}
+
+# Remove the LINK itself, never the directory it points at.
+function Remove-LinkEntry {
+  param([string] $Path)
+  try {
+    # Delete(path, recursive=$false) removes a junction / symlink itself.
+    [System.IO.Directory]::Delete($Path, $false)
+    return $true
+  } catch {
+    try {
+      Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
+      return $true
+    } catch {
+      return $false
+    }
+  }
+}
+
+# Decide about every linked plugin of this snapshot and say so, one line each.
+function Invoke-LinkPlugins {
+  param(
+    [string] $SnapshotDir,
+    [string] $ProfileDir,
+    [string] $BrokenDir,
+    [bool] $Forced,
+    [bool] $DryRun,
+    [int] $Attempts = 1
+  )
+  $manifestPath = Join-Path $SnapshotDir 'manifest.json'
+  $links = @()
+  if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
+    try {
+      $manifestText = [System.IO.File]::ReadAllText($manifestPath, [System.Text.Encoding]::UTF8)
+      if ($manifestText.Length -gt 0 -and [int][char]$manifestText[0] -eq 0xFEFF) {
+        $manifestText = $manifestText.Substring(1)
+      }
+      $manifest = $manifestText | ConvertFrom-Json
+      if ($null -ne $manifest.links) { $links = @($manifest.links) }
+    } catch {
+      Say (T 'restore.linkManifestUnreadable' '  [warn] the backup manifest cannot be read; linked plugins cannot be inspected.') 'Yellow'
+    }
+  }
+  if ($links.Count -eq 0) {
+    Say (T 'restore.linkNone' 'linked plugins in this snapshot: none') 'Gray'
+    return
+  }
+
+  Say ((T 'restore.linkHeader' 'linked plugins in this snapshot: {0}') -f $links.Count) 'Gray'
+  $evidence = New-Object System.Collections.Generic.List[string]
+  foreach ($link in $links) {
+    $name = [string] $link.name
+    if ($name -eq '') { continue }
+    $target = [string] $link.target
+    $backupDir = Join-Path (Join-Path $SnapshotDir 'node_modules-link') $name
+    $livePath = Join-Path (Join-Path $ProfileDir 'node_modules') $name
+    $hasBackup = Test-Path -LiteralPath $backupDir -PathType Container
+    $targetExists = $target -ne '' -and (Test-Path -LiteralPath $target -PathType Container)
+    $targetReadable = Test-DirectoryReadable $target
+    $decision = Get-LinkDecision -TargetExists $targetExists -TargetReadable $targetReadable -HasBackup $hasBackup -Forced $Forced -Attempts $Attempts
+
+    if ($decision -eq 'replaced') {
+      if ($DryRun) {
+        Say ((T 'restore.linkDryRunReplaced' '  [dry run] {0}: would be REPLACED by the copy in the snapshot') -f $name) 'Cyan'
+      } else {
+        $removed = $true
+        if (Test-Path -LiteralPath $livePath) { $removed = Remove-LinkEntry $livePath }
+        if (-not $removed) {
+          Say ((T 'restore.linkRemoveFailed' '  [bad] {0}: the link could not be removed, the copy was NOT put in place') -f $name) 'Red'
+          $evidence.Add($name + ': replaced requested but the link could not be removed')
+          continue
+        }
+        try {
+          Copy-Item -LiteralPath $backupDir -Destination $livePath -Recurse -Force -ErrorAction Stop
+          $why = 'forced'
+          if (-not $Forced) {
+            if (-not $targetExists) { $why = 'target-missing' }
+            elseif (-not $targetReadable) { $why = 'target-unreadable' }
+            else { $why = 'attempt ' + $Attempts }
+          }
+          Say ((T 'restore.linkReplaced' '  [ok] {0}: REPLACED by the copy from the snapshot ({1})') -f $name, $why) 'Green'
+          $evidence.Add($name + ': replaced (' + $why + '); old target was ' + $target)
+        } catch {
+          Say ((T 'restore.linkCopyFailed' '  [bad] {0}: the copy could not be put in place: {1}') -f $name, $_.Exception.Message) 'Red'
+          $evidence.Add($name + ': replaced requested but the copy failed: ' + $_.Exception.Message)
+        }
+      }
+      continue
+    }
+    if ($decision -eq 'kept') {
+      Say ((T 'restore.linkKept' '  [ok] {0}: kept the link (its target is there)') -f $name) 'Green'
+      continue
+    }
+    if ($decision -eq 'target-missing') {
+      Say ((T 'restore.linkTargetMissing' '  [bad] {0}: the link target is gone and the snapshot holds no copy of it') -f $name) 'Red'
+      $evidence.Add($name + ': target missing and no copy in the snapshot (' + $target + ')')
+      continue
+    }
+    Say ((T 'restore.linkNoBackup' '  [warn] {0}: the snapshot holds no copy of this plugin; the link is left as it is') -f $name) 'Yellow'
+  }
+
+  if ((-not $DryRun) -and ($evidence.Count -gt 0)) {
+    $evidenceDir = $ProfileDir
+    if ($BrokenDir -ne '' -and (Test-Path -LiteralPath $BrokenDir -PathType Container)) { $evidenceDir = $BrokenDir }
+    try {
+      $evidenceFile = Join-Path $evidenceDir 'links-restore.txt'
+      [System.IO.File]::WriteAllText($evidenceFile, (($evidence -join [Environment]::NewLine) + [Environment]::NewLine), (New-Object System.Text.UTF8Encoding($false)))
+      Say ((T 'restore.linkEvidence' '  (the link decisions are written down in {0})') -f $evidenceFile) 'Gray'
+    } catch {
+      Say (T 'restore.linkEvidenceFailed' '  [warn] the link decisions could not be written down.') 'Yellow'
+    }
+  }
 }
 
 # ---------------------------------------------------------------------------
@@ -503,6 +675,9 @@ while (Test-Path -LiteralPath $script:BrokenDir) {
 if ($DryRun) {
   Say ((T 'restore.dryRunMove' '[dry run] the current profile would be moved to: {0}') -f $script:BrokenDir) 'Cyan'
   Say ((T 'restore.dryRunCopy' '[dry run] the configuration and the plugins of {0} would be copied back to: {1}') -f $selected.Name, $targetProfile) 'Cyan'
+  # The link decisions are part of "what would happen": a rehearsal that says
+  # nothing about them would hide the one thing this version added.
+  Invoke-LinkPlugins -SnapshotDir $snapshotDir -ProfileDir $targetProfile -BrokenDir '' -Forced:$ForceLinkPlugins.IsPresent -DryRun:$true
   Say ((T 'restore.dryRunVerify' '[dry run] package.json / dsh.profile.bundles / the version of {0} would be read back.') -f $PackageName) 'Cyan'
   Say (T 'restore.dryRunNoChange' '[dry run] no file was changed.') 'Cyan'
   exit 0
@@ -536,6 +711,12 @@ try {
 } catch {
   Fail ((T 'restore.copyFailed' 'copying the snapshot back failed (the old one is still at {0}): {1}') -f $script:BrokenDir, $_.Exception.Message)
 }
+
+# --- THE LINKED PLUGINS: keep a working link, replace a broken one ----------
+# This runs AFTER the tree copy (which put the links back) and BEFORE the check:
+# a linked plugin whose target is gone has to be replaced, or the host cannot
+# start - and dsh-autorestart itself is installed that way.
+Invoke-LinkPlugins -SnapshotDir $snapshotDir -ProfileDir $targetProfile -BrokenDir $script:BrokenDir -Forced:$ForceLinkPlugins.IsPresent -DryRun:$false
 
 # --- Read the result back ---
 $checks = New-Object System.Collections.Generic.List[object]

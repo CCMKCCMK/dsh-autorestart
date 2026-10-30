@@ -143,6 +143,7 @@ session resume on boot, durable-goal re-arm, and an agent-callable idle-aware gr
 
 - **每次重启前**先给 profile 拍快照：`cordis.patch.yml`、`package.json`、`pnpm-lock.yaml`，以及（默认开启）已安装插件目录 `node_modules`。本机实测：**2.76 秒 / 117.6 MB / 5,562 个文件**。
 - 快照放在 `storages/dsh-autorestart/backups/<时间戳>/`，带 `manifest.json`；**只保留最新 2 份**，写新快照时自动删旧的。
+- **链接安装的插件现在也进备份**（2026-10-30 实测缺口）：本机有 5 个插件是用 `link:` / 联接装的（`dsh-autorestart` 自己就在里面），旧逻辑只把**链接**拷进快照、链接背后的内容一个字节都没有 —— 于是「负责救命的那个插件」自己也救不回来。现在 `manifest.json` 多了 `links: [{name, target, kind, exists, readable, copied, files, bytes}]`（外加 `linkFiles` / `linkBytes`），每个**已启用**链接插件的内容另存 `node_modules-link/<name>/`（本机这五个：**1,216 个文件 / 69.5 MB**）。还原时逐个插件给一行结论：`kept`（目标还在，链接保留，开发目录照旧「改完即生效」）、`replaced`（用备份内容顶替）、`target-missing`、`no-backup`；`restore-profile.ps1 -ForceLinkPlugins` 可以无条件全顶替；看门狗用同一套判定（`decideLinkRestore`），但**只给链接一次机会**（`attempts >= 2` 就顶替）。
 - 看护脚本跑在**宿主进程之外**（所以宿主被杀它也活着），等**新实例**最多 **90 秒**（`rollbackTimeoutMs`）：新实例把自己的端口和 boot id 写进 `access.json`，看护脚本据此找到**新实例**的健康端点（桌面版每次 `--port 0` 端口随机，旧端口没有意义）。正常回答就静默退出，**什么都不动**。
 - 宿主**一直不回应**时：把快照拷回去 → 写 `last-rollback.json`（含"本次重启之后"的崩溃日志尾部，旧日志不会被误当证据）→ **不会再拉起第二个宿主**（已经起来的那一个由它自己继续，回退分支绝不 `Start-Process` 第二个 app）。
 - 拷回本身也有**时间上限**（`rollbackCopyTimeoutMs`，默认 120 秒/步）：拷不完就放弃，并把原因写进报告。
