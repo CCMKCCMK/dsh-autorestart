@@ -211,6 +211,23 @@ session resume on boot, durable-goal re-arm, and an agent-callable idle-aware gr
 
 > 覆盖"窗口之外"的常驻守夜人（0 进程 + profile 被 `sanitizeProfile` 清空）在这个仓库里有一份**未接线的备用件**，见 [sentry.md](sentry.md)：它不注册任何工具、不会自动安装、也不在这条流程里。
 
+### 报错型故障：插件没加载成功时，自动换回好版本
+
+「坏法」有两种，**两种由两个机制分别负责，互不插手**：
+
+| 故障 | 谁负责 |
+|---|---|
+| **进程级**：宿主根本起不来（端口冲突、启动即崩） | 重启前快照 + 看门狗：回滚一份快照、把宿主拉起来 |
+| **报错型**：宿主起来了，但某个插件 entry **静默没激活**（功能直接 404） | 本节：检测 → 从 known-good 备份换回好版本 → 请求**一次**重启 → 写报告 |
+
+启动日志里其实写着答案（`<plugin>: failed to import: <错误>`、`<plugin>: import failed …`、`- <plugin>: loading`，以及总括行 `dsh: warning: N entry did not activate`），原来没有任何人读它。现在每次启动、写 ready 标记**之前**都会读**上一次启动**那份日志：
+
+- **换回好版本**：备份里有 `node_modules/<name>` 真副本 → `overwrite`：现场目录**改名**成 `<name>.broken-<ts>`（**留证据，不删任何文件**），副本拷回去；备份里只有 `node_modules-link/<name>`（链接安装的内容）→ `replace-link`：现场软链同样改名留证据、备份内容顶替；备份里没有、或这个插件不在本 profile 的启用清单里 → `no-backup`：**不动**，写清原因。
+- **幂等**：拷贝前先比现场与副本（相对路径 + 大小 + sha256），一致就**不拷、不重启**（`already-consistent`）。
+- **只改过文件才重启**：`no-backup` / `duplicate` / `already-consistent` / `needs-human` 四种情况的 `restartRequested` 恒为 `false`。重启走**现有入口**（同一个 gate、同一份快照、同一条续跑路径），**没有第二套重启机制**。
+- **防循环（两条，都是硬要求）**：① 同一份旧日志不许被当成新故障 —— 只读上一次启动那份日志 + 行时间早于该次启动的一律不算 + 用「插件 + 错误首行 + 日志时间」做指纹，指纹进 `plugin-recovery.json` 的 `handled` 后只处理一次（再遇到记 `duplicate`）；② 根因不在插件（缺 peer 依赖、缺宿主能力）时换回也没用 —— **同一插件一个周期内只动手一次**，第二次只报不动、`needs-human`，且不请求重启；一次没有任何插件故障的启动会把周期清零。注意：**不存在"越修越坏"的循环** —— 恢复是拿好版本顶替现场，恢复完现场就是好代码。
+- **报告**：`<stateDir>/last-plugin-recovery.json`（`{ at, atIso, failures[], actions[{plugin, mode, restoredFrom, restoredAt, backupKind}], restartRequested, needsHuman }`），其中 `restoredAt` / `backupKind` **取备份自己的 `meta.json`**，回答"恢复到了哪个时点"，而不是"现在几点"。同一个对象也出现在 health 路由的 `pluginRecovery` 字段和 `continuum_status` 工具里（没发生过就是 `null` / 不返回）；界面上怎么讲，是另一条任务。
+
 ### 开机自启：插件自带的守护
 
 手动启动的托管实例（`dsh web`）挂掉之后不会自己回来——没人拉起来的重启，就等于要用户自己再启动一次。插件可以装一个**守护**：一个独立的小进程，负责拉起宿主、看住它、它掉了再拉起。

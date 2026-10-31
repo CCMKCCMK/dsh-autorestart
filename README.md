@@ -725,6 +725,86 @@ repository as an **unwired standby** — see [`docs/sentry.md`](docs/sentry.md).
 It registers no tool, installs nothing by itself, and is not part of the flow
 described here.
 
+### A plugin that did not load: the REPORTED kind of failure
+
+Not every plugin failure keeps the host from booting. The other one is quieter: the
+host comes up, one entry **never activates**, and the feature behind it simply 404s.
+The startup log says so (`<plugin>: failed to import: <error>`, `<plugin>: import
+failed …`, `- <plugin>: loading`, or the aggregate `dsh: warning: N entry did not
+activate`) and, without this pass, nobody reads it.
+
+The two failures are handled by two different mechanisms, and they never overlap:
+
+| failure | who handles it |
+|---|---|
+| **process level** — the host does not come up at all | the pre-restart snapshot + the watchdog: one snapshot is restored and the host is started again |
+| **reported** — the host is up, one plugin silently did not activate | the boot pass described here: the known-good copy is put back, ONE restart is requested, and a report is written |
+
+What the boot pass does, per failed plugin:
+
+- **`overwrite`** — the newest **known-good** backup holds a real copy: the live
+  directory is renamed to `<name>.broken-<ts>` (**evidence — nothing is ever
+  deleted**) and the backup copy takes its place;
+- **`replace-link`** — the backup only holds the CONTENTS of a `link:` install
+  (`node_modules-link/<name>`): the live link is moved aside the same way and the
+  copied contents take its place;
+- **`no-backup`** — the backup holds nothing for that plugin, or the plugin is not
+  part of this profile's enabled list: nothing is touched and the reason is written
+  down.
+
+Two loops are possible, and both are stopped:
+
+1. **the same old log line read again.** Every boot would "find" the line the
+   previous boot left behind. The pass only reads the log of the **previous** boot,
+   drops lines older than that boot, and gives every failure a **fingerprint**
+   (plugin + first error line + log time) that is recorded as handled once — the
+   second time it is a `duplicate` and nothing happens;
+2. **the cause is not in the plugin** (a missing peer dependency, a missing host
+   capability). Swapping the copy back cannot fix that, so one plugin is restored
+   once per cycle: a second failure reports `needs-human`, touches nothing and asks
+   for no restart. One boot without any plugin failure resets the cycle.
+
+It is also **idempotent**: before copying, the live directory is compared with the
+backup copy (relative path + size + sha256). When they already match, nothing is
+copied and no restart is asked for (`already-consistent`).
+
+**A restart is requested only when files really changed.** `no-backup`,
+`duplicate`, `already-consistent` and `needs-human` all leave `restartRequested:
+false` — a restart that cannot change the outcome only costs another boot. The
+restart goes through the **existing** entry (`requestRestart`, the same gate,
+snapshot and resume path); there is no second restart mechanism.
+
+Everything is written to `<stateDir>/last-plugin-recovery.json`:
+
+```json
+{
+  "at": 1761000900000,
+  "atIso": "2026-11-01T01:00:05.000Z",
+  "log": "…/logs/startup-…log",
+  "backupDir": "…/backups/20261101T000000Z",
+  "backupKind": "known-good",
+  "restoredAt": 1761000000000,
+  "failures": [{ "plugin": "broken-plugin", "error": "Error: Cannot find module 'x'" }],
+  "actions": [{
+    "plugin": "broken-plugin",
+    "mode": "overwrite",
+    "restoredFrom": "…/backups/…/node_modules/broken-plugin",
+    "restoredAt": 1761000000000,
+    "backupKind": "known-good",
+    "evidence": { "renamedTo": "…/node_modules/broken-plugin.broken-20261101T010005" }
+  }],
+  "restartRequested": true,
+  "needsHuman": false
+}
+```
+
+`restoredAt` and `backupKind` come from the **backup's own `meta.json`**, so the
+answer to "restored to which point in time" is the identity of that copy and not
+the moment the clock was read. The same object is exposed as `pluginRecovery` on
+the health route and by `continuum_status` (`null` / omitted when this machine
+never had such an incident). The reading of the report is not part of this
+change: the interface part is a separate task.
+
 
 **The disarming is the host's job, and it does it at boot.** As soon as this
 plugin is loaded, it writes the ready marker, removes `watchdog-pending.json` and

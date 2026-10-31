@@ -14,7 +14,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { apply, detectManualRestart, normalizeConfig, planWatchdogArmCommand, PLUGIN_VERSION_FALLBACK, pluginVersion, resolveStateFile } from '../index.js'
+import { apply, detectManualRestart, normalizeConfig, planWatchdogArmCommand, PLUGIN_VERSION_FALLBACK, pluginVersion, resolveStateFile, runPluginRecovery } from '../index.js'
 import { DEFAULTS } from '../index.js'
 import { writeState, createEmptyState, entryFor, markPendingResume, markRunning, requestRestart, setDisarmedGoal, setGoal, setParkedGoal } from '../lib/checkpoint.js'
 
@@ -1864,3 +1864,367 @@ test('the dry run of the supervisor declares everything it returns', async () =>
   }
   return { ctx, routes }
 }
+
+// ---------------------------------------------------------------------------
+// THE REPORTED KIND OF PLUGIN FAILURE (user decision, 2026-11-01)
+//
+// A plugin that fails to IMPORT does not keep the host from booting: the entry
+// silently never activates. These tests drive the boot pass against a SYNTHETIC
+// profile, backup and startup log, so every branch is checked without touching
+// the machine, and they check the two hard rules:
+//   - the restart is asked for ONLY when files really changed
+//     (`no-backup` / `duplicate` / `already-consistent` / `needs-human` never
+//     ask for one);
+//   - <stateDir>/last-plugin-recovery.json is written with the whole report and
+//     the identity of the backup it restored from.
+// ---------------------------------------------------------------------------
+
+/** Write one file, creating its directory. */
+function writeAt(file, content) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, content, 'utf8');
+}
+
+/**
+ * A synthetic profile + one known-good backup of it + one startup log that
+ * reports `plugin` as failed, plus the state directory of the plugin.
+ */
+function pluginRecoveryFixture(label, { plugin = 'broken-plugin', error = 'Error: Cannot find module \'x\'', backup = true } = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), `dsh-autorestart-plugin-recovery-${label}-`));
+  const stateDir = path.join(root, 'state');
+  fs.mkdirSync(stateDir, { recursive: true });
+  const profileDir = path.join(root, 'profile');
+  writeAt(path.join(profileDir, 'package.json'), JSON.stringify({ name: 'profile', dependencies: { [plugin]: 'file:./x' } }));
+  writeAt(path.join(profileDir, 'node_modules', plugin, 'package.json'), `{"name":"${plugin}","version":"2.0.0-broken"}`);
+  writeAt(path.join(profileDir, 'node_modules', plugin, 'index.js'), 'export const broken = true;\n');
+
+  const backupsDir = path.join(stateDir, 'backups');
+  let backupDir = null;
+  if (backup === true) {
+    backupDir = path.join(backupsDir, '20261101T000000Z');
+    writeAt(path.join(backupDir, 'node_modules', plugin, 'package.json'), `{"name":"${plugin}","version":"1.0.0"}`);
+    writeAt(path.join(backupDir, 'node_modules', plugin, 'index.js'), 'export const good = true;\n');
+    writeAt(path.join(backupDir, 'manifest.json'), JSON.stringify({ stamp: '20261101T000000Z', at: 1_761_000_000_000 }));
+    writeAt(path.join(backupDir, 'meta.json'), JSON.stringify({
+      kind: 'known-good',
+      at: 1_761_000_000_000,
+      version: '0.9.0',
+      reason: 'boot-ok',
+    }));
+  }
+
+  const logsDir = path.join(root, 'logs');
+  const logName = 'startup-2026-11-01T00-00-00.000Z-aaaa.log';
+  writeAt(path.join(logsDir, logName), [
+    `2026-11-01T00:00:01.000Z dsh: warning: 1 entry did not activate`,
+    `2026-11-01T00:00:01.100Z - ${plugin}: failed to import: ${error}`,
+  ].join('\n'));
+  return { root, stateDir, profileDir, backupsDir, backupDir, logsDir, logPath: path.join(logsDir, logName) };
+}
+
+test('the boot pass restores the failed plugin and writes last-plugin-recovery.json', () => {
+  const fixture = pluginRecoveryFixture('restore');
+  const restarts = [];
+  const outcome = runPluginRecovery({
+    stateDir: fixture.stateDir,
+    profileDir: fixture.profileDir,
+    backupsDir: fixture.backupsDir,
+    logsDir: fixture.logsDir,
+    bootAt: Date.parse('2026-11-01T01:00:00.000Z'),
+    now: Date.parse('2026-11-01T01:00:05.000Z'),
+    requestRestart: (request) => {
+      restarts.push(request);
+      return true;
+    },
+  });
+
+  assert.equal(outcome.ran, true);
+  assert.equal(outcome.found, true);
+  assert.equal(outcome.changed, true);
+  assert.equal(restarts.length, 1, 'exactly one restart, through the existing entry');
+  assert.deepEqual(restarts[0].plugins, ['broken-plugin']);
+
+  const live = path.join(fixture.profileDir, 'node_modules', 'broken-plugin');
+  assert.equal(fs.readFileSync(path.join(live, 'index.js'), 'utf8'), 'export const good = true;\n');
+  const aside = fs.readdirSync(path.join(fixture.profileDir, 'node_modules'))
+    .filter((name) => name.startsWith('broken-plugin.broken-'));
+  assert.equal(aside.length, 1, 'the broken tree is kept as evidence');
+
+  const reportFile = path.join(fixture.stateDir, 'last-plugin-recovery.json');
+  assert.equal(fs.existsSync(reportFile), true, 'the report is written next to the checkpoint');
+  const report = JSON.parse(fs.readFileSync(reportFile, 'utf8'));
+  for (const key of ['at', 'atIso', 'failures', 'actions', 'restartRequested', 'needsHuman']) {
+    assert.ok(Object.prototype.hasOwnProperty.call(report, key), `the report must carry ${key}`);
+  }
+  assert.equal(report.restartRequested, true);
+  assert.equal(report.needsHuman, false);
+  assert.deepEqual(
+    report.failures.map((failure) => failure.plugin),
+    [null, 'broken-plugin'],
+    'the aggregate warning and the named plugin are both reported (the warning names none)',
+  );
+  assert.match(report.failures[1].error, /Cannot find module/);
+  assert.equal(report.actions.length, 1, 'only a named plugin can be acted on');
+  assert.equal(report.actions[0].mode, 'overwrite');
+  assert.equal(report.actions[0].backupKind, 'known-good', 'the identity comes from the backup meta');
+  assert.equal(report.actions[0].restoredAt, 1_761_000_000_000, 'the point in time comes from the backup meta');
+  assert.ok(report.actions[0].restoredFrom.includes(path.join('node_modules', 'broken-plugin')));
+  assert.match(report.actions[0].evidence.renamedTo, /broken-plugin\.broken-\d{8}T\d{6}$/);
+
+  // The bookkeeping of the cycle: one attempt, the failure handled.
+  const state = JSON.parse(fs.readFileSync(path.join(fixture.stateDir, 'plugin-recovery.json'), 'utf8'));
+  assert.equal(state.entries[0].plugin, 'broken-plugin');
+  assert.equal(state.entries[0].attempts, 1);
+  assert.equal(state.handled.length, 1);
+});
+
+test('a second boot with the same old log asks for NO second restart (duplicate)', () => {
+  const fixture = pluginRecoveryFixture('duplicate');
+  const first = [];
+  runPluginRecovery({
+    stateDir: fixture.stateDir,
+    profileDir: fixture.profileDir,
+    backupsDir: fixture.backupsDir,
+    logsDir: fixture.logsDir,
+    logPath: fixture.logPath,
+    requestRestart: (request) => {
+      first.push(request);
+      return true;
+    },
+  });
+  assert.equal(first.length, 1);
+  // The very same log is read again on the next boot: the fingerprint is already
+  // handled, so the pass recognises it and touches nothing.
+  const second = [];
+  const outcome = runPluginRecovery({
+    stateDir: fixture.stateDir,
+    profileDir: fixture.profileDir,
+    backupsDir: fixture.backupsDir,
+    logsDir: fixture.logsDir,
+    logPath: fixture.logPath,
+    requestRestart: (request) => {
+      second.push(request);
+      return true;
+    },
+  });
+  assert.equal(second.length, 0, 'an already handled failure must not restart the host again');
+  assert.equal(outcome.restartRequested, false);
+  assert.equal(outcome.actions[0].mode, 'duplicate');
+});
+
+test('a plugin that already used its attempt asks for NO restart (needs human)', () => {
+  const fixture = pluginRecoveryFixture('needs-human');
+  const restarts = [];
+  const outcome = runPluginRecovery({
+    stateDir: fixture.stateDir,
+    profileDir: fixture.profileDir,
+    backupsDir: fixture.backupsDir,
+    logsDir: fixture.logsDir,
+    logPath: fixture.logPath,
+    requestRestart: (request) => {
+      restarts.push(request);
+      return true;
+    },
+    now: Date.parse('2026-11-01T02:00:00.000Z'),
+  });
+  assert.equal(outcome.changed, true);
+  // Now the SAME plugin fails again in a NEW boot (different line => different
+  // fingerprint) and the attempt budget refuses a second restore.
+  const second = [];
+  writeAt(fixture.logPath, [
+    '2026-11-01T02:00:01.000Z - broken-plugin: failed to import: Error: still broken',
+  ].join('\n'));
+  const again = runPluginRecovery({
+    stateDir: fixture.stateDir,
+    profileDir: fixture.profileDir,
+    backupsDir: fixture.backupsDir,
+    logsDir: fixture.logsDir,
+    logPath: fixture.logPath,
+    bootAt: Date.parse('2026-11-01T02:00:00.000Z'),
+    requestRestart: (request) => {
+      second.push(request);
+      return true;
+    },
+    now: Date.parse('2026-11-01T03:00:00.000Z'),
+  });
+  assert.equal(second.length, 0, 'a plugin that already used its attempt must not restart again');
+  assert.equal(again.changed, false);
+  assert.equal(again.needsHuman, true);
+  assert.equal(again.actions[0].mode, 'needs-human');
+  assert.equal(again.report.restartRequested, false);
+});
+
+test('no known-good backup means no change and NO restart', () => {
+  const fixture = pluginRecoveryFixture('no-backup', { backup: false });
+  const restarts = [];
+  const outcome = runPluginRecovery({
+    stateDir: fixture.stateDir,
+    profileDir: fixture.profileDir,
+    backupsDir: fixture.backupsDir,
+    logsDir: fixture.logsDir,
+    logPath: fixture.logPath,
+    requestRestart: (request) => {
+      restarts.push(request);
+      return true;
+    },
+  });
+  assert.equal(restarts.length, 0);
+  assert.equal(outcome.changed, false);
+  assert.equal(outcome.restartRequested, false);
+  assert.equal(outcome.actions[0].mode, 'no-backup');
+  assert.equal(
+    fs.readFileSync(path.join(fixture.profileDir, 'node_modules', 'broken-plugin', 'index.js'), 'utf8'),
+    'export const broken = true;\n',
+    'nothing is touched without a backup',
+  );
+});
+
+test('an already identical plugin means no change and NO restart', () => {
+  const fixture = pluginRecoveryFixture('already-consistent');
+  // The live tree already IS the backup content: the restore already happened.
+  fs.cpSync(
+    path.join(fixture.backupDir, 'node_modules', 'broken-plugin'),
+    path.join(fixture.profileDir, 'node_modules', 'broken-plugin'),
+    { recursive: true, force: true },
+  );
+  const restarts = [];
+  const outcome = runPluginRecovery({
+    stateDir: fixture.stateDir,
+    profileDir: fixture.profileDir,
+    backupsDir: fixture.backupsDir,
+    logsDir: fixture.logsDir,
+    logPath: fixture.logPath,
+    requestRestart: (request) => {
+      restarts.push(request);
+      return true;
+    },
+  });
+  assert.equal(restarts.length, 0, 'an idempotent pass must not restart the host');
+  assert.equal(outcome.changed, false);
+  assert.equal(outcome.actions[0].mode, 'already-consistent');
+});
+
+test('a clean previous log ends the cycle and writes no report', () => {
+  const fixture = pluginRecoveryFixture('clean');
+  writeAt(fixture.logPath, '2026-11-01T00:00:01.000Z dsh: listening on 127.0.0.1:57283');
+  writeAt(path.join(fixture.stateDir, 'plugin-recovery.json'), JSON.stringify({
+    version: 1,
+    entries: [{ plugin: 'broken-plugin', attempts: 1, firstAt: 1, lastAt: 1, restartedAt: 1 }],
+    handled: [{ fingerprint: 'abc', plugin: 'broken-plugin', at: 1 }],
+  }));
+  const outcome = runPluginRecovery({
+    stateDir: fixture.stateDir,
+    profileDir: fixture.profileDir,
+    backupsDir: fixture.backupsDir,
+    logsDir: fixture.logsDir,
+    logPath: fixture.logPath,
+    requestRestart: () => {
+      throw new Error('a clean boot must not restart');
+    },
+  });
+  assert.equal(outcome.found, false);
+  assert.equal(outcome.reset.reset, true);
+  const state = JSON.parse(fs.readFileSync(path.join(fixture.stateDir, 'plugin-recovery.json'), 'utf8'));
+  assert.deepEqual(state.entries, []);
+  assert.deepEqual(state.handled, []);
+  assert.equal(fs.existsSync(path.join(fixture.stateDir, 'last-plugin-recovery.json')), false);
+});
+
+test('the pass only reads a log of an EARLIER boot', () => {
+  const fixture = pluginRecoveryFixture('previous-boot');
+  // The log was written by THIS boot: its verdict cannot be trusted yet.
+  fs.utimesSync(fixture.logPath, new Date('2026-11-01T01:00:04Z'), new Date('2026-11-01T01:00:04Z'));
+  const outcome = runPluginRecovery({
+    stateDir: fixture.stateDir,
+    profileDir: fixture.profileDir,
+    backupsDir: fixture.backupsDir,
+    logsDir: fixture.logsDir,
+    bootAt: Date.parse('2026-11-01T01:00:00.000Z'),
+    requestRestart: () => {
+      throw new Error('the log of this very boot must not restore anything');
+    },
+  });
+  assert.equal(outcome.ran, false);
+  assert.equal(outcome.reason.includes('no finished boot log'), true);
+});
+
+test('health reports pluginRecovery, and the field is declared in the tool schema', () => {
+  const { dir, file } = tempStateFile('plugin-recovery-health');
+  const { ctx, routes } = createRouteContext();
+  apply(ctx, { stateFile: file, recoveryDelayMs: 0, enabled: true });
+  const route = routes.find((entry) => entry.path === '/__dsh_autorestart/health');
+  assert.ok(route, 'the health route must be registered');
+
+  // Nothing happened yet: the field exists and says so.
+  const before = fakeResponse();
+  route.handler({ url: '/__dsh_autorestart/health' }, before);
+  const emptyBody = JSON.parse(before.body);
+  assert.equal(Object.prototype.hasOwnProperty.call(emptyBody, 'pluginRecovery'), true);
+  assert.equal(emptyBody.pluginRecovery, null);
+
+  // A report of the boot pass is what the route reports.
+  const report = {
+    at: 1_761_000_900_000,
+    atIso: new Date(1_761_000_900_000).toISOString(),
+    log: '/tmp/startup-2026-11-01T00-00-00.000Z-aaaa.log',
+    backupDir: '/tmp/backups/20261101T000000Z',
+    backupKind: 'known-good',
+    restoredAt: 1_761_000_000_000,
+    failures: [{ plugin: 'broken-plugin', error: "Error: Cannot find module 'x'", at: 1_761_000_800_000, kind: 'failed-to-import', fingerprint: 'f00' }],
+    actions: [{ plugin: 'broken-plugin', mode: 'overwrite', restoredFrom: '/tmp/backups/20261101T000000Z/node_modules/broken-plugin', restoredAt: 1_761_000_000_000, backupKind: 'known-good', evidence: { renamedFrom: '/p/node_modules/broken-plugin', renamedTo: '/p/node_modules/broken-plugin.broken-20261101T010000' }, applied: true, changed: true, needsHuman: false, reason: '' }],
+    restartRequested: true,
+    needsHuman: false,
+    changed: true,
+  };
+  writeAt(path.join(dir, 'last-plugin-recovery.json'), JSON.stringify(report, null, 2));
+
+  const after = fakeResponse();
+  route.handler({ url: '/__dsh_autorestart/health' }, after);
+  const body = JSON.parse(after.body);
+  assert.equal(body.pluginRecovery.at, 1_761_000_900_000);
+  assert.equal(body.pluginRecovery.failures[0].plugin, 'broken-plugin');
+  assert.equal(body.pluginRecovery.actions[0].mode, 'overwrite');
+  assert.equal(body.pluginRecovery.restoredAt, 1_761_000_000_000);
+  assert.equal(body.pluginRecovery.backupKind, 'known-good');
+});
+
+test('continuum_status carries pluginRecovery and declares it in the output schema', () => {
+  const { dir, file } = tempStateFile('plugin-recovery-status');
+  const fake = createFakeContext();
+  apply(fake.ctx, { stateFile: file, recoveryDelayMs: 0, enabled: true });
+  const status = fake.tools.find((tool) => tool.name === 'continuum_status');
+  assert.ok(status);
+  const declared = status.output.schema.properties.pluginRecovery;
+  assert.ok(declared, 'the strict output schema must declare pluginRecovery');
+  assert.equal(declared.type, 'object');
+  // Never null: the key is OMITTED when there is nothing to report.
+  assert.equal(Object.prototype.hasOwnProperty.call(status.execute({}), 'pluginRecovery'), false);
+
+  writeAt(path.join(dir, 'last-plugin-recovery.json'), JSON.stringify({
+    at: 1_761_000_900_000,
+    atIso: new Date(1_761_000_900_000).toISOString(),
+    failures: [{ plugin: 'broken-plugin', error: 'boom' }],
+    actions: [{ plugin: 'broken-plugin', mode: 'overwrite', restoredAt: 1_761_000_000_000, backupKind: 'known-good' }],
+    restartRequested: true,
+    needsHuman: false,
+  }, null, 2));
+
+  const value = status.execute({});
+  assert.ok(value.pluginRecovery, 'the tool must report the last recovery');
+  assert.equal(value.pluginRecovery.failures[0].plugin, 'broken-plugin');
+  assert.equal(value.pluginRecovery.restartRequested, true);
+  for (const key of Object.keys(value)) {
+    assert.ok(
+      Object.prototype.hasOwnProperty.call(status.output.schema.properties, key),
+      `continuum_status returned "${key}" which its schema does not declare`,
+    );
+  }
+});
+
+test('apply() runs the boot pass and records its outcome on the runtime', () => {
+  const { file } = tempStateFile('plugin-recovery-wiring');
+  const fake = createFakeContext();
+  const runtime = apply(fake.ctx, { stateFile: file, recoveryDelayMs: 0, enabled: true });
+  assert.ok(runtime.pluginRecovery && typeof runtime.pluginRecovery === 'object', 'the pass must run at boot');
+  assert.equal(typeof runtime.pluginRecovery.ran, 'boolean');
+});

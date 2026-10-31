@@ -78,12 +78,15 @@ import {
   clearRollbackReport,
   createBackup,
   DEFAULT_MAX_BACKUPS,
+  enabledBundlesOf,
   KIND_KNOWN_GOOD,
   KIND_SNAPSHOT,
   latestKnownGood,
+  LINKS_DIR,
   listBackupIdentities,
   listBackups,
   markKnownGood,
+  PLUGINS_DIR,
   readManifest,
   readRollbackReport,
   releaseRollbackLock,
@@ -183,6 +186,22 @@ import {
   writeRestartVerdict,
 } from './lib/restart-verdict.js'
 import { waitForHealthyInstance } from './lib/health.js'
+import { findPluginFailures, mergeFailuresByPlugin } from './lib/plugin-failure.js'
+import {
+  applyPluginRecovery,
+  buildRecoveryReport,
+  findLatestStartupLog,
+  markHandled,
+  planPluginRecovery,
+  readRecoveryReport,
+  readRecoveryState,
+  recordAttempt,
+  resetRecoveryCycle,
+  summarizeRecoveryReport,
+  writeRecoveryReport,
+  writeRecoveryState,
+} from './lib/plugin-recover.js'
+import { dshHomeDir } from './lib/rescue.js'
 import {
   buildCustomCommand,
   buildWatchScript,
@@ -1401,6 +1420,303 @@ function resolveProfileDir() {
  */
 function backupsDirFor(dir) {
   return backupsRoot(typeof dir === 'string' ? dir : '')
+}
+
+/**
+ * THE REPORTED KIND OF PLUGIN FAILURE (user decision, 2026-11-01).
+ *
+ * A plugin that fails to IMPORT does not keep the host from booting: the entry
+ * silently never activates and the feature behind it 404s. The startup log says
+ * so (`<plugin>: failed to import: …`). This pass reads that verdict, puts the
+ * plugin back to the copy of the newest KNOWN-GOOD backup and asks for ONE
+ * restart so the restored copy is what the next boot loads.
+ *
+ * IT DOES NOT TAKE OVER THE PROCESS-LEVEL FAILURE. A boot that does not come up
+ * at all is the pre-restart snapshot plus the watchdog (lib/watchdog.js,
+ * lib/restart.js); this pass only runs inside a host that IS up, and it never
+ * arms a second restart mechanism — it asks through `requestRestart`, the same
+ * entry the tool and the routes use.
+ *
+ * THE ONE RESTART BUDGET: only a pass that really changed files asks for a
+ * restart. `no-backup`, `duplicate`, `already-consistent` and `needs-human` all
+ * change nothing, so they ask for nothing (a restart that cannot change the
+ * outcome only costs the user another boot).
+ *
+ * @param {{
+ *   stateDir?: string,
+ *   profileDir?: string,
+ *   backupsDir?: string,
+ *   logsDir?: string,
+ *   bootAt?: number,
+ *   now?: number,
+ *   fs?: object,
+ *   enabledPlugins?: string[]|null,
+ *   copy?: Function|null,
+ *   attemptLimit?: number,
+ *   logPath?: string|null,
+ *   requestRestart?: Function|null,
+ * }} [options]
+ * @returns {object|null} the outcome of the pass (null when it could not run)
+ */
+export function runPluginRecovery(options = {}) {
+  const stateDir = typeof options.stateDir === 'string' ? options.stateDir.trim() : ''
+  if (stateDir === '') return null
+  const fsImpl = options.fs && typeof options.fs === 'object' ? options.fs : fs
+  const now = Number.isFinite(Number(options.now)) ? Math.trunc(Number(options.now)) : Date.now()
+  const bootAt = Number.isFinite(Number(options.bootAt)) ? Math.trunc(Number(options.bootAt)) : now
+  const outcome = collectPluginRecovery({ ...options, stateDir, fs: fsImpl, now, bootAt })
+  if (!outcome || outcome.ran !== true) return outcome
+  if (outcome.changed !== true) return outcome
+  // ONE RESTART, THROUGH THE EXISTING ENTRY. Never a second mechanism: the
+  // caller supplies the same `requestRestart` the tool and the routes use.
+  let requested = false
+  if (typeof options.requestRestart === 'function') {
+    const changedPlugins = outcome.actions
+      .filter((action) => action && action.changed === true)
+      .map((action) => action.plugin)
+    try {
+      requested = options.requestRestart({
+        reason: 'a plugin failed to load, so the known-good copy was put back: '
+          + changedPlugins.join(', '),
+        plugins: changedPlugins,
+      }) !== false
+    } catch {
+      requested = false
+    }
+  }
+  const report = { ...outcome.report, restartRequested: requested === true }
+  if (writeRecoveryReport(stateDir, report, { fs: fsImpl })) outcome.report = report
+  outcome.restartRequested = requested === true
+  return outcome
+}
+
+/**
+ * The detection + restore + bookkeeping half of {@link runPluginRecovery}.
+ *
+ * Split out on purpose: this half never asks for a restart, so a test can drive
+ * every decision without registering anything on the machine.
+ *
+ * @param {object} [options] see {@link runPluginRecovery}
+ * @returns {object|null}
+ */
+export function collectPluginRecovery(options = {}) {
+  const stateDir = typeof options.stateDir === 'string' ? options.stateDir.trim() : ''
+  if (stateDir === '') return null
+  const fsImpl = options.fs && typeof options.fs === 'object' ? options.fs : fs
+  const profileDir = typeof options.profileDir === 'string' ? options.profileDir.trim() : ''
+  const backupsDir = typeof options.backupsDir === 'string' ? options.backupsDir.trim() : ''
+  const logsDir = typeof options.logsDir === 'string' && options.logsDir !== ''
+    ? options.logsDir
+    : resolveStartupLogsDir()
+  const now = Number.isFinite(Number(options.now)) ? Math.trunc(Number(options.now)) : Date.now()
+  const bootAt = Number.isFinite(Number(options.bootAt)) ? Math.trunc(Number(options.bootAt)) : now
+  const attemptLimit = Number.isFinite(Number(options.attemptLimit)) && Number(options.attemptLimit) >= 1
+    ? Math.trunc(Number(options.attemptLimit))
+    : 1
+  const recoveryState = readRecoveryState(stateDir, { fs: fsImpl })
+
+  // (1) WHICH LOG: the PREVIOUS boot's own log. The log of the boot that is
+  // looking for failures cannot hold its own audit verdict yet, and an older
+  // one would dig up an already handled incident.
+  const log = typeof options.logPath === 'string' && options.logPath !== ''
+    ? { name: path.basename(options.logPath), path: options.logPath, at: null, mtime: 0, size: 0 }
+    : findLatestStartupLog(logsDir, { before: bootAt, fs: fsImpl })
+  if (log === null) {
+    return {
+      ran: false,
+      found: false,
+      changed: false,
+      needsHuman: false,
+      restartRequested: false,
+      report: null,
+      log: null,
+      actions: [],
+      failures: [],
+      reason: 'no finished boot log was found, so there is nothing to judge',
+    }
+  }
+  let text = ''
+  try {
+    text = String(fsImpl.readFileSync(log.path, 'utf8'))
+  } catch (error) {
+    return {
+      ran: false,
+      found: false,
+      changed: false,
+      needsHuman: false,
+      restartRequested: false,
+      report: null,
+      log: log.path,
+      actions: [],
+      failures: [],
+      reason: 'the startup log could not be read: ' + (error && error.message ? error.message : String(error)),
+    }
+  }
+
+  // (2) DETECT. Lines stamped before the boot this log belongs to are not new
+  // information: they are the loop guard against reading the same verdict
+  // forever.
+  const sinceMs = Number.isFinite(Number(log.at)) ? Number(log.at) : null
+  const failures = findPluginFailures(text, {
+    sinceMs,
+    logAt: Number.isFinite(Number(log.mtime)) && log.mtime > 0 ? Math.trunc(log.mtime) : null,
+    now,
+  })
+  const named = mergeFailuresByPlugin(failures)
+
+  if (named.length === 0) {
+    // ONE CLEAN BOOT ENDS THE CYCLE: the plugin that failed before now loads, so
+    // the attempt budget and the handled fingerprints start over.
+    const reset = resetRecoveryCycle(recoveryState, { now })
+    if (reset.reset) writeRecoveryState(stateDir, recoveryState, { fs: fsImpl })
+    return {
+      ran: true,
+      found: false,
+      changed: false,
+      needsHuman: false,
+      restartRequested: false,
+      report: null,
+      log: log.path,
+      actions: [],
+      failures: [],
+      reset,
+      reason: 'the previous boot reported no plugin failure',
+    }
+  }
+
+  // (3) PLAN: the newest backup that has PROVEN it can boot is the only source.
+  const knownGood = backupsDir === '' ? null : latestKnownGood(backupsDir)
+  const enabledPlugins = options.enabledPlugins === undefined
+    ? readEnabledPlugins(profileDir)
+    : options.enabledPlugins
+  const plan = planPluginRecovery({
+    failures: named,
+    backupDir: knownGood && typeof knownGood.dir === 'string' ? knownGood.dir : null,
+    profileDir,
+    backupMeta: null,
+    enabledPlugins,
+    recovery: recoveryState,
+    attemptLimit,
+    fs: fsImpl,
+  })
+
+  // (4) APPLY: the evidence rename and the copy, nothing else.
+  const applied = applyPluginRecovery({
+    plan,
+    profileDir,
+    now,
+    fs: fsImpl,
+    copy: typeof options.copy === 'function' ? options.copy : null,
+  })
+
+  // (5) BOOKKEEPING. An ATTEMPT is spent only by a restore that really happened
+  // (that is the plugin-level loop guard), and the failure is marked HANDLED
+  // only when files were really changed: a decision that changed nothing has to
+  // stay visible on the next boot instead of disappearing behind "handled".
+  for (const action of applied.actions) {
+    if (action && action.changed === true) {
+      recordAttempt(recoveryState, action.plugin, { now })
+      markHandled(recoveryState, { fingerprint: action.fingerprint, plugin: action.plugin, now })
+    }
+  }
+
+  const report = buildRecoveryReport({
+    at: now,
+    log: log.path,
+    failures: named,
+    actions: applied.actions,
+    restartRequested: false,
+    needsHuman: applied.needsHuman === true,
+    backupDir: plan.backupDir,
+    backupKind: plan.backupKind,
+    restoredAt: plan.restoredAt,
+  })
+  writeRecoveryReport(stateDir, report, { fs: fsImpl })
+  writeRecoveryState(stateDir, recoveryState, { fs: fsImpl })
+
+  return {
+    ran: true,
+    found: true,
+    changed: applied.changed === true,
+    needsHuman: applied.needsHuman === true,
+    restartRequested: false,
+    report,
+    log: log.path,
+    plan,
+    actions: applied.actions,
+    failures: named,
+    state: recoveryState,
+    reason: applied.changed === true
+      ? 'the failed plugin was restored from the known-good backup'
+      : 'the failure was recognised but nothing was changed',
+  }
+}
+
+/**
+ * Where this machine writes its startup logs (`<DSH_HOME>/logs`).
+ *
+ * @returns {string}
+ */
+export function resolveStartupLogsDir() {
+  try {
+    return path.join(dshHomeDir({ env: process.env }), 'logs')
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * The plugins this profile enables: the dependencies of its package.json, the
+ * bundles the profile turns on, and what is really installed.
+ *
+ * WHY THE INSTALLED TREE IS INCLUDED: a startup log names ENTRY ids, which are
+ * not always package names, so a list built only from package.json would call a
+ * perfectly installed plugin "unknown" and refuse to restore it. The installed
+ * tree is the honest answer to "is this plugin part of this profile?".
+ *
+ * @param {string} profileDir
+ * @returns {string[]|null} null when nothing could be read (no filtering then)
+ */
+export function readEnabledPlugins(profileDir) {
+  const dir = typeof profileDir === 'string' ? profileDir.trim() : ''
+  if (dir === '') return null
+  const names = new Set()
+  try {
+    const raw = fs.readFileSync(path.join(dir, 'package.json'), 'utf8')
+    const text = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw
+    const parsed = JSON.parse(text)
+    for (const key of ['dependencies', 'devDependencies', 'optionalDependencies']) {
+      const block = parsed && typeof parsed === 'object' ? parsed[key] : null
+      if (block && typeof block === 'object') {
+        for (const name of Object.keys(block)) names.add(name)
+      }
+    }
+    for (const name of enabledBundlesOf(text)) names.add(name)
+  } catch {}
+  for (const sub of [PLUGINS_DIR, LINKS_DIR]) {
+    const root = path.join(dir, sub)
+    let entries = []
+    try {
+      entries = fs.readdirSync(root)
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      const name = String(entry)
+      if (name.startsWith('.')) continue
+      if (name.startsWith('@')) {
+        // A scope directory is not a plugin: the packages inside it are.
+        try {
+          for (const scoped of fs.readdirSync(path.join(root, name))) {
+            names.add(name + '/' + String(scoped))
+          }
+        } catch {}
+        continue
+      }
+      names.add(name)
+    }
+  }
+  return names.size === 0 ? null : [...names]
 }
 
 /**
@@ -4916,6 +5232,22 @@ const titleOfSummary = (item) => {
       return ownVersion()
     },
     /**
+     * THE LAST PLUGIN-FAILURE RECOVERY (the REPORTED kind, user decision
+     * 2026-11-01), read from the report the boot pass writes:
+     * `{ at, atIso, failures, actions, restartRequested, needsHuman }`, cut down
+     * to what an answer to the browser may carry. Null when this machine never
+     * had one — a machine without an incident says so instead of inventing one.
+     *
+     * @returns {object|null}
+     */
+    pluginRecoveryInfo() {
+      try {
+        return summarizeRecoveryReport(readRecoveryReport(stateDirOf()))
+      } catch {
+        return null
+      }
+    },
+    /**
      * DISARM THE WATCHDOG: "this host is up, so nothing may roll it back".
      *
      * The ready marker is written on the FIRST tick of the first attempt (so a
@@ -6278,6 +6610,13 @@ function registerTools(ctx, runtime, config) {
           profileDirSource: { type: 'string' },
           backupIncludePlugins: { type: 'boolean' },
           lastRollback: { type: 'object' },
+          // THE REPORTED KIND OF PLUGIN FAILURE (user decision, 2026-11-01): what
+          // the last boot found in the startup log, what was put back from the
+          // known-good backup and to which point in time. DECLARED HERE TOO,
+          // because this schema is strict: an undeclared key would be refused
+          // and the whole tool would stop answering. It is OMITTED (never null)
+          // when this machine never had such an incident.
+          pluginRecovery: { type: 'object' },
           // The last restart: the snapshot that was taken before it and the
           // verdict of the instance that came up.
           lastRestart: { type: 'object' },
@@ -6324,6 +6663,10 @@ function registerTools(ctx, runtime, config) {
         // came up (the four boot checks). Present only when a restart
         // happened — otherwise there is nothing to report.
         ...(runtime.lastRestartVerdict() ? { lastRestart: runtime.lastRestartVerdict() } : {}),
+        // THE LAST PLUGIN-FAILURE RECOVERY (the REPORTED kind): which plugin did
+        // not load, what was put back from the known-good backup and to which
+        // point in time. Omitted (not null) when this machine never had one.
+        ...(runtime.pluginRecoveryInfo() ? { pluginRecovery: runtime.pluginRecoveryInfo() } : {}),
         // The access link of THIS instance (with the boot token). The boot
         // token is created per process, so the link the browser holds answers
         // 401 after a restart — this is the link that still works.
@@ -8752,6 +9095,11 @@ function registerHealthRoute(ctx, runtime, config, sleep) {
             // where it lives). The browser cannot read the disk, so the Host
             // reads it — only the directory, never the contents.
             backups: runtime.backupsInfo(),
+            // THE REPORTED KIND OF PLUGIN FAILURE: what the last boot found in
+            // the startup log, what was put back from the known-good backup and
+            // to which point in time. Always present (null = never had one), so
+            // the interface can tell "no incident" from "the field is missing".
+            pluginRecovery: runtime.pluginRecoveryInfo(),
             // THE RESCUE KIT: where the two scripts are, so a user whose DSH
             // does not come up can find them (and copy the path) even though
             // they cannot open a README.
@@ -8851,6 +9199,7 @@ function registerHealthRoute(ctx, runtime, config, sleep) {
             backupIncludePlugins: config.backupIncludePlugins !== false,
             parkedGoals: [],
             recovery: [],
+            pluginRecovery: null,
           })
         }
         res.statusCode = 200
@@ -8942,6 +9291,11 @@ function registerHealthRoute(ctx, runtime, config, sleep) {
         // numbers are those of the last run, never a live count (the jar of a
         // running browser is locked).
         cookieClear: runtime.cookieClearInfo(),
+        // THE REPORTED KIND OF PLUGIN FAILURE: which plugin did not load, what
+        // the known-good backup put back and to which point in time. Null when
+        // this machine never had one; the PROCESS-LEVEL failure is NOT reported
+        // here (that is the rollback report and the watchdog).
+        pluginRecovery: runtime.pluginRecoveryInfo(),
         // THE FIRST SAFE COPY: what happened when this machine looked for a
         // known-good backup and found none (user decision, 2026-10-30). Absent
         // when nothing was ever tried.
@@ -9306,6 +9660,75 @@ export function apply(ctx, rawConfig, options = {}) {
   registerManualRestartGuard(ctx, runtime, config)
   registerSystemPrompt(ctx, runtime)
   registerHealthRoute(ctx, runtime, config, sleep)
+
+  // THE REPORTED KIND OF PLUGIN FAILURE (user decision, 2026-11-01).
+  //
+  // Runs here on purpose: AFTER everything above is in place (so a restart can
+  // be asked for through the normal entry) and BEFORE the ready marker below
+  // (the host is not "up and done" while a plugin it knows about is broken).
+  //
+  // IT ONLY LOOKS AT THE PREVIOUS BOOT'S LOG. The log of the boot that is
+  // looking cannot hold its own audit verdict yet, and reading an older one
+  // would dig up an incident that is already handled — both are what
+  // `findLatestStartupLog({ before })` plus the recorded fingerprints prevent.
+  //
+  // IT NEVER TOUCHES THE PROCESS-LEVEL FAILURE: a host that does not come up is
+  // the snapshot + the watchdog. This is the "up, but one entry silently did
+  // not activate" case only.
+  if (runtime.isNewBoot) {
+    try {
+      const recovery = runPluginRecovery({
+        stateDir: runtime.stateDir,
+        profileDir: runtime.profileDir.dir,
+        backupsDir: runtime.profileDir.dir ? backupsDirFor(runtime.stateDir) : '',
+        logsDir: resolveStartupLogsDir(),
+        // The moment this process started: only a log written BEFORE it
+        // describes a boot that finished.
+        bootAt: Date.now() - Math.round((typeof process.uptime === 'function' ? process.uptime() : 0) * 1000),
+        now: Date.now(),
+        // THE EXISTING RESTART ENTRY — the same `requestRestart` the tool and
+        // the routes use. A second mechanism would bypass the gate, the snapshot
+        // and the resume path.
+        requestRestart: (request) => {
+          requestRestart(runtime.state, {
+            reason: typeof request.reason === 'string' && request.reason !== ''
+              ? request.reason
+              : 'a plugin failed to load and was restored from the known-good backup',
+            bySessionId: null,
+            // Nothing to resume for a boot-time restart, and the goals of other
+            // sessions are not this pass's business: it asks for ONE restart of
+            // a machine that has just started.
+            resume: false,
+            parkGoals: true,
+            now: Date.now(),
+          })
+          runtime.markRestartStage('waiting')
+          runtime.persist()
+          runtime.startPolling()
+          return true
+        },
+      })
+      runtime.pluginRecovery = recovery
+      if (recovery && recovery.ran === true && recovery.found === true) {
+        log.warn('the previous boot reported a plugin failure', {
+          log: recovery.log,
+          plugins: recovery.failures.map((failure) => failure.plugin).filter((name) => typeof name === 'string'),
+          changed: recovery.changed === true,
+          needsHuman: recovery.needsHuman === true,
+          restartRequested: recovery.restartRequested === true,
+        })
+      }
+    } catch (error) {
+      // NEVER SILENT: a pass that could not run must be visible, not pretend
+      // that the machine is healthy.
+      runtime.pluginRecovery = {
+        ran: false,
+        ok: false,
+        reason: 'the plugin-failure recovery failed: ' + String(error && error.message ? error.message : error),
+      }
+      log.warn('the plugin-failure recovery failed:', String(error))
+    }
+  }
 
   // DISARM THE WATCHDOG AT BOOT — WITHOUT WAITING FOR ANYBODY TO ASK.
   //

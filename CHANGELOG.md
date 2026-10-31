@@ -1,5 +1,43 @@
 # Changelog
 
+## 未发布 — 报错型插件故障：自动换回好版本、只重启一次、写出可读报告
+
+### 缺口
+
+「坏法」有两种，原来只接住了其中一种：
+
+- **进程级**（宿主根本起不来，比如 `EADDRINUSE`）——已有看门狗 + 重启前快照负责，这次不动；
+- **报错型**（宿主起来了，但某个插件 entry **静默没激活**，功能直接 404）——原来**没有任何人管**：日志里明明写着 `<plugin>: failed to import: <error>`，界面却一切正常，用户只会看到某个功能"莫名其妙没了"。
+
+### 现在
+
+- **检测**（新增 `lib/plugin-failure.js`，纯函数）：`findPluginFailures(text, { sinceMs, logAt })` 认得四种真实日志行 —— `dsh: warning: N entry did not activate`（总括行，不点名）、`<plugin>: failed to import: <err>`、`<plugin>: import failed ...`、`- <plugin>: loading`（审计时还停在 loading，等于没激活）。**不认识的行一律忽略**：尤其**故意不认**进程级启动失败那段 `startup failed: ... / Failed plugins (1): ... / Error: EADDRINUSE` 转储 —— 那是看门狗的活，两个机制抢同一件事只会互相打。
+- **恢复**（新增 `lib/plugin-recover.js`）：拿**最近一次 known-good 备份**里该插件换回现场。
+  - 备份有 `node_modules/<name>` 真副本 → `overwrite`：现场目录**改名**为 `<name>.broken-<ts>`（**留证据，绝不删除**），副本拷回去；
+  - 备份只有 `node_modules-link/<name>`（链接安装的内容）→ `replace-link`：现场软链同样**改名留证据**，备份内容顶替（与既有 force 语义一致）；
+  - 备份里没有 / 插件不在本 profile 启用清单里 → `no-backup`：**不动**，写清原因。
+- **幂等**：拷贝前先比现场与副本（相对路径 + 大小 + sha256）；一致就 **不拷、不重启**，决策记 `already-consistent`。
+- **防循环（硬要求）**：
+  1. 同一份旧日志不许被当成新故障 —— 只读**上一次启动**那份日志（本次启动写的那份还不可能有自己的审计结论），行时间早于该次启动的一律不算，再用「插件 + 错误首行 + 日志时间」做**指纹**，指纹进 `plugin-recovery.json` 的 `handled` 后只能处理一次（再遇到记 `duplicate`）；
+  2. 根因不在插件（缺 peer 依赖、缺宿主能力）时换回也没用 —— **同一插件一个周期内只动手一次**，第二次只报不动、`needs-human`，且**不请求重启**。一次没有任何插件故障的启动会把周期清零。理由更正确：恢复是拿好版本顶替现场，恢复完现场就是好代码，所以**不存在"越修越坏"的循环**，真正的循环只有上面两个。
+- **只改过文件才重启**：`no-backup` / `duplicate` / `already-consistent` / `needs-human` 四种情况的 `restartRequested` **恒为 false**（有单测钉住）。重启走**现有入口** `requestRestart`（同一个 gate / 快照 / 续跑），**没有第二套重启机制**。
+- **接入启动流程**（`index.js`）：启动后、写 ready 标记之前跑一次 —— 读日志 → 检测 → 计划 → 恢复 → 写 `<stateDir>/last-plugin-recovery.json`（`{ at, atIso, failures[], actions[{plugin,mode,restoredFrom,restoredAt,backupKind}], restartRequested, needsHuman }`，其中 `restoredAt` / `backupKind` **取备份自己的 meta**，回答"恢复到了哪个时点"）。
+- **可见**：health 路由新增 `pluginRecovery` 字段（没发生过就是 `null`），`continuum_status` 工具同样返回它，并**同步写进工具 output schema**（严格 schema 下漏声明一个字段会让整个工具报废）。
+
+### 分工（写进 README 与中文 README）
+
+| 故障 | 谁负责 |
+|---|---|
+| 进程级：宿主起不来 | 重启前快照 + 看门狗（`lib/watchdog.js` / `lib/restart.js`），回滚 + 拉起 |
+| 报错型：宿主起来了、某个插件没激活 | 本条：检测 + 换回好版本 + 一次重启 + 报告 |
+
+两条路径不共享状态、不互相触发：`pluginRecovery` 只描述"报错型"的事。
+
+### 验证
+
+- `node --test plugins/dsh-autorestart/test/*.test.mjs` → **1067 / 1067 全绿**（基线 1017，本次 +50）。
+- 新增单测：`test/plugin-failure.test.mjs`（四种行、无关文本 → 空数组、进程级转储 → 空数组、`sinceMs` 窗口、指纹稳定/去重、超长截断）、`test/plugin-recover.test.mjs`（四条分支、改名参数断言、幂等、attempt=1 允许 / attempt=2 拒绝、报告字段与 meta 来源、日志挑选）、`test/integration.test.mjs` 追加 10 条（端到端恢复与报告、四种"不重启"、只读上一轮日志、health 字段与工具 schema）。
+
 ## 未发布 — 链接安装的插件现在也进备份、也能被还原
 
 ### 缺口（实测发现的真问题，不是为实验造的）
