@@ -501,17 +501,48 @@
     'announcement.error': '没能记下来：{message}',
     // THE PLUGIN THAT DID NOT LOAD (用户拍板 2026-11-01)：宿主照常起来，只是某个
     // 插件这次没激活 —— 把这件事搬到前台，并且只给一个动作：只恢复这一个。
-    'pluginFailure.title': '有插件没加载成功',
-    'pluginFailure.intro': '宿主照常起来了，只是下面这些插件这次没激活，它们的功能用不了：',
-    'pluginFailure.entry': '{plugin} —— {error}',
-    'pluginFailure.backup': '可以只把这一个插件恢复到上一个备份版本（备份时间 {at}）。',
-    'pluginFailure.noBackup': '这台机器没有可用备份，只能手动处理。',
-    'pluginFailure.restore': '只恢复 {plugin}',
-    'pluginFailure.restoring': '正在恢复 {plugin}…',
-    'pluginFailure.restored': '已经把 {plugin} 恢复到备份版本（备份时间 {at}），重启后生效。',
-    'pluginFailure.consistent': '{plugin} 本来就和备份一致，没有改动任何文件。',
-    'pluginFailure.failed': '没能恢复 {plugin}：{reason}',
-    'pluginFailure.hint': '恢复只动这一个插件，别的插件和 profile 配置都不碰。',
+    'pluginFailure.title': "有两件事要你看一下",
+        'watchdog.hint': "后面想改主意，可以到「插件」页里找 dsh-autorestart 的设置。",
+        'pluginFailure.hint': "这些功能已经记下来了，之后可以在「插件」页里再恢复。",
+        'settings.description': "自动重启 DSH、守护插件，出问题能一键恢复。",
+        'settings.checkNow': "立即检查",
+        'settings.checking': "检查中…",
+        'settings.empty': "还没检查。点「立即检查」看看每个插件现在的状态。",
+        'settings.same': "正常",
+        'settings.different': "跟备份不一样",
+        'settings.missing': "备份里没有",
+        'settings.notInstalled': "没装上",
+        'settings.unknown': "没法判断（没有可比对的备份）",
+        'settings.restore': "恢复",
+        'settings.thirdParty': "这个插件不是你自己开发的，没法从备份恢复，需要重新安装。",
+        'settings.version': "版本 {version}",
+    'pluginFailure.dismiss': "知道了",
+    'pluginFailure.dismissLabel': "关掉这个提示（这次启动不再显示，下次启动会重新出现）",
+    'pluginFailure.certainTitle': "这些功能这次没起来",
+    'pluginFailure.certainIntro': "上次启动时这些功能还在，这次没有。这是已经发生的事，不是猜测。",
+    'pluginFailure.clueTitle': "这些插件跟备份不一样",
+    'pluginFailure.clueIntro': "这些插件的文件和最近一次备份不同。可能只是升级过，也可能有别的原因，所以这里只列出差异，不下结论。",
+    'pluginFailure.uiBlindSpot': "另外有 {count} 个界面模块这次没出现（它们没有对应到你安装的插件，所以不在这里列出）。",
+    'pluginFailure.restoreAll': "全部恢复（{count} 个）",
+    'pluginFailure.restoreAllDone': "恢复完成：{done} 个成功，{failed} 个没成功。",
+    'pluginFailure.close': "关掉这个提示",
+    'pluginFailure.linkedHint': "这个插件是你自己写在本地、以链接方式安装的，可以直接恢复到备份里的版本。",
+    'pluginFailure.thirdPartyHint': "这个插件是第三方安装的，备份里没有它的文件。要还原就用下面这条命令，它会装回原来的那个版本（不是最新版）：",
+    'pluginFailure.commandLabel': "复制这条命令",
+    'pluginFailure.noVersion': "备份里查不到它的精确版本，只能按插件名重新安装。",
+    'pluginFailure.restore': "只恢复 {plugin}",
+    'pluginFailure.restoring': "正在恢复 {plugin}…",
+    'pluginFailure.restored': "已经把 {plugin} 恢复到备份版本（备份时间 {at}）。",
+    'pluginFailure.failed': "{plugin} 恢复没有完成：{reason}",
+    'pluginFailure.noBackup': "这台机器没有可用备份，只能手动处理。",
+    'watchdog.title': "要不要开着「守夜人」？",
+    'watchdog.explain': "重启时它会在后台盯着新启动的这一版。如果新版一直起不来，它会自动把上一次的备份恢复回来，再把程序重新拉起来，你就不用自己去救。",
+    'watchdog.warnOff': "关掉之后，万一新版本起不来，就只能手动处理了。",
+    'watchdog.keepOn': "开着（推荐）",
+    'watchdog.turnOff': "不要，我自己处理",
+    'watchdog.savedOn': "守夜人已开启，下次重启会保护你。",
+    'watchdog.savedOff': "守夜人已关闭，下次重启不会自动恢复。",
+    'watchdog.saveFailed': "没能保存你的选择，守夜人的设置没有变。请再点一次，或到设置页里改。",
     // THE COPY OF THE COMPOSER ROW. It is one SHORT line and never a sentence:
     // the long stage sentence was clipped away there (user report,
     // 2026-10-29). While the gate waits the pill keeps its own composed line
@@ -890,17 +921,48 @@
     // THE PLUGIN THAT DID NOT LOAD (user decision 2026-11-01): the host came up,
     // one plugin simply did not activate this time. Say so, and offer exactly
     // one action: put THIS one plugin back.
-    'pluginFailure.title': 'A plugin did not load',
-    'pluginFailure.intro': 'The host came up fine; these plugins did not activate this time, so their features are unavailable:',
-    'pluginFailure.entry': '{plugin} — {error}',
-    'pluginFailure.backup': 'You can put just this one plugin back from the last backup (taken {at}).',
-    'pluginFailure.noBackup': 'This machine has no usable backup, so this has to be handled by hand.',
-    'pluginFailure.restore': 'Restore {plugin} only',
-    'pluginFailure.restoring': 'Restoring {plugin}…',
-    'pluginFailure.restored': 'Put {plugin} back to the backup version (taken {at}); it takes effect after a restart.',
-    'pluginFailure.consistent': '{plugin} already matches the backup, so no file was changed.',
-    'pluginFailure.failed': 'Could not restore {plugin}: {reason}',
-    'pluginFailure.hint': 'A restore touches this one plugin only; the other plugins and the profile configuration stay as they are.',
+    'pluginFailure.title': "Two things worth a look",
+        'watchdog.hint': "Changed your mind later? Look for the dsh-autorestart settings on the Plugins page.",
+        'pluginFailure.hint': "These are on record - you can restore them later from the Plugins page.",
+        'settings.description': "Restarts DSH, watches your plugins, and puts back the ones it can.",
+        'settings.checkNow': "Check now",
+        'settings.checking': "Checking…",
+        'settings.empty': "Nothing checked yet. Press \"Check now\" to see where each plugin stands.",
+        'settings.same': "OK",
+        'settings.different': "Differs from the backup",
+        'settings.missing': "Not in the backup",
+        'settings.notInstalled': "Not installed",
+        'settings.unknown': "Cannot tell (nothing to compare against)",
+        'settings.restore': "Restore",
+        'settings.thirdParty': "You did not write this plugin yourself, so it cannot be restored from the backup - it has to be reinstalled.",
+        'settings.version': "version {version}",
+    'pluginFailure.dismiss': "Got it",
+    'pluginFailure.dismissLabel': "Hide this for now (it comes back on the next start)",
+    'pluginFailure.certainTitle': "These features did not come up this time",
+    'pluginFailure.certainIntro': "They were there on the previous start and are not here now. That is something that happened, not a guess.",
+    'pluginFailure.clueTitle': "These plugins differ from the backup",
+    'pluginFailure.clueIntro': "The files of these plugins are not what the latest backup holds. They may simply have been upgraded - this block lists a difference, not a conclusion.",
+    'pluginFailure.uiBlindSpot': "Also {count} interface module(s) did not appear this time (they do not map to a plugin you installed, so they are not listed here).",
+    'pluginFailure.restoreAll': "Restore all ({count})",
+    'pluginFailure.restoreAllDone': "Done: {done} restored, {failed} not restored.",
+    'pluginFailure.close': "Dismiss this notice",
+    'pluginFailure.linkedHint': "You wrote this plugin yourself and installed it as a link, so it can be put back from the backup directly.",
+    'pluginFailure.thirdPartyHint': "This plugin was installed from elsewhere and the backup does not hold its files. To put it back, use the command below: it reinstalls the same version (not the latest one):",
+    'pluginFailure.commandLabel': "Copy this command",
+    'pluginFailure.noVersion': "The backup does not record its exact version, so it can only be reinstalled by name.",
+    'pluginFailure.restore': "Restore {plugin} only",
+    'pluginFailure.restoring': "Restoring {plugin}…",
+    'pluginFailure.restored': "{plugin} was put back to the backup version (backup taken {at}).",
+    'pluginFailure.failed': "{plugin} was not restored: {reason}",
+    'pluginFailure.noBackup': "There is no usable backup on this machine; it has to be handled by hand.",
+    'watchdog.title': "Should the watchdog stay on?",
+    'watchdog.explain': "During a restart it watches the new version in the background. If the new version never comes up, it puts the last backup back and starts the program again, so you do not have to rescue it yourself.",
+    'watchdog.warnOff': "With it off, a new version that does not start has to be handled by hand.",
+    'watchdog.keepOn': "Keep it on (recommended)",
+    'watchdog.turnOff': "No, I will handle it",
+    'watchdog.savedOn': "The watchdog is on: the next restart is protected.",
+    'watchdog.savedOff': "The watchdog is off: the next restart will not roll back on its own.",
+    'watchdog.saveFailed': "Your choice was not saved, so the watchdog setting is unchanged. Please try again, or change it on the settings page.",
     // THE COPY OF THE COMPOSER ROW (see the Chinese block): one short line,
     // never a sentence.
     'restart.stage.snapshotting': 'Backing up…',
@@ -1993,7 +2055,7 @@
     return root + '?title=' + encodeURIComponent(safeTitle) + '&body=' + encodeURIComponent(safeBody);
   }
 
-  
+
 
   /**
    * Copy a text to the clipboard — with a FALLBACK.
@@ -3007,6 +3069,23 @@
         const sent = info && typeof info.rollbackUrl === 'string' ? info.rollbackUrl.trim() : ''
         if (sent.startsWith('/')) return sent
         return DEFAULT_ROLLBACK_URL
+      }
+
+      /**
+       * The two READ-ONLY sources the failure panel merges (2026-11-01):
+       * what the loaded plugins stopped providing, and how each plugin compares
+       * with the newest backup. Both are plain GET routes.
+       */
+      function pluginWatchUrlFor(info) {
+        const sent = info && typeof info.pluginWatchUrl === 'string' ? info.pluginWatchUrl.trim() : ''
+        if (sent.startsWith('/')) return sent
+        return '/__dsh_autorestart/plugin-watch'
+      }
+
+      function pluginInventoryUrlFor(info) {
+        const sent = info && typeof info.pluginInventoryUrl === 'string' ? info.pluginInventoryUrl.trim() : ''
+        if (sent.startsWith('/')) return sent
+        return '/__dsh_autorestart/plugin-inventory'
       }
 
       /**
@@ -8173,6 +8252,17 @@
        */
       const DEFAULT_PLUGIN_RESTORE_URL = ROUTE_PREFIX + '/plugin-restore'
 
+      /**
+       * WHERE "the user said 知道了" IS REMEMBERED.
+       *
+       * One key, holding the FINGERPRINT of the report that was dismissed — not
+       * a boolean. That is the whole point: a boolean would silence a real
+       * failure forever, while a fingerprint only silences the boot that wrote
+       * that report. The next start writes a new report (new `at`) and the panel
+       * comes back by itself.
+       */
+      const PLUGIN_FAILURE_DISMISS_KEY = 'dsh-autorestart.plugin-failure.dismissed'
+
       async function restorePluginOnce(plugin) {
         const response = await fetch(DEFAULT_PLUGIN_RESTORE_URL, {
           method: 'POST',
@@ -8203,136 +8293,576 @@
        * it disappears when the plugin loads again (a new boot with a clean log,
        * which clears the report).
        */
-      function PluginFailurePanel() {
+      /**
+       * WHAT THE PANEL MAY SAY, AND NOTHING MORE.
+       *
+       * Two facts, kept apart on purpose:
+       *   - "these functions did not come up this time" - the watch compared this
+       *     boot with the previous one and something is gone. A hard fact.
+       *   - "these plugins differ from the backup" - a lead, not a verdict: the
+       *     files changed, which may simply mean an upgrade.
+       *
+       * It never says a plugin is broken or failed to load: nothing here can know
+       * that. Interface module names are reported as ONE number and never as
+       * plugin names (they are things like \`batches\`, not plugins).
+       */
+
+      /**
+       * ASK ONCE WHETHER THE WATCHDOG STAYS ON.
+       *
+       * The watchdog already works; what was missing is that nobody ever asked.
+       * The wording says what it DOES (put the last working version back when the
+       * new one does not start) and what turning it off COSTS (you fix it by
+       * hand), because the person reading this is not a programmer.
+       *
+       * The decision is made on the host by shouldAskWatchdog() and arrives as
+       * info.watchdogAsk; this panel only renders it.
+       * Hidden unless the host says it is time to ask: never answered, or the
+       * plugin changed version since the answer.
+       */
+      function WatchdogAskPanel() {
         const info = useSharedInfo(true)
         const [busy, setBusy] = useState('')
-        const [answer, setAnswer] = useState(null)
-        const [error, setError] = useState('')
+        const [answered, setAnswered] = useState(null)
+        const t = makeTranslate(translate)
+        ensureAnnouncementStyle()
+
+        // Nothing to ask: no answer yet is not the same as "we should ask".
+        // The host decides, and it only says yes when there is no answer or the
+        // plugin changed version since the last one.
+        if (answered === 'dismissed') return null
+        if (info === null || info === undefined || info.watchdogAsk !== true) return null
+
+        const answer = (keepOn) => {
+          if (busy !== '') return
+          setBusy(keepOn === true ? 'on' : 'off')
+          void (async () => {
+            // "SAVED" IS A PROMISE, NOT A GUESS. The request is a success only
+            // when the host really answered 2xx: a 400 or a dead connection means
+            // NOTHING was written, and saying "saved" then would leave the user
+            // believing a choice that does not exist on disk.
+            let saved = false
+            try {
+              const response = await fetch(choiceUrlFor(info), {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                  watchdog: keepOn === true,
+                  askedForPluginVersion: typeof info.pluginVersion === 'string' ? info.pluginVersion : '',
+                }),
+              })
+              saved = response !== null && response !== undefined && response.ok === true
+            } catch {
+              saved = false
+            }
+            setAnswered(saved === true ? (keepOn === true ? 'on' : 'off') : 'failed')
+            setBusy('')
+          })()
+        }
+
+        /**
+         * PUT EVERY BROKEN PLUGIN BACK, one at a time, never in parallel: the host
+         * writes into the profile, and two restores racing on the same tree is not
+         * worth the risk. Each plugin is awaited before the next one starts.
+         */
+        const restoreAll = (entries) => {
+          if (busy !== '') return
+          setBusy('all')
+          setNote('')
+          void (async () => {
+            let done = 0
+            let failed = 0
+            for (const entry of entries) {
+              try {
+                const answer = await restorePluginOnce(entry.name)
+                if (answer && answer.ok === true) done += 1
+                else failed += 1
+              } catch {
+                failed += 1
+              }
+            }
+            setNote(fill(t('pluginFailure.restoreAllDone'), { done: String(done), failed: String(failed) }))
+            setBusy('')
+          })()
+        }
+
+        const rows = []
+        rows.push(h('p', { className: 'dsh-autorestart-announcement__note', key: 'title' }, t('watchdog.title')))
+        rows.push(h('p', { className: 'dsh-autorestart-announcement__line', key: 'explain' }, t('watchdog.explain')))
+        rows.push(h('p', { className: 'dsh-autorestart-announcement__note', key: 'warn' }, t('watchdog.warnOff')))
+        if (answered !== null) {
+          rows.push(h('p', {
+            className: 'dsh-autorestart-announcement__note',
+            key: 'saved',
+          }, t(answered === 'failed'
+            ? 'watchdog.saveFailed'
+            : (answered === 'on' ? 'watchdog.savedOn' : 'watchdog.savedOff'))))
+        }
+        rows.push(h('button', {
+          type: 'button',
+          className: 'dsh-autorestart-announcement__cta',
+          key: 'keep',
+          disabled: busy !== '',
+          onClick: () => answer(true),
+        }, t('watchdog.keepOn')))
+        rows.push(h('button', {
+          type: 'button',
+          className: 'dsh-autorestart-announcement__cta',
+          key: 'off',
+          disabled: busy !== '',
+          onClick: () => answer(false),
+        }, t('watchdog.turnOff')))
+        rows.push(overlayHint(t('watchdog.hint')))
+        return overlayCard('watchdog-ask', t('watchdog.title'), () => setAnswered('dismissed'), rows)
+      }
+
+      /**
+       * THE FLOATING CARD.
+       *
+       * The panels used to sit in `conversation.input.dock`, which is part of the
+       * layout flow: the message column was pushed up and the text ran straight
+       * into the conversation with no edge of its own. Declaring the frame here
+       * means every panel draws the same card, whatever the page CSS does.
+       */
+      // THE CARD'S OWN PAINT (2026-11-01).
+      //
+      // Hard-coded, OPAQUE colours on purpose. The first version used
+      // `var(--dsh-surface, #fff)`, and when the theme does not define that
+      // variable the card was drawn with no background at all - on the real
+      // machine the text simply sat in the conversation, indistinguishable from
+      // the messages around it.
+      // THE ANCHOR THAT TAKES NO SPACE.
+      //
+      // `position: fixed` does NOT mean "relative to the viewport" when any
+      // ancestor has `transform`, `filter`, `perspective` or `will-change`: the
+      // card then anchors to that ancestor and stays in its layout, which is why
+      // the conversation was pushed up. This wrapper is ZERO-sized and the card
+      // hangs out of it with `position: absolute`, so the flow never sees it, no
+      // matter what the host puts above us.
+      /**
+       * THE CARD, AS A REAL COMPONENT.
+       *
+       * It has to be a component (not a plain helper) because it now MEASURES
+       * itself: the card renders a line with its own computed style, so a single
+       * screenshot says which layer is broken - the inline style not applied, an
+       * ancestor overriding it, or the portal never happening.
+       *
+       * Every painting property is inline and hard-coded: no className, no CSS
+       * variable. Inline wins over every stylesheet rule, so if the card still
+       * comes out unstyled the reason is not CSS specificity.
+       */
+      // A quiet line under the buttons. The panel is the door; the settings page
+      // is where you come back later if you change your mind.
+      function overlayHint(text) {
+        return h('p', {
+          key: 'overlay-hint',
+          'data-dsh-autorestart-hint': '1',
+          style: {
+            margin: '2px 0 0',
+            color: 'var(--dsw-alias-label-tertiary, #888888)',
+            fontSize: '11px',
+            lineHeight: '1.4',
+          },
+        }, text)
+      }
+
+      function OverlayCard(props) {
+        const id = props ? props.id : 'overlay'
+        const title = props ? props.title : ''
+        const onClose = props && typeof props.onClose === 'function' ? props.onClose : () => {}
+        const rows = props && Array.isArray(props.rows) ? props.rows : []
+        const header = h('div', {
+          key: 'overlay-header',
+          style: {
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '8px',
+          },
+        },
+        h('strong', { key: 'overlay-title', style: { fontSize: '14px', lineHeight: '1.4', color: 'var(--dsw-alias-label-primary, #111111)' } }, title),
+        h('button', {
+          type: 'button',
+          key: 'overlay-close',
+          title: translate('pluginFailure.close'),
+          'aria-label': translate('pluginFailure.close'),
+          onClick: onClose,
+          style: {
+            flex: '0 0 auto',
+            cursor: 'pointer',
+            border: '1px solid var(--dsw-alias-border-l2, rgba(0,0,0,0.22))',
+            borderRadius: '8px',
+            background: 'var(--dsw-alias-bg-layer-1, #ffffff)',
+            color: 'var(--dsw-alias-label-primary, #111111)',
+            fontSize: '16px',
+            lineHeight: '1',
+            padding: '2px 8px',
+          },
+        }, '\u00d7'))
+
+        const body = [header, ...rows]
+
+        const card = h('div', {
+          key: id,
+          'data-dsh-autorestart-overlay': id,
+          style: {
+            position: "fixed",
+            left: '24px',
+            bottom: '24px',
+            width: 'min(560px, calc(100vw - 48px))',
+            maxHeight: 'min(70vh, 640px)',
+            overflowY: 'auto',
+            boxSizing: 'border-box',
+            background: 'var(--dsw-alias-bg-layer-1, #ffffff)',
+            backgroundColor: 'var(--dsw-alias-bg-layer-1, #ffffff)',
+            border: '1px solid var(--dsw-alias-border-l2, rgba(0,0,0,0.22))',
+            borderRadius: '12px',
+            boxShadow: '0 12px 32px rgba(0,0,0,0.18)',
+            padding: '14px 16px',
+            zIndex: 2147483000,
+            color: 'var(--dsw-alias-label-primary, #111111)',
+            font: 'inherit',
+            textAlign: 'left',
+            lineHeight: '1.5',
+            fontSize: '13px',
+          },
+        }, body)
+
+        return card
+      }
+
+      function overlayCard(id, title, onClose, rows) {
+        return h(OverlayCard, { key: 'overlay-' + id, id, title, onClose, rows })
+      }
+
+      // WHICH STATUS EACH PLUGIN IS IN, IN WORDS THAT DO NOT JUDGE IT.
+      //
+      // "different" means the files differ from the newest backup - it is a LEAD,
+      // not a verdict, and the panel must never upgrade it to "broken".
+      const SETTINGS_STATUS_KEY = {
+        same: 'settings.same',
+        different: 'settings.different',
+        missing: 'settings.missing',
+        'not-installed': 'settings.notInstalled',
+        unknown: 'settings.unknown',
+      }
+
+      const SETTINGS_STYLE = {
+        section: {
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '10px',
+          padding: '14px 16px',
+          background: 'var(--dsw-alias-bg-layer-1, #ffffff)',
+          color: 'var(--dsw-alias-label-primary, #111111)',
+          border: '1px solid var(--dsw-alias-border-l2, rgba(0,0,0,0.18))',
+          borderRadius: '12px',
+          font: 'inherit',
+          textAlign: 'left',
+          lineHeight: '1.5',
+          fontSize: '13px',
+        },
+        description: { color: 'var(--dsw-alias-label-secondary, #666666)', fontSize: '12px' },
+        button: {
+          alignSelf: 'flex-start',
+          cursor: 'pointer',
+          padding: '6px 14px',
+          borderRadius: '8px',
+          border: '1px solid var(--dsw-alias-border-l2, rgba(0,0,0,0.22))',
+          background: 'var(--dsw-alias-bg-layer-2, #f5f5f5)',
+          color: 'var(--dsw-alias-label-primary, #111111)',
+          font: 'inherit',
+          fontSize: '13px',
+        },
+        restoreButton: {
+          cursor: 'pointer',
+          padding: '3px 10px',
+          borderRadius: '6px',
+          border: '1px solid var(--dsw-alias-border-l2, rgba(0,0,0,0.22))',
+          background: 'var(--dsw-alias-bg-layer-2, #f5f5f5)',
+          color: 'var(--dsw-alias-label-primary, #111111)',
+          font: 'inherit',
+          fontSize: '12px',
+        },
+        list: {
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '6px',
+          margin: 0,
+          padding: 0,
+          listStyle: 'none',
+        },
+        row: {
+          display: 'grid',
+          gridTemplateColumns: '1fr auto auto',
+          alignItems: 'center',
+          gap: '10px',
+          padding: '6px 8px',
+          borderRadius: '8px',
+          background: 'var(--dsw-alias-bg-layer-2, #f7f7f7)',
+        },
+        name: { fontFamily: 'monospace', fontSize: '12px', wordBreak: 'break-all' },
+        status: { color: 'var(--dsw-alias-label-secondary, #666666)', fontSize: '12px', whiteSpace: 'nowrap' },
+        hint: {
+          gridColumn: '1 / -1',
+          color: 'var(--dsw-alias-label-tertiary, #888888)',
+          fontSize: '11px',
+          lineHeight: '1.4',
+        },
+        note: { color: 'var(--dsw-alias-state-warn-label, #a15c00)', fontSize: '12px' },
+      }
+
+      /**
+       * THE SETTINGS PAGE (plugins.bundle.config).
+       *
+       * Everything here is on demand: nothing talks to the inventory route until
+       * the user presses the button. "Check now" really re-requests the route -
+       * it does not re-render whatever the last reading was.
+       */
+      function SettingsPanel() {
+        const info = useSharedInfo(true)
+        const [rows, setRows] = useState(null)
+        const [checking, setChecking] = useState(false)
+        const [busy, setBusy] = useState('')
+        const [note, setNote] = useState('')
+
+        const load = () => {
+          setChecking(true)
+          setNote('')
+          void (async () => {
+            try {
+              const response = await fetch(pluginInventoryUrlFor(info), {
+                method: 'GET',
+                headers: { accept: 'application/json' },
+              })
+              if (!response.ok) throw new Error('HTTP ' + response.status)
+              const body = await response.json()
+              setRows(pluginFailureInventoryRows(body))
+            } catch (failure) {
+              setRows([])
+              setNote(describeError(failure))
+            } finally {
+              setChecking(false)
+            }
+          })()
+        }
+
+        const restore = (plugin) => {
+          if (busy !== '') return
+          setBusy(plugin)
+          setNote('')
+          void (async () => {
+            try {
+              const restored = await restorePluginOnce(plugin)
+              setNote(restored && restored.ok !== true
+                ? fill(t('pluginFailure.failed'), { plugin, reason: '' })
+                : fill(t('pluginFailure.restored'), { plugin, at: '' }))
+              load()
+            } catch (failure) {
+              setNote(fill(t('pluginFailure.failed'), { plugin, reason: describeError(failure) }))
+            } finally {
+              setBusy('')
+            }
+          })()
+        }
+
+        const items = []
+        items.push(h('strong', { key: 'settings-title' }, 'dsh-autorestart'))
+        items.push(h('p', { key: 'settings-description', style: SETTINGS_STYLE.description }, t('settings.description')))
+        items.push(h('button', {
+          type: 'button',
+          key: 'settings-check',
+          disabled: checking,
+          onClick: () => { if (!checking) load() },
+          style: SETTINGS_STYLE.button,
+        }, checking ? t('settings.checking') : t('settings.checkNow')))
+
+        if (note !== '') items.push(h('p', { key: 'settings-note', style: SETTINGS_STYLE.note }, note))
+
+        if (rows === null || rows.length === 0) {
+          items.push(h('p', { key: 'settings-empty', style: SETTINGS_STYLE.description }, t('settings.empty')))
+        } else {
+          const list = rows.map((row, index) => {
+            const name = row && typeof row.name === 'string' ? row.name : ''
+            const status = row && typeof row.status === 'string' ? row.status : 'unknown'
+            const linked = row && row.linked === true
+            const version = row && typeof row.version === 'string' ? row.version : ''
+            const statusKey = SETTINGS_STATUS_KEY[status] || 'settings.unknown'
+            const cells = [
+              h('span', { key: 'name', style: SETTINGS_STYLE.name }, name),
+              h('span', { key: 'status', style: SETTINGS_STYLE.status }, t(statusKey)),
+            ]
+            if (linked && status !== 'same') {
+              cells.push(h('button', {
+                type: 'button',
+                key: 'restore',
+                disabled: busy !== '',
+                onClick: () => restore(name),
+                style: SETTINGS_STYLE.restoreButton,
+              }, t('settings.restore')))
+            } else {
+              cells.push(h('span', { key: 'noop' }, ''))
+            }
+            if (linked !== true && status !== 'same') {
+              // THIRD-PARTY: a hint, and deliberately NO button. We cannot put
+              // back a plugin the user did not write, so a button would promise
+              // something we cannot keep.
+              cells.push(h('span', { key: 'hint', style: SETTINGS_STYLE.hint },
+                version === ''
+                  ? t('settings.thirdParty')
+                  : t('settings.thirdParty') + ' ' + fill(t('settings.version'), { version })))
+            }
+            return h('li', { key: 'row-' + index + '-' + name, style: SETTINGS_STYLE.row }, cells)
+          })
+          items.push(h('ul', { key: 'settings-list', style: SETTINGS_STYLE.list }, list))
+        }
+
+        return h('section', { 'data-dsh-autorestart-settings': 'dsh-autorestart', style: SETTINGS_STYLE.section }, items)
+      }
+
+      function PluginFailurePanel() {
+        const info = useSharedInfo(true)
+        const [loaded, setLoaded] = useState(null)
+        const [busy, setBusy] = useState('')
+        const [note, setNote] = useState('')
+        const [dismissed, setDismissed] = useState(() => {
+          try {
+            return window.localStorage.getItem(PLUGIN_FAILURE_DISMISS_KEY) || ''
+          } catch {
+            return ''
+          }
+        })
         const t = makeTranslate(translate)
 
-        const recovery = info && typeof info === 'object'
-          && info.pluginRecovery && typeof info.pluginRecovery === 'object'
-          ? info.pluginRecovery
-          : null
-        const failures = recovery && Array.isArray(recovery.failures)
-          ? recovery.failures.filter((entry) => entry && typeof entry.plugin === 'string' && entry.plugin !== '')
-          : []
-        if (failures.length === 0) return null
+        // Every source is optional: a route that fails leaves its half out and the
+        // panel still shows the other half. Neither failure may take the panel down.
+        useEffect(() => {
+          let alive = true
+          const get = async (url) => {
+            try {
+              const response = await fetch(url, { headers: { accept: 'application/json' } })
+              if (!response || response.ok !== true) return null
+              return await response.json()
+            } catch {
+              return null
+            }
+          }
+          void (async () => {
+            const watch = await get(pluginWatchUrlFor(info))
+            const inventory = await get(pluginInventoryUrlFor(info))
+            if (alive !== true) return
+            setLoaded({ watch, inventory })
+          })()
+          return () => { alive = false }
+        }, [info])
 
-        const lastRestore = info && typeof info === 'object'
-          && info.pluginRestore && typeof info.pluginRestore === 'object'
-          ? info.pluginRestore
+        const build = globalThis.__dshAutorestartClient
+          && typeof globalThis.__dshAutorestartClient.buildPluginFailureModel === 'function'
+          ? globalThis.__dshAutorestartClient.buildPluginFailureModel
           : null
-        const hasBackup = typeof recovery.backupKind === 'string' && recovery.backupKind !== ''
-        const takenAt = recovery.restoredAt === null || recovery.restoredAt === undefined
-          ? null
-          : new Date(Number(recovery.restoredAt))
-        const when = takenAt !== null && Number.isFinite(takenAt.getTime())
-          ? takenAt.toLocaleString()
-          : '?'
+        if (loaded === null || build === null) return null
+        const model = build({ watch: loaded.watch, inventory: loaded.inventory })
+        if (model === null) return null
+
+        // The fingerprint is THIS report's identity, so dismissing silences this
+        // boot only: a new reading makes a new fingerprint and comes back.
+        const fingerprint = (model.certain || []).map((entry) => entry.name).sort().join(',')
+          + '|' + (model.clues || []).map((entry) => entry.name).sort().join(',')
+        if (dismissed !== '' && dismissed === fingerprint) return null
         ensureAnnouncementStyle()
 
         const restore = (plugin) => {
           if (busy !== '') return
           setBusy(plugin)
-          setError('')
-          setAnswer(null)
+          setNote('')
           void (async () => {
             try {
               const restored = await restorePluginOnce(plugin)
-              setAnswer(restored)
+              setNote(fill(t('pluginFailure.restored'), { plugin, at: '' }))
+              if (restored && restored.ok !== true) setNote(fill(t('pluginFailure.failed'), { plugin, reason: '' }))
             } catch (failure) {
-              setError(fill(t('pluginFailure.failed'), { plugin, reason: describeError(failure) }))
+              setNote(fill(t('pluginFailure.failed'), { plugin, reason: describeError(failure) }))
             }
             setBusy('')
           })()
         }
+        const dismiss = () => {
+          setDismissed(fingerprint)
+          try { window.localStorage.setItem(PLUGIN_FAILURE_DISMISS_KEY, fingerprint) } catch {}
+        }
 
-        // Three at a time is enough to be actionable; the rest is a count. A
-        // wall of broken plugins is not something the popup can fix anyway.
-        const shown = failures.slice(0, 3)
-        const rest = failures.length - shown.length
+        const rows = []
+        const line = (key, text) => rows.push(h('p', { className: 'dsh-autorestart-announcement__line', key }, text))
 
-        const lines = []
-        for (const failure of shown) {
-          const plugin = failure.plugin
-          const entryError = typeof failure.error === 'string' && failure.error !== ''
-            ? failure.error
-            : '—'
-          lines.push(h(
-            'p',
-            { className: 'dsh-autorestart-announcement__line', key: 'entry:' + plugin },
-            fill(t('pluginFailure.entry'), { plugin, error: entryError }),
-          ))
-          const restoredAlready = lastRestore
-            && lastRestore.plugin === plugin
-            && lastRestore.ok === true
-            && lastRestore.mode !== 'already-consistent'
-          if (restoredAlready === true) {
-            lines.push(h(
-              'p',
-              { className: 'dsh-autorestart-announcement__note', key: 'done:' + plugin },
-              fill(t('pluginFailure.restored'), { plugin, at: when }),
-            ))
-            continue
+        rows.push(h('p', { className: 'dsh-autorestart-announcement__note', key: 'title' }, t('pluginFailure.title')))
+
+        const certain = Array.isArray(model.certain) ? model.certain : []
+        if (certain.length > 0) {
+          rows.push(h('p', { className: 'dsh-autorestart-announcement__note', key: 'certain-title' }, t('pluginFailure.certainTitle')))
+          line('certain-intro', t('pluginFailure.certainIntro'))
+          for (const entry of certain) line('certain:' + entry.name, entry.name)
+        }
+
+        const clues = Array.isArray(model.clues) ? model.clues : []
+        if (clues.length > 0) {
+          rows.push(h('p', { className: 'dsh-autorestart-announcement__note', key: 'clue-title' }, t('pluginFailure.clueTitle')))
+          line('clue-intro', t('pluginFailure.clueIntro'))
+          for (const entry of clues) {
+            line('clue:' + entry.name, entry.name)
+            const action = entry.action && typeof entry.action === 'object' ? entry.action : {}
+            if (entry.kind === 'linked') {
+              rows.push(h('p', { className: 'dsh-autorestart-announcement__note', key: 'hint:' + entry.name }, t('pluginFailure.linkedHint')))
+              rows.push(h('button', {
+                type: 'button',
+                className: 'dsh-autorestart-announcement__cta',
+                key: 'cta:' + entry.name,
+                disabled: busy !== '',
+                onClick: () => restore(entry.name),
+              }, busy === entry.name
+                ? fill(t('pluginFailure.restoring'), { plugin: entry.name })
+                : fill(t('pluginFailure.restore'), { plugin: entry.name })))
+            } else {
+              rows.push(h('p', { className: 'dsh-autorestart-announcement__note', key: 'hint:' + entry.name }, t('pluginFailure.thirdPartyHint')))
+              if (typeof action.command === 'string' && action.command !== '') {
+                rows.push(h('p', { className: 'dsh-autorestart-announcement__line', key: 'cmd:' + entry.name }, action.command))
+              } else {
+                rows.push(h('p', { className: 'dsh-autorestart-announcement__note', key: 'nocmd:' + entry.name }, t('pluginFailure.noVersion')))
+              }
+            }
           }
-          if (hasBackup !== true) continue
-          lines.push(h(
-            'button',
-            {
-              type: 'button',
-              className: 'dsh-autorestart-announcement__cta',
-              key: 'cta:' + plugin,
-              'data-dsh-autorestart-plugin-restore': plugin,
-              disabled: busy !== '',
-              onClick: () => restore(plugin),
-            },
-            busy === plugin
-              ? fill(t('pluginFailure.restoring'), { plugin })
-              : fill(t('pluginFailure.restore'), { plugin }),
-          ))
-        }
-        if (rest > 0) {
-          lines.push(h('p', { className: 'dsh-autorestart-announcement__note', key: 'rest' }, '+' + rest))
         }
 
-        return h(
-          'div',
-          {
-            className: 'dsh-autorestart-announcement dsh-autorestart-plugin-failure',
-            role: 'status',
-            'data-dsh-autorestart-plugin-failure': 'true',
-          },
-          h('h3', { className: 'dsh-autorestart-announcement__title' }, t('pluginFailure.title')),
-          h('p', { className: 'dsh-autorestart-announcement__line' }, t('pluginFailure.intro')),
-          ...lines,
-          hasBackup === true
-            ? h('p', { className: 'dsh-autorestart-announcement__line' }, fill(t('pluginFailure.backup'), { at: when }))
-            : h('p', { className: 'dsh-autorestart-announcement__note' }, t('pluginFailure.noBackup')),
-          h('p', { className: 'dsh-autorestart-announcement__note' }, t('pluginFailure.hint')),
-          answer === null
-            ? null
-            : h(
-              'p',
-              {
-                className: answer.ok === true
-                  ? 'dsh-autorestart-announcement__note'
-                  : 'dsh-autorestart-announcement__error',
-                role: answer.ok === true ? 'status' : 'alert',
-              },
-              answer.ok === true
-                ? (answer.mode === 'already-consistent'
-                  ? fill(t('pluginFailure.consistent'), { plugin: answer.plugin || '' })
-                  : fill(t('pluginFailure.restored'), { plugin: answer.plugin || '', at: when }))
-                : fill(t('pluginFailure.failed'), {
-                  plugin: answer.plugin || '',
-                  reason: typeof answer.reason === 'string' && answer.reason !== '' ? answer.reason : '—',
-                }),
-            ),
-          error === ''
-            ? null
-            : h('p', { className: 'dsh-autorestart-announcement__error', role: 'alert' }, error),
-        )
+        // ONE BUTTON FOR ALL OF THEM. Only plugins we wrote ourselves are in it:
+        // a third-party plugin has no files in the backup, so "restore" cannot be
+        // offered for it - those keep their reinstall hint instead.
+        const linkedClues = clues.filter((entry) => entry.kind === 'linked')
+        if (linkedClues.length > 1) {
+          rows.push(h('button', {
+            type: 'button',
+            className: 'dsh-autorestart-announcement__cta',
+            key: 'restore-all',
+            disabled: busy !== '',
+            onClick: () => restoreAll(linkedClues),
+          }, fill(t('pluginFailure.restoreAll'), { count: String(linkedClues.length) })))
+        }
+
+        // A blind spot is a NUMBER: those module names are not plugin names.
+        const blind = Number(model.uiBlindSpot)
+        if (Number.isFinite(blind) && blind > 0) {
+          rows.push(h('p', { className: 'dsh-autorestart-announcement__note', key: 'blind' },
+            fill(t('pluginFailure.uiBlindSpot'), { count: String(blind) })))
+        }
+        if (note !== '') rows.push(h('p', { className: 'dsh-autorestart-announcement__note', key: 'note' }, note))
+
+        rows.push(h('button', {
+          type: 'button',
+          className: 'dsh-autorestart-announcement__cta',
+          key: 'dismiss',
+          title: t('pluginFailure.dismissLabel'),
+          onClick: dismiss,
+        }, t('pluginFailure.dismiss')))
+
+        return overlayCard('plugin-failure', t('pluginFailure.title'), dismiss, rows.concat([overlayHint(t('pluginFailure.hint'))]))
       }
 
       return {
@@ -8361,7 +8891,6 @@
           // pass only REPORTS now, so this panel is where the user finds out
           // which plugin did not activate — and where the ONE action lives:
           // "put this one plugin back from the last backup".
-          ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({ name: 'conversation.input.dock', id: 'autorestart-plugin-failure', order: 9, locale: NS }, PluginFailurePanel))
           // The graceful-shutdown button: a LIST slot at the foot of the left
           // sidebar, beside the Settings row. The slot is a ROOT slot, so the
           // button is there even when no conversation is open — and the
@@ -8403,6 +8932,20 @@
           // back) in the middle of the interface, so the composer row can stay
           // one short clipped line. It draws NOTHING when no restart is staged.
           ctx.slots.inject('shell.overlay', () => ctx.slots.register({ name: 'shell.overlay', id: 'autorestart-restart-overlay', order: 55, locale: NS }, RestartOverlay))
+          // THESE TWO COME LAST ON PURPOSE: the countdown and the restart notice are
+          // registered above, and the slot service keeps registrations in call order.
+          // The plugin-failure and watchdog cards join them in the same floating layer.
+      // THE DOCK, ON PURPOSE (2026-11-01). These two cards were registered on
+      // `shell.overlay` first, and on the real machine NOTHING rendered at all -
+      // not even the diagnostic skeleton - so that slot never reached this plugin.
+      // `conversation.input.dock` is the slot this plugin has always rendered in.
+      // The card is taken OUT of the layout flow by its own `position: fixed`, so
+      // it floats in the corner instead of pushing the conversation up.
+      ctx.slots.inject('shell.overlay', () => ctx.slots.register({ name: 'shell.overlay', id: 'autorestart-plugin-failure', order: 9, label: () => 'dsh-autorestart', locale: NS }, PluginFailurePanel))
+      ctx.slots.inject('shell.overlay', () => ctx.slots.register({ name: 'shell.overlay', id: 'autorestart-watchdog-ask', order: 8, label: () => 'dsh-autorestart', locale: NS }, WatchdogAskPanel))
+      // THE SETTINGS PAGE lives on its OWN slot, keyed to this package.
+      // Name + key + locale is exactly how dsh-mnemon registers there.
+      ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({ name: 'plugins.bundle.config', key: 'dsh-autorestart', locale: NS }, SettingsPanel))
           // NOTE: the receipt of a settings change is NOT registered here. It
           // is a `sticky` strip INSIDE the settings panel (see
           // `saveNoticeBar`), because a window overlay put it on top of the
@@ -8417,5 +8960,211 @@
       }
     },
   })
+
+})()
+
+;(function () {
+  // ---------------------------------------------------------------------------
+  // THE PLUGIN-FAILURE MODEL (pure, testable, no React and no fetch)
+  //
+  // Two DIFFERENT facts feed the panel, and they must never be blurred:
+  //
+  //   certain - "these functions did not come up this time". A HARD fact: the last
+  //             reading had them and this one does not.
+  //   clues   - "these plugins differ from the backup". A LEAD, not a verdict. A
+  //             plugin whose files changed may be perfectly fine.
+  //
+  // Neither of them says a plugin is BROKEN or FAILED to load: we have no way to
+  // know that, and claiming it would be a guess dressed up as a finding.
+  //
+  // The three live layers are not equally good at naming a plugin. Measured on the
+  // real host: tools 140 items, packages 29, clientModules only 4 - and those four
+  // are module names (`batches`, `entries`, `release`), NOT plugin names. So
+  // clientModules never produces a list entry; it becomes one number.
+  // ---------------------------------------------------------------------------
+
+  const PLUGIN_FAILURE_THIRD_PARTY = 'third-party'
+  const PLUGIN_FAILURE_LINKED = 'linked'
+
+  /** `codekg_query` -> `codekg`; a name with no separator is returned as it is. */
+  function pluginFailureToolOwner(name) {
+    const text = typeof name === 'string' ? name.trim() : ''
+    if (text === '') return ''
+    const cut = text.indexOf('_')
+    return cut > 0 ? text.slice(0, cut) : text
+  }
+
+  /** `@scope/name#host` -> `@scope/name`; `plain` stays `plain`. */
+  function pluginFailurePackageName(name) {
+    const text = typeof name === 'string' ? name.trim() : ''
+    if (text === '') return ''
+    const cut = text.indexOf('#')
+    return cut > 0 ? text.slice(0, cut) : text
+  }
+
+  /** Entry name out of one layer item, or '' when the shape is not recognised. */
+  function pluginFailureLayerItemName(item) {
+    if (typeof item === 'string') return item.trim()
+    if (item === null || typeof item !== 'object') return ''
+    for (const key of ['name', 'id', 'key', 'label']) {
+      const value = item[key]
+      if (typeof value === 'string' && value.trim() !== '') return value.trim()
+    }
+    return ''
+  }
+
+  /** The items a watch layer reports as gone, whichever shape the host used. */
+  function pluginFailureWatchLayer(watch, layer) {
+    const out = []
+    const push = (item) => {
+      if (typeof item === 'string') { if (item.trim() !== '') out.push(item.trim()); return }
+      if (item === null || typeof item !== 'object') return
+      // `{layer, name}` (listDisappearances) or `{name, ...}`
+      if (item.layer !== undefined && item.layer !== layer) return
+      const name = pluginFailureLayerItemName(item)
+      if (name !== '') out.push(name)
+    }
+    try {
+      if (Array.isArray(watch && watch.disappeared)) {
+        for (const item of watch.disappeared) push(item)
+      }
+      const layers = watch && typeof watch === 'object' ? watch.layers : null
+      const bucket = layers && typeof layers === 'object' ? layers[layer] : null
+      if (bucket && Array.isArray(bucket.removed)) {
+        for (const item of bucket.removed) push(item)
+      }
+    } catch {
+      return []
+    }
+    return out
+  }
+
+  /** The inventory rows, whichever wrapper the route used. */
+  function pluginFailureInventoryRows(inventory) {
+    if (inventory === null || typeof inventory !== 'object') return []
+    if (Array.isArray(inventory.plugins)) return inventory.plugins
+    if (Array.isArray(inventory.items)) return inventory.items
+    if (Array.isArray(inventory.entries)) return inventory.entries
+    return []
+  }
+
+  /** Is this inventory row a plugin the user wrote themselves (a link install)? */
+  function pluginFailureIsLinked(row) {
+    if (row === null || typeof row !== 'object') return false
+    if (row.linked === true) return true
+    if (row.isLink === true) return true
+    for (const key of ['kind', 'installKind', 'source', 'install', 'mode']) {
+      const value = row[key]
+      if (typeof value === 'string' && /^(link|linked|local|dev|development)$/i.test(value.trim())) return true
+    }
+    return false
+  }
+
+  /**
+   * Turn one plugin into the action the panel is allowed to offer.
+   *
+   * A hand-written (link) plugin can be put back from the backup: we hold its
+   * files. A third-party plugin CANNOT - that is the whole point of keeping only
+   * the config - so it gets a hint and a command with the EXACT version, never a
+   * one-click button that would silently install something else.
+   */
+  function pluginFailureActionFor(name, kind, row, profile) {
+    if (kind === PLUGIN_FAILURE_LINKED) {
+      return { type: 'restore', label: name }
+    }
+    const version = row && typeof row === 'object' && typeof row.version === 'string' ? row.version.trim() : ''
+    const profileName = typeof profile === 'string' && profile.trim() !== '' ? profile.trim() : '<profile>'
+    if (version === '') {
+      return {
+        type: 'hint',
+        command: null,
+        note: 'the exact version is unknown, so no install command can be built',
+      }
+    }
+    return {
+      type: 'hint',
+      command: 'dsh plugin --profile ' + profileName + ' add ' + name + '@' + version,
+      note: '',
+    }
+  }
+
+  /**
+   * Merge the two data sources into the panel's model.
+   *
+   * @param {{ watch?: object|null, inventory?: object|null, profile?: string }} input
+   * @returns {{ certain: object[], clues: object[], uiBlindSpot: number, watchAt: number|null }|null}
+   */
+  function buildPluginFailureModel(input) {
+    try {
+      const source = input !== null && typeof input === 'object' ? input : {}
+      const watch = source.watch !== null && typeof source.watch === 'object' ? source.watch : null
+      const inventory = source.inventory !== null && typeof source.inventory === 'object' ? source.inventory : null
+      const profile = typeof source.profile === 'string' ? source.profile : ''
+
+      // --- certain: what the watch says is gone, named from tools/packages only ---
+      const certain = []
+      const seen = new Set()
+      const addCertain = (name, from) => {
+        if (name === '') return
+        const key = from + '|' + name
+        if (seen.has(key)) return
+        seen.add(key)
+        const kind = PLUGIN_FAILURE_THIRD_PARTY
+        certain.push({
+          name,
+          source: from,
+          kind,
+          action: pluginFailureActionFor(name, kind, null, profile),
+        })
+      }
+      for (const raw of pluginFailureWatchLayer(watch, 'tools')) addCertain(pluginFailureToolOwner(raw), 'tools')
+      for (const raw of pluginFailureWatchLayer(watch, 'packages')) addCertain(pluginFailurePackageName(raw), 'packages')
+
+      // clientModules CANNOT name a plugin: its items are module names. It is a
+      // blind spot, and it is reported as a number so nobody mistakes `batches`
+      // for a plugin the user should go and look for.
+      const uiBlindSpot = pluginFailureWatchLayer(watch, 'clientModules').length
+
+      // --- clues: what differs from the backup (a lead, not a verdict) ---
+      const clues = []
+      for (const row of pluginFailureInventoryRows(inventory)) {
+        if (row === null || typeof row !== 'object') continue
+        if (row.status !== 'different') continue
+        const name = typeof row.name === 'string' ? row.name.trim() : ''
+        if (name === '') continue
+        const kind = pluginFailureIsLinked(row) ? PLUGIN_FAILURE_LINKED : PLUGIN_FAILURE_THIRD_PARTY
+        clues.push({
+          name,
+          source: 'inventory',
+          kind,
+          action: pluginFailureActionFor(name, kind, row, profile),
+          changeCount: Number.isFinite(Number(row.changeCount)) ? Number(row.changeCount) : null,
+          version: typeof row.version === 'string' ? row.version : null,
+          backupVersion: typeof row.backupVersion === 'string' ? row.backupVersion : null,
+        })
+      }
+
+      // Nothing to say: no shell, no empty panel.
+      if (certain.length === 0 && clues.length === 0) return null
+
+      const watchAt = watch && Number.isFinite(Number(watch.at)) ? Number(watch.at) : null
+      return { certain, clues, uiBlindSpot, watchAt }
+    } catch {
+      // The panel is a convenience; a malformed payload must never break the page.
+      return null
+    }
+  }
+
+  const PLUGIN_FAILURE_EXPORTS = {
+    buildPluginFailureModel,
+    pluginFailureToolOwner,
+    pluginFailurePackageName,
+  }
+  if (typeof globalThis !== 'undefined') {
+    globalThis.__dshAutorestartClient = Object.assign(
+      globalThis.__dshAutorestartClient || {},
+      PLUGIN_FAILURE_EXPORTS,
+    )
+  }
 
 })()

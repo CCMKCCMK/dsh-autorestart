@@ -150,9 +150,14 @@ test('the hosted mode snapshots the profile before the restart command runs', as
   assert.ok(fs.existsSync(path.join(dir, 'config', 'cordis.patch.yml')), 'the patch is in the snapshot')
   assert.ok(fs.existsSync(path.join(dir, 'config', 'package.json')), 'the profile manifest is in the snapshot')
   assert.ok(fs.existsSync(path.join(dir, 'config', 'pnpm-lock.yaml')), 'the lockfile is in the snapshot')
-  assert.ok(
+  // SCOPE-DEFINING ASSERTION (inverted 2026-11-01): a backup keeps what cannot
+  // be fetched again. The third-party tree is NOT copied - config/pnpm-lock.yaml
+  // reinstalls exactly the same versions. This is the line that states the new
+  // scope; the config assertions above still prove the snapshot itself is real.
+  assert.equal(
     fs.existsSync(path.join(dir, 'node_modules', 'demo-plugin', 'package.json')),
-    'the installed plugin tree is in the snapshot',
+    false,
+    'the third-party plugin tree is deliberately NOT in the snapshot',
   )
   assert.ok(fs.existsSync(path.join(dir, MANIFEST_NAME)), 'the manifest is in the snapshot')
   const manifest = readManifest(dir)
@@ -301,7 +306,7 @@ test('the shared snapshot entry keeps the reason of a failed backup and never th
     },
   }
 
-  const failed = await takePreRestartSnapshot({
+  const failed = await takePreRestartSnapshot({ slimBackup: false,
     config: { backupOnRestart: true, backupIncludePlugins: true, maxBackups: 2 },
     stateDir: state.dir,
     log,
@@ -316,7 +321,7 @@ test('the shared snapshot entry keeps the reason of a failed backup and never th
   )
 
   // A backup writer that throws must not take the restart down with it.
-  const thrown = await takePreRestartSnapshot({
+  const thrown = await takePreRestartSnapshot({ slimBackup: false,
     config: { backupOnRestart: true, backupIncludePlugins: true, maxBackups: 2 },
     stateDir: state.dir,
     log,
@@ -331,7 +336,7 @@ test('the shared snapshot entry keeps the reason of a failed backup and never th
 
 test('the shared snapshot entry writes nothing when backupOnRestart is false', async () => {
   let called = 0
-  const result = await takePreRestartSnapshot({
+  const result = await takePreRestartSnapshot({ slimBackup: false,
     config: { backupOnRestart: false },
     stateDir: path.join(os.tmpdir(), 'dsh-ar-hosted-no-backup'),
     log: { warn: () => {} },

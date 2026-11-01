@@ -46,7 +46,7 @@ function fixture(t) {
 
 test('a backup copies the configuration files and the plugin tree', async (t) => {
   const { profile, storage, backups } = fixture(t);
-  const first = await createBackup({ profileDir: profile, backupsDir: backups, includePlugins: true, now: 1_000 });
+  const first = await createBackup({ slimBackup: false, profileDir: profile, backupsDir: backups, includePlugins: true, now: 1_000 });
 
   assert.equal(first.ok, true);
   assert.equal(first.includePlugins, true);
@@ -67,7 +67,7 @@ test('a backup copies the configuration files and the plugin tree', async (t) =>
 
 test('includePlugins=false keeps the backup to the configuration files', async (t) => {
   const { profile, backups } = fixture(t);
-  const backup = await createBackup({ profileDir: profile, backupsDir: backups, includePlugins: false, now: 2_000 });
+  const backup = await createBackup({ slimBackup: false, profileDir: profile, backupsDir: backups, includePlugins: false, now: 2_000 });
 
   assert.equal(backup.ok, true);
   assert.equal(backup.includePlugins, false);
@@ -80,35 +80,47 @@ test('only the newest maxBackups snapshots are kept', async (t) => {
   const { profile, backups } = fixture(t);
   const stamps = [3_000, 4_000, 5_000, 6_000];
   for (const now of stamps) {
-    const backup = await createBackup({ profileDir: profile, backupsDir: backups, includePlugins: false, maxBackups: 2, now });
+    const backup = await createBackup({ slimBackup: false, profileDir: profile, backupsDir: backups, includePlugins: false, maxBackups: 2, now });
     assert.equal(backup.ok, true);
   }
 
   const left = listBackups(backups).map((entry) => entry.name);
+  // SINCE 2026-11-01 THE OLDEST COPY IS NEVER PRUNED: it is the "how this machine
+  // looked when it was still fine" reference, and losing it is what made a
+  // comparison against a backup meaningless. So with a limit of 2 the survivors
+  // are the newest one plus that permanently kept oldest one.
   assert.equal(left.length, 2, 'exactly two backups survive');
   const keptStamps = left.map((name) => {
     // The directory name is the ISO stamp with ':' and '.' replaced.
     return Date.parse(name.replace(/T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/, 'T$1:$2:$3.$4Z'));
   }).sort((a, b) => a - b);
-  assert.deepEqual(keptStamps, [5_000, 6_000], 'the two newest snapshots are the ones kept');
+  assert.deepEqual(keptStamps, [3_000, 6_000], 'the newest snapshot and the permanently kept oldest survive');
+  assert.equal(left.some((name) => name.startsWith('2026-11-01T00-04-00')) || keptStamps.includes(4_000), false, 'the middle ones are the ones pruned');
 });
 
 test('pruneBackups removes only what exceeds the limit', (t) => {
   const { backups } = fixture(t);
-  for (const name of ['2026-01-01T00-00-00-000Z', '2026-01-02T00-00-00-000Z', '2026-01-03T00-00-00-000Z']) {
-    fs.mkdirSync(path.join(backups, name), { recursive: true });
+  // Each of these is a FINISHED backup: it carries a manifest with a timestamp.
+  // (A directory without one is not listed at all since 2026-11-01 — it is a
+  // half-written leftover, not a point in time.)
+  for (const [index, name] of ['2026-01-01T00-00-00-000Z', '2026-01-02T00-00-00-000Z', '2026-01-03T00-00-00-000Z'].entries()) {
+    const dir = path.join(backups, name);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({ at: 1_000 + index, atLocal: name, bytes: 0, files: [], includePlugins: false }), 'utf8');
   }
+  // Only what exceeds the limit is removed — but the OLDEST is permanently kept,
+  // so the one victim is the middle copy rather than the first one.
   const removed = pruneBackups(backups, 2);
-  assert.deepEqual(removed, ['2026-01-01T00-00-00-000Z']);
+  assert.deepEqual(removed, ['2026-01-02T00-00-00-000Z']);
   assert.deepEqual(listBackups(backups).map((entry) => entry.name), [
     '2026-01-03T00-00-00-000Z',
-    '2026-01-02T00-00-00-000Z',
+    '2026-01-01T00-00-00-000Z',
   ]);
 });
 
 test('restoreBackup puts the snapshot back over the live profile', async (t) => {
   const { profile, backups } = fixture(t);
-  const backup = await createBackup({ profileDir: profile, backupsDir: backups, includePlugins: true, now: 7_000 });
+  const backup = await createBackup({ slimBackup: false, profileDir: profile, backupsDir: backups, includePlugins: true, now: 7_000 });
   assert.equal(backup.ok, true);
 
   // Break the live profile the way a bad edit would.
@@ -123,7 +135,7 @@ test('restoreBackup puts the snapshot back over the live profile', async (t) => 
 });
 
 test('createBackup reports a missing profile instead of throwing', async () => {
-  const result = await createBackup({ profileDir: path.join(os.tmpdir(), 'dsh-ar-does-not-exist-xyz'), backupsDir: path.join(os.tmpdir(), 'dsh-ar-b') });
+  const result = await createBackup({ slimBackup: false, profileDir: path.join(os.tmpdir(), 'dsh-ar-does-not-exist-xyz'), backupsDir: path.join(os.tmpdir(), 'dsh-ar-b') });
   assert.equal(result.ok, false);
   assert.match(String(result.error), /does not exist/);
 });
@@ -227,7 +239,7 @@ test('collectLinkedPlugins: a link whose target is gone is recorded with exists:
 
 test('createBackup: the contents of a linked plugin go into the backup and into the manifest', async (t) => {
   const { profile, storage, backups } = linkFixture(t);
-  const result = await createBackup({ profileDir: profile, backupsDir: backups, includePlugins: true, now: 5_000 });
+  const result = await createBackup({ slimBackup: false, profileDir: profile, backupsDir: backups, includePlugins: true, now: 5_000 });
   assert.equal(result.ok, true, result.error);
 
   // The contents are in their own directory, not mixed into the real copies.
@@ -298,7 +310,7 @@ test('decideLinkRestore: without a copy in the backup nothing is deleted', () =>
 
 test('createBackup: the RETURNED links match the manifest links', async (t) => {
   const { profile, backups } = linkFixture(t);
-  const result = await createBackup({ profileDir: profile, backupsDir: backups, includePlugins: true, now: 6_000 });
+  const result = await createBackup({ slimBackup: false, profileDir: profile, backupsDir: backups, includePlugins: true, now: 6_000 });
   assert.equal(result.ok, true, result.error);
 
   const manifest = JSON.parse(fs.readFileSync(path.join(result.dir, MANIFEST_NAME), 'utf8'));

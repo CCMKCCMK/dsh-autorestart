@@ -1,0 +1,37 @@
+# THE REPOSITORY USES LF, EVERYWHERE (2026-11-01).
+#
+# Why this file exists: without it, the line endings of a file depend on whoever
+# wrote it last. Git itself compares lines with the trailing `\r` ignored, so a
+# whole file can go from CRLF to LF (any script that writes with `node` emits
+# `\n`) and `git diff` will still look small while the file on disk shows every
+# single line changed. That silently breaks "how big was this change?" as a way
+# to review a patch.
+#
+# With this file the rule is part of the repository: clone, checkout and commit
+# all agree, and the drift cannot happen again.
+
+# Every text file is stored and checked out with LF.
+* text=auto eol=lf
+
+# Source, config and documentation are always text.
+*.js       text eol=lf
+*.mjs      text eol=lf
+*.cjs      text eol=lf
+*.json     text eol=lf
+*.yml      text eol=lf
+*.yaml     text eol=lf
+*.md       text eol=lf
+*.txt      text eol=lf
+*.sh       text eol=lf
+
+# Binaries must never be touched by the line-ending conversion.
+*.png      binary
+*.ico      binary
+*.jpg      binary
+*.jpeg     binary
+*.gif      binary
+*.webp     binary
+*.woff     binary
+*.woff2    binary
+*.zip      binary
+*.gz       binary

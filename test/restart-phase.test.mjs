@@ -151,7 +151,7 @@ test('the snapshot reports the real bytes, and they only grow', async (t) => {
   const profile = makeProfile(root)
   const backups = path.join(root, 'backups')
   const samples = []
-  const result = await createBackup({
+  const result = await createBackup({ slimBackup: false,
     profileDir: profile,
     backupsDir: backups,
     includePlugins: true,
@@ -183,7 +183,7 @@ test('a cancel during the snapshot stops the copy and leaves no half-written bac
   const profile = makeProfile(root, { count: 80 });
   const backups = path.join(root, 'backups');
   let copied = 0
-  const result = await createBackup({
+  const result = await createBackup({ slimBackup: false,
     profileDir: profile,
     backupsDir: backups,
     includePlugins: true,
@@ -634,7 +634,7 @@ function makeReuseRuntime(t, { root, profile, stateFile, backups, agents, counte
     env: { isDesktopApp: true, appExePath: 'C:\\fake\\DeepSeek Harness.exe' },
     snapshot: async ({ onProgress }) => {
       counter.copies += 1;
-      const backup = await createBackup({
+      const backup = await createBackup({ slimBackup: false,
         profileDir: profile,
         backupsDir: backups,
         includePlugins: true,

@@ -532,7 +532,7 @@ test('a real createBackup produces the layout the planner looks for', async () =
   const root = tempDir('create-backup');
   const profileDir = makeProfile(root);
   const backupsDir = path.join(root, 'backups');
-  const result = await createBackup({
+  const result = await createBackup({ slimBackup: false,
     profileDir,
     backupsDir,
     includePlugins: true,

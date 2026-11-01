@@ -24,6 +24,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { collectCapabilities, compareCapabilities, listDisappearances } from './lib/plugin-watch.js'
 
 import {
   armSleep,
@@ -187,6 +188,7 @@ import {
 } from './lib/restart-verdict.js'
 import { waitForHealthyInstance } from './lib/health.js'
 import { findPluginFailures, mergeFailuresByPlugin } from './lib/plugin-failure.js'
+import { inventory as pluginInventory, pluginDetail as pluginInventoryDetail } from './lib/plugin-compare.js'
 import {
   applyPluginRecovery,
   buildRecoveryReport,
@@ -711,6 +713,10 @@ function buildConfigSchema() {
       // rollback of "a plugin upgrade broke the boot" possible)
       backupIncludePlugins: schemastery.boolean().default(true)
         .description('Include the installed plugin tree in that snapshot: about 117 MB and roughly 3 extra seconds, but it is what makes a rollback of a broken plugin upgrade possible.'),
+      watchEnabled: schemastery.boolean().default(true)
+        .description('After boot, record what the loaded plugins provide and compare it with the previous record'),
+      watchDelayMs: schemastery.number().step(1).min(0).default(8000)
+        .description('How long the watch waits after boot so plugins that load late are not reported as gone'),
       maxBackups: schemastery.number().step(1).min(1).default(DEFAULT_MAX_BACKUPS)
         .description('How many snapshots are kept (default 3: the current one plus the two before it); older ones are deleted automatically, except the newest known-good one, which is never removed.'),
       rollbackTimeoutMs: schemastery.number().min(1000).default(90000)
@@ -802,6 +808,12 @@ const DEFAULTS = {
   backupOnRestart: true,
   backupIncludePlugins: true,
   maxBackups: DEFAULT_MAX_BACKUPS,
+  // THE PLUGIN WATCH (2026-11-01): after the host has settled, take one reading
+  // of what the loaded plugins actually provide (tools, interface modules,
+  // registered packages) and compare it with the previous reading. It reports
+  // only what is NO LONGER there - a new plugin is not news.
+  watchEnabled: true,
+  watchDelayMs: 8000,
   // The WATCHDOG: the process that waits for the relaunched host and puts the
   // snapshot back when it never answers. It needs a way to be triggered
   // later (a scheduled task, a systemd timer, a detached process) — the
@@ -846,6 +858,8 @@ function normalizeConfig(raw) {
   }
   if (config.deferPolicy !== 'auto' && config.deferPolicy !== 'wait') config.deferPolicy = 'auto'
   if (config.restartMode !== 'app' && config.restartMode !== 'command') config.restartMode = 'app'
+  const watchDelay = Number(config.watchDelayMs)
+  config.watchDelayMs = Number.isFinite(watchDelay) && watchDelay >= 0 ? Math.trunc(watchDelay) : 8000
   const maxBackups = Number(config.maxBackups)
   config.maxBackups = Number.isFinite(maxBackups) && maxBackups >= 1 ? Math.trunc(maxBackups) : DEFAULT_MAX_BACKUPS
   const rollbackTimeout = Number(config.rollbackTimeoutMs)
@@ -971,6 +985,169 @@ function resolvePluginRestorePath(config) {
   const index = healthPath.lastIndexOf('/')
   const prefix = index > 0 ? healthPath.slice(0, index) : '/__dsh_autorestart'
   return `${prefix}/plugin-restore`
+}
+
+/**
+ * The read-only inventory route: `GET <prefix>/plugin-inventory`.
+ *
+ * Same prefix as the health and restore routes, so the browser has one base to
+ * remember. It writes nothing — the settings page reads it, the human decides,
+ * and `POST <prefix>/plugin-restore` performs the one write.
+ *
+ * @param {object} config
+ * @returns {string}
+ */
+const PLUGIN_WATCH_FILE = 'plugin-watch.json'
+
+function resolvePluginWatchPath(config) {
+  const healthPath = resolveHealthPath(config)
+  const index = healthPath.lastIndexOf('/')
+  const prefix = index > 0 ? healthPath.slice(0, index) : '/__dsh_autorestart'
+  return prefix + '/plugin-watch'
+}
+
+function readPluginWatchReport(stateDir) {
+  try {
+    const raw = fs.readFileSync(path.join(stateDir, PLUGIN_WATCH_FILE), 'utf8')
+    const parsed = JSON.parse(raw)
+    return parsed !== null && typeof parsed === 'object' ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * ONE READING: compare what is visible now with the previous reading, then
+ * OVERWRITE it. Only one history entry is kept on purpose - this is a
+ * "what changed since last boot" question, not a time series.
+ *
+ * Returns the comparison, or null when the watch is switched off.
+ * Never throws: this runs on the boot path.
+ */
+function runPluginWatchOnce(ctx, runtime, config) {
+  try {
+    if (config.watchEnabled !== true) return null
+    const stateDir = resolveStateDir(config)
+    const previous = readPluginWatchReport(stateDir)
+    // Every service is handed over as it is; the collector turns a missing one
+    // into null for THAT layer only, so one absent service never hides the rest.
+    const current = collectCapabilities(ctx, { now: Date.now() })
+    const comparison = compareCapabilities(previous, current)
+    try {
+      fs.mkdirSync(stateDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(stateDir, PLUGIN_WATCH_FILE),
+        JSON.stringify({ ...current, comparison, disappeared: listDisappearances(comparison) }),
+        'utf8',
+      )
+    } catch (error) {
+      runtime.log.warn('the plugin watch could not save its reading:', String(error))
+    }
+    return comparison
+  } catch (error) {
+    // The watch is a convenience; it must never take the plugin down with it.
+    try {
+      runtime.log.warn('the plugin watch failed to run:', String(error))
+    } catch {}
+    return null
+  }
+}
+
+/**
+ * Run the watch once, LATE. Plugins load in an arbitrary order, so reading
+ * immediately would report "not loaded yet" as "disappeared".
+ *
+ * The timer is unref'ed: without that the process cannot exit while it waits,
+ * which would hang the host and every test run.
+ */
+function schedulePluginWatch(ctx, runtime, config) {
+  try {
+    if (config.watchEnabled !== true) return null
+    const delay = Number(config.watchDelayMs)
+    const waitMs = Number.isFinite(delay) && delay >= 0 ? Math.trunc(delay) : 8000
+    const timer = setTimeout(() => { runPluginWatchOnce(ctx, runtime, config) }, waitMs)
+    if (timer && typeof timer.unref === 'function') timer.unref()
+    return timer
+  } catch (error) {
+    try {
+      runtime.log.warn('the plugin watch could not be scheduled:', String(error))
+    } catch {}
+    return null
+  }
+}
+
+/**
+ * GET <prefix>/plugin-watch - the last reading, as plain facts.
+ *
+ * The payload describes WHAT IS NO LONGER VISIBLE. It never says a plugin is
+ * broken or that something failed: this layer cannot know that, and saying it
+ * would be a guess dressed up as a finding.
+ */
+function buildPluginWatchRoute(ctx, runtime, config) {
+  const routePath = resolvePluginWatchPath(config)
+  return {
+    kind: 'exact',
+    path: routePath,
+    handler: (req, res) => {
+      const remote = req && req.socket ? req.socket.remoteAddress : undefined
+      const loopback = remote === undefined
+        || remote === '127.0.0.1'
+        || remote === '::1'
+        || remote === '::ffff:127.0.0.1'
+      if (!loopback && !admittedByConnection(ctx, req)) {
+        res.statusCode = 403
+        res.setHeader('content-type', 'application/json; charset=utf-8')
+        res.end('{"ok":false,"error":"loopback-only"}')
+        return
+      }
+      const answer = (payload, status = 200) => {
+        res.statusCode = status
+        res.setHeader('content-type', 'application/json; charset=utf-8')
+        res.setHeader('cache-control', 'no-store')
+        res.end(JSON.stringify(payload))
+      }
+      if (req && req.method && req.method !== 'GET') {
+        res.statusCode = 405
+        res.setHeader('content-type', 'application/json; charset=utf-8')
+        res.setHeader('allow', 'GET')
+        res.end('{"ok":false,"error":"method-not-allowed"}')
+        return
+      }
+      try {
+        if (config.watchEnabled !== true) {
+          answer({ ok: true, available: false, reason: 'watch-disabled' })
+          return
+        }
+        const saved = readPluginWatchReport(resolveStateDir(config))
+        if (saved === null || !Number.isFinite(Number(saved.at))) {
+          answer({ ok: true, available: false, reason: 'no-reading-yet' })
+          return
+        }
+        const comparison = saved.comparison !== null && typeof saved.comparison === 'object'
+          ? saved.comparison
+          : { at: Number(saved.at), layers: {}, removedTotal: 0, hasDisappearances: false }
+        answer({
+          ok: true,
+          available: true,
+          at: Number(saved.at),
+          atLocal: new Date(Number(saved.at)).toISOString(),
+          layers: comparison.layers !== null && typeof comparison.layers === 'object' ? comparison.layers : {},
+          disappeared: Array.isArray(saved.disappeared) ? saved.disappeared : [],
+          removedTotal: Number.isFinite(Number(comparison.removedTotal)) ? Number(comparison.removedTotal) : 0,
+          hasDisappearances: comparison.hasDisappearances === true,
+        })
+      } catch (error) {
+        answer({ ok: true, available: false, reason: 'unreadable' })
+      }
+    },
+  }
+}
+
+function resolvePluginInventoryPath(config) {
+  const healthPath = resolveHealthPath(config)
+  const index = healthPath.lastIndexOf('/')
+  const prefix = index > 0 ? healthPath.slice(0, index) : '/__dsh_autorestart'
+  return `${prefix}/plugin-inventory`
 }
 
 /**
@@ -1276,6 +1453,12 @@ function readInstallChoice(stateDir) {
         ? parsed.sleepCountdownSeconds
         : null,
       restartGraceMs: typeof parsed.restartGraceMs === 'number' ? parsed.restartGraceMs : null,
+      // THE WATCHDOG QUESTION (2026-11-01): the user's own answer, and the plugin
+      // version they answered it for. null = never asked, and never asked means ON.
+      watchdog: typeof parsed.watchdog === 'boolean' ? parsed.watchdog : null,
+      askedForPluginVersion: typeof parsed.askedForPluginVersion === 'string'
+        ? parsed.askedForPluginVersion
+        : null,
     }
   } catch {
     return null
@@ -1300,6 +1483,8 @@ function writeInstallChoice(stateDir, values) {
     showSleepButton: null,
     sleepCountdownSeconds: null,
     restartGraceMs: null,
+    watchdog: null,
+    askedForPluginVersion: null,
   }
   const payload = {
     includePlugins: typeof values.includePlugins === 'boolean' ? values.includePlugins : current.includePlugins,
@@ -1311,12 +1496,62 @@ function writeInstallChoice(stateDir, values) {
     restartGraceMs: typeof values.restartGraceMs === 'number'
       ? values.restartGraceMs
       : current.restartGraceMs,
+    watchdog: typeof values.watchdog === 'boolean' ? values.watchdog : current.watchdog,
+    askedForPluginVersion: typeof values.askedForPluginVersion === 'string'
+      ? values.askedForPluginVersion
+      : current.askedForPluginVersion,
     at: new Date().toISOString(),
   }
   fs.mkdirSync(stateDir, { recursive: true })
   fs.writeFileSync(file, JSON.stringify(payload, null, 2), 'utf8')
   return file
 }
+
+/**
+ * The version of THIS plugin, for "did it change since we asked?".
+ */
+function pluginVersionNow() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(new URL('./package.json', import.meta.url), 'utf8'))
+    return parsed && typeof parsed.version === 'string' ? parsed.version : ''
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * May the watchdog be armed right now?
+ *
+ * Three inputs, in this order:
+ *   1. the config file: `watchdogEnabled: false` is somebody editing the file on
+ *      purpose, and it always wins;
+ *   2. the answer the user gave to the question: `watchdog: false` means "no";
+ *   3. otherwise ON. A fresh profile has no answer recorded, and "never asked"
+ *      must never quietly turn a rescue feature off.
+ */
+function watchdogAllowed(stateDir, config) {
+  if (config && config.watchdogEnabled === false) return false
+  const choice = typeof stateDir === 'string' && stateDir !== '' ? readInstallChoice(stateDir) : null
+  if (choice !== null && choice.watchdog === false) return false
+  return true
+}
+
+/**
+ * Should the watchdog question be asked on this boot?
+ *
+ * Asked when there is no answer yet, or when the plugin changed version since
+ * the answer was given: a new version may do something different, so the old
+ * answer is not an answer to the new question.
+ */
+function shouldAskWatchdog(stateDir, version) {
+  const choice = typeof stateDir === 'string' && stateDir !== '' ? readInstallChoice(stateDir) : null
+  if (choice === null) return true
+  if (choice.watchdog === null) return true
+  const asked = typeof choice.askedForPluginVersion === 'string' ? choice.askedForPluginVersion : ''
+  const now = typeof version === 'string' && version !== '' ? version : pluginVersionNow()
+  return asked !== now
+}
+
 
 /**
  * Resolve the effective `backupIncludePlugins` value and where it came from.
@@ -1909,6 +2144,8 @@ export async function takePreRestartSnapshot({
   // the backup itself, so the numbers on screen are the numbers on disk.
   onProgress = null,
   shouldCancel = null,
+  // Slim by default; pass false to snapshot the whole plugin tree.
+  slimBackup = true,
 } = {}) {
   const startedAt = Date.now()
   const info = profile && typeof profile === 'object'
@@ -1933,6 +2170,7 @@ export async function takePreRestartSnapshot({
   let backup = null
   try {
     backup = await createBackupFn({
+    slimBackup,
       profileDir,
       backupsDir: backupsDirFor(stateDir),
       includePlugins: config.backupIncludePlugins !== false,
@@ -3651,6 +3889,7 @@ const titleOfSummary = (item) => {
     let safety = null
     try {
       safety = await createBackup({
+      slimBackup: true,
         profileDir,
         backupsDir,
         includePlugins: config.backupIncludePlugins !== false,
@@ -3845,7 +4084,8 @@ const titleOfSummary = (item) => {
       : TIERS.NONE
     const report = readReport(stateDirOf())
     return {
-      enabled: config.watchdogEnabled !== false,
+      // Read the user's ANSWER, not just the written default: 'no' means no.
+      enabled: watchdogAllowed(stateDirOf(), config),
       tier,
       tierReason: typeof capabilities.tierReason === 'string' ? capabilities.tierReason : '',
       available: tierProvidesRollback(tier),
@@ -3893,7 +4133,7 @@ const titleOfSummary = (item) => {
     expectedBootId = null,
   } = {}) => {
     const stateDir = stateDirOf()
-    if (config.watchdogEnabled === false) {
+    if (watchdogAllowed(stateDir, config) !== true) {
       return { ok: false, tier: TIERS.NONE, reason: 'the watchdog is switched off', error: null }
     }
     if (profileDir === null || snapshotDir === '') {
@@ -5284,17 +5524,39 @@ const titleOfSummary = (item) => {
       return ownVersion()
     },
     /**
-     * THE LAST PLUGIN-FAILURE RECOVERY (the REPORTED kind, user decision
-     * 2026-11-01), read from the report the boot pass writes:
-     * `{ at, atIso, failures, actions, restartRequested, needsHuman }`, cut down
-     * to what an answer to the browser may carry. Null when this machine never
-     * had one — a machine without an incident says so instead of inventing one.
+     * THE LAST PLUGIN-FAILURE RECOVERY, as the popup may show it.
+     *
+     * ONE SOURCE: the report the boot pass wrote, and ONLY when it describes
+     * THIS boot. A report written before this process started is a leftover from
+     * a previous start — the real machine had one stuck at 10:39:59 carrying 188
+     * fake failures — and is returned as `null` so it stops being shown.
+     *
+     * THE IN-PROCESS DETECTION THAT USED TO COME FIRST IS GONE (user decision,
+     * 2026-11-01). It was built on `ctx.get('tools').execute(...)`, which the host
+     * refuses during boot: that call wants a whole execution context (token /
+     * callId / rootCallId / signal / agent plus `arguments`), not a tool name and
+     * its arguments. Measured on the real machine, every argument shape answered
+     * the same `tool execution arguments must be losslessly JSON-serializable`.
+     * The plugin cannot obtain that context at boot, so the route is closed.
+     *
+     * What is left is what always worked: the report on disk, and a manual
+     * single-plugin restore from the backup.
+     *
+     * NEVER THROWS: this runs inside a health route.
      *
      * @returns {object|null}
      */
     pluginRecoveryInfo() {
       try {
-        return summarizeRecoveryReport(readRecoveryReport(stateDirOf()))
+        const report = readRecoveryReport(stateDirOf())
+        if (!report || typeof report !== 'object') return null
+        const uptimeMs = typeof process.uptime === 'function' ? process.uptime() * 1000 : 0
+        const bootAt = Date.now() - Math.round(uptimeMs)
+        const at = Number(report.at)
+        // A report written BEFORE this process started describes a different
+        // boot. Showing it is what kept 188 fake failures on screen.
+        if (Number.isFinite(at) && at < bootAt) return null
+        return summarizeRecoveryReport(report)
       } catch {
         return null
       }
@@ -8062,6 +8324,99 @@ function buildPluginRestoreRoute(ctx, runtime, config) {
  * release of the plugin. Only a new FEATURE version (see
  * `SLEEP_FEATURE_VERSION`) brings it back, on purpose.
  */
+/**
+ * THE INVENTORY ROUTE — the settings page's data source (user decision, 2026-11-01).
+ *
+ * GET, read-only, loopback-only like every other route of this plugin. Without a
+ * query it answers the whole list; with `?plugin=<name>` it answers that one
+ * plugin's file-level differences.
+ *
+ * WHAT A DIFFERENCE MEANS: it finds a changed, deleted or never-backed-up file.
+ * It does NOT find a plugin whose files are all correct but which fails while
+ * loading. The payload therefore never says "broken" — it says `status`, and the
+ * settings page is expected to present it as a first-pass signal.
+ *
+ * CACHED FOR 60 s, keyed by the plugin name, because walking 120 plugin trees is
+ * a stat per file and the page may be opened several times in a row.
+ */
+function buildPluginInventoryRoute(ctx, runtime, config) {
+  const routePath = resolvePluginInventoryPath(config)
+  const ttlMs = 60000
+  return {
+    kind: 'exact',
+    path: routePath,
+    handler: (req, res) => {
+      const remote = req && req.socket ? req.socket.remoteAddress : undefined
+      const loopback = remote === undefined
+        || remote === '127.0.0.1'
+        || remote === '::1'
+        || remote === '::ffff:127.0.0.1'
+      if (!loopback && !admittedByConnection(ctx, req)) {
+        res.statusCode = 403
+        res.setHeader('content-type', 'application/json; charset=utf-8')
+        res.end('{"ok":false,"error":"loopback-only"}')
+        return
+      }
+      const answer = (payload, status = 200) => {
+        res.statusCode = status
+        res.setHeader('content-type', 'application/json; charset=utf-8')
+        res.setHeader('cache-control', 'no-store')
+        res.end(JSON.stringify(payload))
+      }
+      if (req && req.method && req.method !== 'GET') {
+        res.statusCode = 405
+        res.setHeader('content-type', 'application/json; charset=utf-8')
+        res.setHeader('allow', 'GET')
+        res.end('{"ok":false,"error":"method-not-allowed"}')
+        return
+      }
+      try {
+        const url = req && typeof req.url === 'string' ? req.url : ''
+        const queryIndex = url.indexOf('?')
+        const query = queryIndex < 0 ? '' : url.slice(queryIndex + 1)
+        let plugin = ''
+        for (const part of query.split('&')) {
+          const equals = part.indexOf('=')
+          if (equals < 0) continue
+          if (decodeURIComponent(part.slice(0, equals)) !== 'plugin') continue
+          try {
+            plugin = decodeURIComponent(part.slice(equals + 1)).trim()
+          } catch {
+            plugin = part.slice(equals + 1).trim()
+          }
+        }
+        const cacheKey = plugin === '' ? 'inventory' : 'detail:' + plugin
+        const now = Date.now()
+        const cache = runtime.pluginInventoryCache && typeof runtime.pluginInventoryCache === 'object'
+          ? runtime.pluginInventoryCache
+          : {}
+        const hit = cache[cacheKey]
+        if (hit && typeof hit.at === 'number' && now - hit.at < ttlMs && hit.value !== undefined) {
+          answer(hit.value)
+          return
+        }
+        const profileDir = runtime.profileDir && typeof runtime.profileDir.dir === 'string' ? runtime.profileDir.dir : ''
+        const backupsDir = profileDir === '' ? '' : backupsDirFor(runtime.stateDir)
+        const value = plugin === ''
+          ? { ok: true, kind: 'inventory', ...pluginInventory({ profileDir, backupsDir, now }) }
+          : { ok: true, kind: 'detail', ...pluginInventoryDetail({ profileDir, backupsDir, plugin }) }
+        runtime.pluginInventoryCache = { ...cache, [cacheKey]: { at: now, value } }
+        answer(value)
+      } catch (error) {
+        // A read-only route that cannot read is an ANSWER, not a 500: the page
+        // must be able to say "unknown" instead of showing nothing.
+        answer({
+          ok: false,
+          kind: 'inventory',
+          backupAt: null,
+          plugins: [],
+          reason: String(error && error.message ? error.message : error),
+        })
+      }
+    },
+  }
+}
+
 function buildAnnouncementsRoute(ctx, runtime, config) {
   const routePath = resolveAnnouncementsPath(config)
   return {
@@ -8179,7 +8534,11 @@ function buildChoiceRoute(ctx, runtime, config) {
         const hasShow = Object.prototype.hasOwnProperty.call(body, 'showSleepButton')
         const hasSeconds = Object.prototype.hasOwnProperty.call(body, 'sleepCountdownSeconds')
         const hasGrace = Object.prototype.hasOwnProperty.call(body, 'restartGraceMs')
-        if (!hasInclude && !hasBackupInclude && !hasBackup && !hasShow && !hasSeconds && !hasGrace) {
+        // THE WATCHDOG ANSWER: its own keys, and its own file (see below) -
+        // it is NOT a profile config key like the others.
+        const hasWatchdog = Object.prototype.hasOwnProperty.call(body, 'watchdog')
+        const hasAskedVersion = Object.prototype.hasOwnProperty.call(body, 'askedForPluginVersion')
+        if (!hasInclude && !hasBackupInclude && !hasBackup && !hasShow && !hasSeconds && !hasGrace && !hasWatchdog && !hasAskedVersion) {
           // No key was asked for: there is nothing to persist.
           res.statusCode = 400
           res.setHeader('content-type', 'application/json; charset=utf-8')
@@ -8187,7 +8546,7 @@ function buildChoiceRoute(ctx, runtime, config) {
           res.end(JSON.stringify({
             ok: false,
             error: 'no-choice',
-            instruction: 'Send { "includePlugins": true | false } and/or { "backupIncludePlugins": true | false } and/or { "backupOnRestart": true | false } and/or { "showSleepButton": true | false } and/or { "sleepCountdownSeconds": 0 | 10 | 20 | 30 | 60 } and/or { "restartGraceMs": 0 | 5000 | 10000 | 20000 | 30000 | 60000 }.',
+            instruction: 'Send { "includePlugins": true | false } and/or { "backupIncludePlugins": true | false } and/or { "backupOnRestart": true | false } and/or { "showSleepButton": true | false } and/or { "sleepCountdownSeconds": 0 | 10 | 20 | 30 | 60 } and/or { "restartGraceMs": 0 | 5000 | 10000 | 20000 | 30000 | 60000 } and/or { "watchdog": true | false, "askedForPluginVersion": "1.2.3" }.',
           }))
           return
         }
@@ -8259,6 +8618,28 @@ function buildChoiceRoute(ctx, runtime, config) {
           }))
           return
         }
+        if (hasWatchdog && typeof body.watchdog !== 'boolean') {
+          res.statusCode = 400
+          res.setHeader('content-type', 'application/json; charset=utf-8')
+          res.setHeader('cache-control', 'no-store')
+          res.end(JSON.stringify({
+            ok: false,
+            error: 'watchdog-must-be-boolean',
+            instruction: 'Send { "watchdog": true | false }.',
+          }))
+          return
+        }
+        if (hasAskedVersion && typeof body.askedForPluginVersion !== 'string') {
+          res.statusCode = 400
+          res.setHeader('content-type', 'application/json; charset=utf-8')
+          res.setHeader('cache-control', 'no-store')
+          res.end(JSON.stringify({
+            ok: false,
+            error: 'askedForPluginVersion-must-be-string',
+            instruction: 'Send { "askedForPluginVersion": "1.2.3" }.',
+          }))
+          return
+        }
         const changes = {}
         // The route field is `includePlugins`, the configuration key is
         // `backupIncludePlugins` (the profile row keeps the plugin's own name).
@@ -8269,6 +8650,20 @@ function buildChoiceRoute(ctx, runtime, config) {
         if (hasSeconds) changes.sleepCountdownSeconds = body.sleepCountdownSeconds
         if (hasGrace) changes.restartGraceMs = body.restartGraceMs
         const result = await runtime.applyConfigChoice(changes)
+        // THE WATCHDOG ANSWER IS NOT A CONFIG KEY. It lives in
+        // install-choice.json (where readInstallChoice() looks for it), so it is
+        // written here and not through applyConfigChoice. Writing it anywhere
+        // else is the bug that produced a cheerful "saved" with nothing on disk.
+        if (hasWatchdog || hasAskedVersion) {
+          // resolveStateDir(), NOT path.dirname(config.stateFile): the default
+          // stateFile is '' and path.dirname('') is '.', so that spelling wrote
+          // the file into the process working directory - which is exactly why
+          // the panel said "saved" while the real state dir never changed.
+          writeInstallChoice(resolveStateDir(config), {
+            ...(hasWatchdog ? { watchdog: body.watchdog === true } : {}),
+            ...(hasAskedVersion ? { askedForPluginVersion: body.askedForPluginVersion } : {}),
+          })
+        }
         // The one-time install prompt explained the features to the user, so
         // the announcement of a fresh installation must not follow it.
         //
@@ -8289,6 +8684,8 @@ function buildChoiceRoute(ctx, runtime, config) {
         if (hasShow) answer.showSleepButton = body.showSleepButton === true
         if (hasSeconds) answer.sleepCountdownSeconds = body.sleepCountdownSeconds
         if (hasGrace) answer.restartGraceMs = body.restartGraceMs
+        if (hasWatchdog) answer.watchdog = body.watchdog === true
+        if (hasAskedVersion) answer.askedForPluginVersion = body.askedForPluginVersion
         res.statusCode = 200
         res.setHeader('content-type', 'application/json; charset=utf-8')
         res.setHeader('cache-control', 'no-store')
@@ -9288,6 +9685,10 @@ function registerHealthRoute(ctx, runtime, config, sleep) {
             // The route that reports (and records) the one-time feature
             // announcements, so the client never has to guess the prefix.
             announcementsUrl: resolveAnnouncementsPath(config),
+            // SHOULD THE WATCHDOG QUESTION BE ASKED? The client cannot read the disk,
+            // so the decision is made here and sent along with the answer's version.
+            watchdogAsk: shouldAskWatchdog(resolveStateDir(config), pluginVersionNow()),
+            pluginVersion: pluginVersionNow(),
             backupOnRestart: config.backupOnRestart !== false,
             backupIncludePlugins: config.backupIncludePlugins !== false,
             // WHAT IS ON DISK RIGHT NOW: the backups of this host (the count,
@@ -9400,6 +9801,10 @@ function registerHealthRoute(ctx, runtime, config, sleep) {
             rollbackUrl: resolveManualRollbackPath(config),
             choiceUrl: resolveChoicePath(config),
             announcementsUrl: resolveAnnouncementsPath(config),
+            // SHOULD THE WATCHDOG QUESTION BE ASKED? The client cannot read the disk,
+            // so the decision is made here and sent along with the answer's version.
+            watchdogAsk: shouldAskWatchdog(resolveStateDir(config), pluginVersionNow()),
+            pluginVersion: pluginVersionNow(),
             backupOnRestart: config.backupOnRestart !== false,
             backupIncludePlugins: config.backupIncludePlugins !== false,
             parkedGoals: [],
@@ -9548,6 +9953,7 @@ function registerHealthRoute(ctx, runtime, config, sleep) {
     const cancelRoute = buildCancelRoute(ctx, runtime, config)
     const manualRollbackRoute = buildManualRollbackRoute(ctx, runtime, config)
     const pluginRestoreRoute = buildPluginRestoreRoute(ctx, runtime, config)
+  const pluginInventoryRoute = buildPluginInventoryRoute(ctx, runtime, config)
     const announcementsRoute = buildAnnouncementsRoute(ctx, runtime, config)
     const supervisorRoute = buildSupervisorRoute(ctx, runtime, config)
     const rescueRoute = buildRescueRoute(ctx, runtime, config)
@@ -9584,6 +9990,15 @@ function registerHealthRoute(ctx, runtime, config, sleep) {
     // above is part of what the boot check reports (and what the tests pin), so
     // a new route is APPENDED instead of being pushed into the middle of it.
     routes.push({ name: 'plugin-restore', route: pluginRestoreRoute })
+    // ...and the read-only inventory the settings page reads (2026-11-01).
+    routes.push({ name: 'plugin-inventory', route: pluginInventoryRoute })
+    // ...and what the loaded plugins stopped providing (2026-11-01).
+    routes.push({ name: 'plugin-watch', route: buildPluginWatchRoute(ctx, runtime, config) });
+    // One late reading per boot; the timer is unref'ed so it never holds the
+    // process open.
+    // Kept LOCAL on purpose: the timer belongs to this boot and nothing else
+    // needs to see it (a field on `runtime` leaked into payloads that compare it).
+    schedulePluginWatch(ctx, runtime, config)
     for (const entry of routes) {
       try {
         target.effect(() => webServer.register(entry.route), 'dsh-autorestart: ' + entry.name + ' route')
@@ -9899,23 +10314,35 @@ export function apply(ctx, rawConfig, options = {}) {
   // not activate" case only.
   if (runtime.isNewBoot) {
     try {
-      const detection = detectPluginRecovery({
-        stateDir: runtime.stateDir,
-        backupsDir: runtime.profileDir.dir ? backupsDirFor(runtime.stateDir) : '',
-        logsDir: resolveStartupLogsDir(),
-        // The moment this process started: only a log written BEFORE it
-        // describes a boot that finished.
-        bootAt: Date.now() - Math.round((typeof process.uptime === 'function' ? process.uptime() : 0) * 1000),
-        now: Date.now(),
-      })
-      runtime.pluginRecovery = detection
-      if (detection && detection.ran === true && detection.found === true) {
-        log.warn('the previous boot reported a plugin failure (nothing was changed: the popup offers a restore)', {
-          log: detection.log,
-          plugins: detection.failures.map((failure) => failure.plugin).filter((name) => typeof name === 'string'),
-          backupKind: detection.backupKind,
-          restoredAt: detection.restoredAt,
+      // THE SOURCE: THE STARTUP LOG.
+      //
+      // This is the pass that always worked where the host writes a verdict (a
+      // hosted `dsh web` instance does). The two in-process routes that were
+      // tried on top of it — the live cordis registry and
+      // `ctx.get('tools').execute('plugin_manager', …)` — are GONE (user
+      // decision, 2026-11-01): the registry reports its own internals rather than
+      // activation state, and the tool call is refused during boot because it
+      // wants a whole execution context the plugin cannot obtain. Neither was
+      // ever able to name a plugin that had not activated, so neither is missed.
+      {
+        const detection = detectPluginRecovery({
+          stateDir: runtime.stateDir,
+          backupsDir: runtime.profileDir.dir ? backupsDirFor(runtime.stateDir) : '',
+          logsDir: resolveStartupLogsDir(),
+          // The moment this process started: only a log written BEFORE it
+          // describes a boot that finished.
+          bootAt: Date.now() - Math.round((typeof process.uptime === 'function' ? process.uptime() : 0) * 1000),
+          now: Date.now(),
         })
+        runtime.pluginRecovery = detection
+        if (detection && detection.ran === true && detection.found === true) {
+          log.warn('the previous boot reported a plugin failure (nothing was changed: the popup offers a restore)', {
+            log: detection.log,
+            plugins: detection.failures.map((failure) => failure.plugin).filter((name) => typeof name === 'string'),
+            backupKind: detection.backupKind,
+            restoredAt: detection.restoredAt,
+          })
+        }
       }
     } catch (error) {
       // NEVER SILENT: a pass that could not run must be visible, not pretend
@@ -9954,6 +10381,13 @@ export function apply(ctx, rawConfig, options = {}) {
   // object the routes use (the cancel route is decided by ITS stage). Nothing in
   // the plugin system reads this value.
   return runtime
+}
+
+export {
+  watchdogAllowed,
+  shouldAskWatchdog,
+  readInstallChoice,
+  writeInstallChoice,
 }
 
 export {

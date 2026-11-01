@@ -510,7 +510,7 @@ test('the served index gets a boot-token heartbeat for dsh web pages', () => {
     },
   })
   apply(fake.ctx, { stateFile: file, recoveryDelayMs: 0, enabled: true })
-  assert.equal(routes.length, 12, '12 since the single-plugin restore route (2026-11-01)')
+  assert.equal(routes.length, 14, '14 since the plugin-watch route (2026-11-01)')
   assert.equal(routes[0].kind, 'exact')
   assert.equal(routes[0].path, '/__dsh_autorestart/health')
   assert.equal(routes[1].kind, 'exact')
@@ -568,7 +568,7 @@ test('autoReloadPage: false suppresses the heartbeat but keeps the health route'
     },
   })
   apply(fake.ctx, { stateFile: file, recoveryDelayMs: 0, enabled: true, autoReloadPage: false })
-  assert.equal(routes.length, 12, '12 since the single-plugin restore route (2026-11-01)')
+  assert.equal(routes.length, 14, '14 since the plugin-watch route (2026-11-01)')
   assert.equal(taps.length, 0, 'without the heartbeat there is nothing to inject')
   const html = taps.length === 0 ? '<html><head></head><body>app</body></html>' : taps[0]('<html><head></head><body>app</body></html>')
   assert.doesNotMatch(html, /data-dsh-autorestart-heartbeat/, 'the heartbeat must stay off')
@@ -736,7 +736,7 @@ test('the ?gate=1 probe refuses a restart while a conversation has queued inbox 
   agent.inbox = { nextTurn: [{ id: 'm1' }], nextStep: [] };
   const { fake, routes } = contextWithRoutes({ runningAgents: [agent] });
   apply(fake.ctx, { stateFile: file, recoveryDelayMs: 0, enabled: true });
-  assert.equal(routes.length, 12, 'the health route must be registered (12 routes since the manual rollback one)');
+  assert.equal(routes.length, 14, 'the health route must be registered (14 routes since the plugin-watch route)');
   const res = fakeResponse();
   routes[0].handler({ url: '/__dsh_autorestart/health?gate=1', socket: { remoteAddress: '127.0.0.1' } }, res);
   assert.equal(res.statusCode, 200);
@@ -787,7 +787,7 @@ test('the ?state=1 probe reports the pending-restart state a UI banner needs', (
   });
   const { fake, routes } = contextWithRoutes();
   apply(fake.ctx, { stateFile: file, recoveryDelayMs: 0, enabled: true });
-  assert.equal(routes.length, 12, 'the health route must be registered (12 routes since the manual rollback one)');
+  assert.equal(routes.length, 14, 'the health route must be registered (14 routes since the plugin-watch route)');
   const res = fakeResponse();
   routes[0].handler({ url: '/__dsh_autorestart/health?state=1', socket: { remoteAddress: '127.0.0.1' } }, res);
   assert.equal(res.statusCode, 200);
@@ -2216,9 +2216,14 @@ test('health reports pluginRecovery, and the field is declared in the tool schem
   assert.equal(emptyBody.pluginRecovery, null);
 
   // A report of the boot pass is what the route reports.
+  // NOTE: the timestamp must be from THIS boot. A report written before this
+  // process started is now treated as stale and answered with null (see the
+  // "a stale report is not shown" test below) — so the fixture carries a
+  // current `at` while every assertion below stays exactly as strict.
+  const reportAt = Date.now();
   const report = {
-    at: 1_761_000_900_000,
-    atIso: new Date(1_761_000_900_000).toISOString(),
+    at: reportAt,
+    atIso: new Date(reportAt).toISOString(),
     log: '/tmp/startup-2026-11-01T00-00-00.000Z-aaaa.log',
     backupDir: '/tmp/backups/20261101T000000Z',
     backupKind: 'known-good',
@@ -2234,11 +2239,41 @@ test('health reports pluginRecovery, and the field is declared in the tool schem
   const after = fakeResponse();
   route.handler({ url: '/__dsh_autorestart/health' }, after);
   const body = JSON.parse(after.body);
-  assert.equal(body.pluginRecovery.at, 1_761_000_900_000);
+  assert.equal(body.pluginRecovery.at, reportAt);
   assert.equal(body.pluginRecovery.failures[0].plugin, 'broken-plugin');
   assert.equal(body.pluginRecovery.actions[0].mode, 'overwrite');
   assert.equal(body.pluginRecovery.restoredAt, 1_761_000_000_000);
   assert.equal(body.pluginRecovery.backupKind, 'known-good');
+});
+
+test('a STALE recovery report is not shown: one written before this boot answers null', () => {
+  const { dir, file } = tempStateFile('plugin-recovery-stale');
+  const { ctx, routes } = createRouteContext();
+  apply(ctx, { stateFile: file, recoveryDelayMs: 0, enabled: true });
+  const route = routes.find((entry) => entry.path === '/__dsh_autorestart/health');
+  assert.ok(route, 'the health route must be registered');
+
+  // THE REAL-MACHINE CASE (2026-11-01): `last-plugin-recovery.json` was left
+  // behind by an EARLIER boot and carried 188 fake failures. Nothing overwrote
+  // it — the boot pass writes nothing when it finds nothing — so without this
+  // rule the popup keeps offering to "restore" healthy plugins forever.
+  const staleAt = Date.now() - 60 * 60 * 1000;
+  writeAt(path.join(dir, 'last-plugin-recovery.json'), JSON.stringify({
+    at: staleAt,
+    atIso: new Date(staleAt).toISOString(),
+    failures: [{ plugin: 'timeout-policy', error: '' }],
+    actions: [],
+    restartRequested: false,
+    needsHuman: false,
+  }, null, 2));
+
+  const after = fakeResponse();
+  route.handler({ url: '/__dsh_autorestart/health' }, after);
+  const body = JSON.parse(after.body);
+  // The FIELD is still present — the interface must be able to tell "no
+  // incident" from "the field is missing" — it just answers null.
+  assert.equal(Object.prototype.hasOwnProperty.call(body, 'pluginRecovery'), true);
+  assert.equal(body.pluginRecovery, null, 'a report from before this boot is stale');
 });
 
 test('continuum_status carries pluginRecovery and declares it in the output schema', () => {
@@ -2253,9 +2288,12 @@ test('continuum_status carries pluginRecovery and declares it in the output sche
   // Never null: the key is OMITTED when there is nothing to report.
   assert.equal(Object.prototype.hasOwnProperty.call(status.execute({}), 'pluginRecovery'), false);
 
+  // Same rule as above: the report must belong to THIS boot, so `at` is current.
+  // Every assertion below is unchanged in strength.
+  const reportAt = Date.now();
   writeAt(path.join(dir, 'last-plugin-recovery.json'), JSON.stringify({
-    at: 1_761_000_900_000,
-    atIso: new Date(1_761_000_900_000).toISOString(),
+    at: reportAt,
+    atIso: new Date(reportAt).toISOString(),
     failures: [{ plugin: 'broken-plugin', error: 'boom' }],
     actions: [{ plugin: 'broken-plugin', mode: 'overwrite', restoredAt: 1_761_000_000_000, backupKind: 'known-good' }],
     restartRequested: true,

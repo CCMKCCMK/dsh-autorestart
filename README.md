@@ -1088,6 +1088,121 @@ once, in the same composer dock, as a small card:
   and records it on `POST /announcements` (`{ feature }`). The `version` in that answer is the feature
   version — the same number that `SLEEP_FEATURE_VERSION` holds.
 
+## 0.9.0: what is backed up, the three signals, and the edge of the watchdog
+
+> This chapter covers the 0.9.0 release notes. The Chinese original of the same chapter is in
+> [docs/README.zh.md](docs/README.zh.md). It only answers the four questions an ordinary user asks:
+> **what is backed up, how many signal layers there are, what the watchdog can save, and what to do in
+> which order when something is off.** Implementation details live in the sections above.
+
+### 1. What is backed up, and what is not
+
+| | In the backup | Why |
+|---|---|---|
+| **Backed up** | the profile configuration (`cordis.patch.yml`, `package.json`, `pnpm-lock.yaml`) **plus the plugins you wrote yourself and installed as a link (`link:`)** — their contents are kept separately in `node_modules-link/<name>/` | the plugins you write have **no definite source and no definite version**: delete one and nothing can fetch it again, so a backup is the only way |
+| **Not backed up** | **third-party plugins** (installed from npm) | they **do have a definite source and version**: `pnpm-lock.yaml` pins every package's version and integrity hash, so reinstalling brings back **the version from the backup, not the latest one** — a backup would be redundant, and reinstalling is more reliable than a copy |
+
+- Measured (from 2026-11-01 the slim backup is the default): one backup went from 308 MB to about 100 MB.
+- `backupIncludePlugins: false` → configuration only (about 66 KB, finished instantly). With that setting
+  **a plugin problem cannot be rolled back, it has to be reinstalled by hand**, and the settings page says so.
+- The old full-copy behaviour is still there: `slimBackup: false`.
+
+### 2. The three signal layers: two are certain, one is only a clue
+
+On every boot the plugin compares three layers against the list the previous boot recorded
+(`plugin-watch.json`):
+
+- **tool names** (`tools`) — plugins that provide tools (codekg, vault, release-board and the like);
+- **interface modules** (`clientModules`) — plugins that draw something in the interface;
+- **registered packages** (`packages`) — packages that register a schema.
+
+| Signal | Strength | What it proves | What it does not prove |
+|---|---|---|---|
+| **a tool name disappeared** | **certain** | these features really did not come up this time | which plugin caused it |
+| **a registered package disappeared** | **certain** | this package did not load this time | whether the files are wrong or the configuration disabled it |
+| **a plugin's files differ from the backup** | **clue** | this plugin may have been changed (it may also be your own edit, or an upgrade) | **not the same as broken** — a plugin whose files are all correct and that fails while loading is invisible to this layer |
+
+Three more limits belong right here:
+
+- **interface modules that map to no installed plugin** are counted and reported separately
+  ("also N interface module(s) did not appear this time"); they are **never attributed to a plugin** —
+  when the owner cannot be identified, no owner is guessed.
+- **a layer that cannot be read means "no news", never "gone"**: when a host upgrade changes the shape of
+  some API, the only possible answer is "this layer could not be seen this time", never "your plugin is gone".
+- **the file comparison uses the set of relative paths plus each file's size**, it never hashes a whole tree
+  (a real profile is about 150 MB). So it does find "a file was changed / deleted / is absent from the backup",
+  and it **does not find** a plugin whose files are all correct but which fails while loading (a missing peer
+  dependency, a throwing initialiser, a version the host refuses).
+
+### 3. "Inconsistent" is not the same as "broken" — the hard wording rule
+
+The popup and the settings page may only say two things:
+
+- "**these features did not come up this time**" (a certain fact — it already happened, it is not a guess);
+- "**these plugins differ from the backup**" (a difference list, with no conclusion drawn from it).
+
+**Never write "the plugin is broken"**: differing from the backup may simply mean you edited it, or upgraded
+it. The status word of a row in the settings page is only
+`fine` / `differs from the backup` / `not in the backup` / `not installed` / `cannot tell (no backup to compare
+against)` — there is no "broken" state.
+
+### 4. The watchdog: what it does
+
+- **Configurable**: `watchdogEnabled`, **on by default**; with it off, a new version that does not start has
+  to be handled by hand.
+- **It only stands watch inside one window**: a restart that **this plugin** started. After the host is
+  replaced it waits for the new instance and asks **that instance's own** health route (never the old
+  instance, never the old port), then works in a fixed order: **restore the newest proven ("known-good")
+  backup → clear the stale `dsh-auth-*` handshake cookies → start the host again → wait for the ready
+  marker**.
+- **Three possible triggers, one chosen from what this machine can do and reported honestly**: a Windows
+  scheduled task / a systemd user timer / a background process of its own; **with none of the three this
+  machine has no automatic rollback** and the settings page says exactly that.
+- **Bounded retries**: 3 by default (hard ceiling 10), with a backoff between passes, and the three questions
+  (is it up / is an instance alive / does health answer) are asked again before every start.
+- **Every attempt reaches the disk**: `<stateDir>/last-watchdog-report.json` — which tier, how many attempts,
+  and per attempt the restore / cookie clear / relaunch / ready, plus why it stopped. A report that never
+  reaches the disk is a report that never happened.
+
+### 5. The watchdog's blind spots (say them out loud)
+
+**What it can save**: **a plugin problem of its own making that keeps DSH from booting** — one snapshot is
+restored and the host is started again.
+
+**What it cannot save** (this list matters more than the line above):
+
+- **the DSH binary itself or the system environment** (a broken host upgrade, missing environment
+  dependencies). It repairs no bug of the host: a host that dies for the same reason every time only ends as
+  `failed`, with a report that names the attempts;
+- **third-party plugin problems** — it only looks at its own snapshot: it neither diagnoses which plugin
+  caused the failure nor fixes a third-party plugin's bug;
+- **a full disk, permission problems, changes made by a system update** — restoring a snapshot does not solve
+  any of those;
+- **everything outside the restart window** — a host killed by the system at 03:00, a client that is
+  start-and-die on a manual double-click, a morning with 0 processes: at that moment **nobody is on watch**
+  (the plugin died with the host and no one-off item was ever registered), and all that is left is
+  `scripts/restore-profile.cmd`, double-clicked by hand;
+- **`watchdogEnabled: false`, or a machine whose tier is `none`** → no automatic rollback, and the settings
+  page says so.
+
+### 6. The four steps after something went wrong
+
+1. **look at the popup** — it appears by itself after a restart and says two things separately: which
+   features did not come up this time, and which plugins' files differ from the backup;
+2. **or open the "plugins" section in the settings page and press "check now"** — every installed plugin is
+   listed with its current status (`fine` / `differs from the backup` / `not in the backup` / `not installed`
+   / `cannot tell`);
+3. **a plugin you wrote yourself → press "restore"** — only **that one** named plugin is put back to the
+   version in the backup: the live directory is renamed to `<name>.broken-<ts>` as evidence (`broken` is just
+   the name of that evidence directory, not a conclusion) and **nothing is ever deleted**; every other plugin
+   and `package.json` / `cordis.patch.yml` stay byte-identical;
+4. **a third-party plugin → reinstall the version the popup names** — the panel gives the command, and what
+   comes back is **the version recorded in the backup (not the latest one)**; when the backup does not record
+   the version, the panel says so plainly ("it can only be reinstalled by name").
+
+One precondition behind all four steps: **when there is no usable backup the plugin changes nothing for
+you** — it says "it has to be handled by hand" instead of pretending it restored something.
+
 ## Graceful shutdown (收工关机)
 
 **What it does.** One moon button at the very bottom of the left sidebar: press it and the plugin

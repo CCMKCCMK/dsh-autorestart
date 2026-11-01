@@ -153,7 +153,7 @@ function bootRuntime({ stateFile, snapshotDir, checksOk }) {
 test('③ a restart that came up promotes its snapshot to known-good', async (t) => {
   const { profile, stateDir, stateFile, backups } = fixture(t);
   // The copy a restart really takes: a plain, UNPROVEN snapshot (not the seed).
-  const snapshot = await createBackup({
+  const snapshot = await createBackup({ slimBackup: false,
     profileDir: profile,
     backupsDir: backups,
     includePlugins: false,
@@ -226,10 +226,10 @@ test('⑤ a seed that cannot be written says so, with the reason', async (t) => 
  * ⑥ Three copies are the default now.
  * ------------------------------------------------------------------ */
 
-test('⑥ the configuration default is three copies', () => {
-  assert.equal(DEFAULTS.maxBackups, 3, 'the default of the config');
-  assert.equal(normalizeConfig({}).maxBackups, 3, 'and after normalization');
-  assert.equal(normalizeConfig({ maxBackups: 'nonsense' }).maxBackups, 3, 'a wrong value falls back to three');
+test('⑥ the configuration default is twenty copies', () => {
+  assert.equal(DEFAULTS.maxBackups, 20, 'the default of the config');
+  assert.equal(normalizeConfig({}).maxBackups, 20, 'and after normalization');
+  assert.equal(normalizeConfig({ maxBackups: 'nonsense' }).maxBackups, 20, 'a wrong value falls back to twenty');
   assert.equal(normalizeConfig({ maxBackups: 1 }).maxBackups, 1, 'an explicit value still wins');
 });
 

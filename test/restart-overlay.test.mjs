@@ -676,6 +676,7 @@ test('the overlay is registered in the shell overlay layer', () => {
     [
       'conversation.input.dock',
       'conversation.input.left',
+      'plugins.bundle.config',
       'settings.section',
       'shell.overlay',
       'sidebar.footer.action',

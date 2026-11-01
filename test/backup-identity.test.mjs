@@ -63,7 +63,7 @@ function fixture(t) {
 
 /** One configuration-only backup at a fixed moment. */
 function takeBackup(profile, backups, now, options = {}) {
-  return createBackup({
+  return createBackup({ slimBackup: false,
     profileDir: profile,
     backupsDir: backups,
     includePlugins: false,
@@ -88,8 +88,10 @@ function names(backups) {
     .sort();
 }
 
-test('① three backups are kept by default', () => {
-  assert.equal(DEFAULT_MAX_BACKUPS, 3, 'the current copy plus the two before it');
+test('① twenty backups are kept by default', () => {
+  // A backup records CHANGES, not restarts (user decision, 2026-11-01): with
+  // hard-link dedup the history costs almost nothing, so three was far too few.
+  assert.equal(DEFAULT_MAX_BACKUPS, 20, 'twenty copies of history');
 });
 
 test('② pruning above the limit removes the OLDEST copies', async (t) => {
@@ -101,12 +103,26 @@ test('② pruning above the limit removes the OLDEST copies', async (t) => {
     made.push(result);
   }
 
+  // Five is far below the new default of twenty, so nothing is pruned yet.
   const left = names(backups);
-  assert.equal(left.length, 3, 'exactly three backups survive');
-  assert.equal(left.includes(made[0].stamp), false, 'the oldest copy was pruned');
-  assert.equal(left.includes(made[1].stamp), false, 'the second oldest was pruned');
-  for (const kept of made.slice(2)) {
-    assert.equal(left.includes(kept.stamp), true, 'the newest three survive');
+  assert.equal(left.length, 5, 'five backups are well inside the default of twenty');
+  for (const kept of made) {
+    assert.equal(left.includes(kept.stamp), true, 'every copy survives');
+  }
+
+  // Ask for two explicitly: pruning removes what exceeds the limit, EXCEPT the
+  // oldest, which is now permanent.
+  const removed = pruneBackups(backups, 2);
+  assert.equal(removed.includes(made[0].stamp), false, 'the oldest copy is permanently kept');
+  const after = names(backups);
+  assert.equal(after.includes(made[0].stamp), true, 'and it is still on disk');
+  assert.equal(after.includes(made[4].stamp), true, 'the newest one survives');
+  // Five copies, limit two: three victims. The oldest is protected, so the three
+  // middle ones go and the survivors are the newest plus that permanent oldest.
+  assert.equal(removed.length, 3, 'three copies were pruned');
+  assert.equal(after.length, 2, 'the newest plus the permanent oldest survive');
+  for (const middle of made.slice(1, 4)) {
+    assert.equal(after.includes(middle.stamp), false, 'a middle copy was pruned');
   }
 });
 
