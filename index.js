@@ -8071,35 +8071,31 @@ function persistSafely(runtime) {
   } catch {}
 }
 
-/** Register the model-facing lifecycle tools. */
-function registerTools(ctx, runtime, config) {
+/**
+ * BUILD the model-facing lifecycle tools — the definitions themselves, without
+ * registering anything.
+ *
+ * It is a separate function for one reason: a tool's output schema is STRICT
+ * (`additionalProperties: false`), and a single key the schema does not name
+ * makes the whole return value invalid — the host then answers the model with
+ * "tool returned invalid output" while the action itself already happened (see
+ * `continuum_restart` below; that is exactly the bug this split lets a test
+ * pin down). The test drives these definitions directly and compares every key
+ * `execute()` returns with the declared `properties`, so "returned a field and
+ * forgot to declare it" fails in CI instead of in front of the user.
+ *
+ * @param {object} runtime the runtime `createRuntime` returned.
+ * @param {object} config the normalized plugin config.
+ * @returns {object[]} the tool definitions, in registration order.
+ */
+export function buildLifecycleTools(runtime, config) {
   const log = runtime.log
 
-  /**
-   * Register one tool.
-   *
-   * The disposer returned by `ctx.tools.register` is handed to `ctx.effect`, so
-   * the HOST owns it: when the plugin row is disabled (or the plugin is
-   * hot-reloaded) the fiber disposes the effect and the tool is unregistered
-   * together with the HTTP routes. Registering it bare would leave the tools of
-   * the OLD instance registered (and the new instance's registration would fail
-   * as a duplicate), so the host could serve the tools of an instance whose
-   * routes are already gone.
-   *
-   * A failed registration is recorded in `runtime.toolErrors` and logged; it is
-   * never thrown, so one broken tool can never stop the plugin from loading.
-   */
+  const definitions = []
+
+  /** Collect one tool definition (registration happens in `registerTools`). */
   const tool = (definition) => {
-    const name = definition && definition.name ? String(definition.name) : null
-    try {
-      ctx.effect(
-        () => ctx.tools.register(definition),
-        `dsh-autorestart: tool ${name ?? 'unknown'}`,
-      )
-    } catch (error) {
-      runtime.toolErrors.push({ tool: name, error: describeError(error) })
-      log.warn(`could not register tool ${name}:`, String(error))
-    }
+    definitions.push(definition)
   }
 
   const textOutput = (schema, render) => ({ schema, render })
@@ -8152,6 +8148,28 @@ function registerTools(ctx, runtime, config) {
           generation: { type: 'integer' },
           phase: { type: 'string' },
           willResume: { type: 'boolean' },
+          // WHAT HAPPENED TO THE REQUEST (queued / deferred / cancelled), in
+          // the words the record uses — the same value `continuum_status`
+          // reports below.
+          //
+          // IT MUST BE DECLARED HERE, and this is the whole point of the
+          // entry: a tool output schema is STRICT (`additionalProperties:
+          // false`), so ONE key the schema does not name makes the ENTIRE
+          // return value invalid. `execute()` below has returned
+          // `restartRequest` since the request record was introduced, but the
+          // schema never learned about it — so every successful call answered
+          // "tool returned invalid output" while the restart itself went
+          // through. That is the worst shape a bug can take: the error reads
+          // as "the action did not happen", the caller retries or works
+          // around it, and the action HAS happened. More keys will be added to
+          // this answer over time; whoever adds one adds it here too.
+          //
+          // `null` is allowed even though `restartRequestInfo()` always
+          // answers with an object today ("state: none" IS an answer, not a
+          // missing value): it is the honest type of the field, and a stricter
+          // one would only wait for the day a helper starts answering null.
+          // This dialect has no `type: [...]` unions, hence the `oneOf`.
+          restartRequest: { oneOf: [{ type: 'object' }, { type: 'null' }] },
           note: { type: 'string' },
         },
       },
@@ -8832,6 +8850,38 @@ function registerTools(ctx, runtime, config) {
       }
     },
   })
+
+  return definitions
+}
+
+/** Register the model-facing lifecycle tools (see `buildLifecycleTools`). */
+function registerTools(ctx, runtime, config) {
+  /**
+   * Register one tool.
+   *
+   * The disposer returned by `ctx.tools.register` is handed to `ctx.effect`, so
+   * the HOST owns it: when the plugin row is disabled (or the plugin is
+   * hot-reloaded) the fiber disposes the effect and the tool is unregistered
+   * together with the HTTP routes. Registering it bare would leave the tools of
+   * the OLD instance registered (and the new instance's registration would fail
+   * as a duplicate), so the host could serve the tools of an instance whose
+   * routes are already gone.
+   *
+   * A failed registration is recorded in `runtime.toolErrors` and logged; it is
+   * never thrown, so one broken tool can never stop the plugin from loading.
+   */
+  for (const definition of buildLifecycleTools(runtime, config)) {
+    const name = definition && definition.name ? String(definition.name) : null
+    try {
+      ctx.effect(
+        () => ctx.tools.register(definition),
+        `dsh-autorestart: tool ${name ?? 'unknown'}`,
+      )
+    } catch (error) {
+      runtime.toolErrors.push({ tool: name, error: describeError(error) })
+      runtime.log.warn(`could not register tool ${name}:`, String(error))
+    }
+  }
 }
 
 /**
