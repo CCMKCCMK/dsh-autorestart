@@ -158,14 +158,15 @@ import {
   planWatchdogArbiter,
 } from './lib/watchdog-arbiter.js'
 import {
+  armSystemdWatchdog,
   buildWatchdogTaskCommand,
   cleanupSystemdUnit,
+  describeArmResult,
   detachedPidPath,
   localIso,
   quoteArgv,
   registerDetachedProcess,
   registerScheduledTask,
-  registerSystemdRun,
   removeScheduledTask,
 } from './lib/watchdog-schedule.js'
 import { detectHostKind } from './lib/host-kind.js'
@@ -4279,10 +4280,17 @@ const titleOfSummary = (item) => {
           xmlPath: path.join(stateDir, 'watchdog-task.xml'),
         });
       } else if (info.tier === TIERS.SYSTEMD_RUN) {
-        // The unit of an earlier run must be gone before a new one can take
-        // the name.
-        cleanupSystemdUnit({ unitId });
-        registered = registerSystemdRun({
+        // THE LEFTOVER OF AN EARLIER RUN IS STOPPED, NOT "RESET" (hosted
+        // instance 5601, real systemd log): `reset-failed` only clears the
+        // failed STATE, so a timer that is still waiting keeps the name and the
+        // next `systemd-run --unit=…` is refused with "Unit … already exists".
+        // That refusal used to be the end of it: arm failed → v2Armed=false →
+        // the arbiter fell back to the old v1 watcher, and since nothing ever
+        // stopped the leftover, EVERY later arm failed the same way — one bad
+        // leftover degraded the watchdog for good. `armSystemdWatchdog` stops
+        // the units first, retries once after a forced cleanup, and reports
+        // which of the two saved it (or which step refused).
+        registered = armSystemdWatchdog({
           unitId,
           delaySeconds: Math.ceil(timeoutMs / 1000),
           command: [armCommand.file, ...armCommand.args],
@@ -4302,18 +4310,44 @@ const titleOfSummary = (item) => {
     if (!registered || registered.ok !== true) {
       // Nothing half-armed: the marker goes, and so does the scheduling item.
       clearPending(stateDir);
+      let cleanupAfterFailure = null;
       try {
-        if (info.tier === TIERS.SCHEDULED_TASK) removeScheduledTask({ taskName });
-        else if (info.tier === TIERS.SYSTEMD_RUN) cleanupSystemdUnit({ unitId });
-      } catch {
-        // The next run cleans up.
+        if (info.tier === TIERS.SCHEDULED_TASK) cleanupAfterFailure = removeScheduledTask({ taskName });
+        else if (info.tier === TIERS.SYSTEMD_RUN) cleanupAfterFailure = cleanupSystemdUnit({ unitId });
+      } catch (error) {
+        // The next run cleans up — but the failure of THIS cleanup is recorded,
+        // because a silent cleanup is exactly how the leftover survived before.
+        cleanupAfterFailure = { ok: false, error: String(error) };
       }
       const reason = (registered && registered.error) || 'the watchdog could not be registered';
-      log.warn('the watchdog was not armed: ' + reason);
-      return { ok: false, tier: info.tier, reason: info.tierReason, error: reason };
+      // WHAT THE FAILED ARMING LOOKED LIKE (cleanup / retry / which step): the
+      // caller writes it into the report, so "not armed" is never a bare
+      // sentence — an operator must be able to see WHY and WHAT stayed behind.
+      const armReport = describeArmResult(registered);
+      log.warn('the watchdog was not armed: ' + reason, {
+        armOutcome: armReport.armOutcome,
+        armDetail: armReport.armDetail,
+        residualUnits: armReport.armResidualUnits,
+        failedSteps: armReport.armFailedSteps,
+        cleanupAfterFailure,
+      });
+      return {
+        ok: false,
+        tier: info.tier,
+        reason: info.tierReason,
+        error: reason,
+        ...armReport,
+        cleanupAfterFailure,
+      };
     }
-    log.warn('the watchdog is armed (' + info.tier + '): ' + info.tierReason);
-    return { ok: true, tier: info.tier, reason: info.tierReason, error: null };
+    const armReport = describeArmResult(registered);
+    log.warn('the watchdog is armed (' + info.tier + '): ' + info.tierReason, {
+      armOutcome: armReport.armOutcome,
+      armDetail: armReport.armDetail,
+      retried: armReport.armRetried,
+      cleanup: armReport.armCleanup,
+    });
+    return { ok: true, tier: info.tier, reason: info.tierReason, error: null, ...armReport };
   }
 
   /**
@@ -4837,17 +4871,24 @@ const titleOfSummary = (item) => {
   }
 
   /**
-   * Say in the report WHO is watching this restart.
+   * Say in the report WHO is watching this restart — and, when v2 could not be
+   * armed, WHY NOT.
    *
    * The v2 watchdog writes its own report when it acts. When v1 is the
    * arbiter (v2 could not be armed), the host writes it right away — so
    * `last-watchdog-report.json` always names the arbiter, and a problem can
    * be read at a glance.
    *
+   * The arming result travels with it (`armOutcome` / `armDetail` /
+   * `armResidualUnits` / `armFailedSteps`): a fallback to v1 that does not say
+   * which unit stayed behind would be the same silence this change removes.
+   *
    * @param {string} arbiter
    * @param {string} reason
+   * @param {string} tier
+   * @param {object|null} arm the result of `armWatchdog` (null when unknown)
    */
-  const writeArbiterReport = (arbiter, reason, tier = 'none') => {
+  const writeArbiterReport = (arbiter, reason, tier = 'none', arm = null) => {
     try {
       writeReport(stateDirOf(), {
         at: new Date().toISOString(),
@@ -4861,6 +4902,7 @@ const titleOfSummary = (item) => {
         relaunched: false,
         ready: false,
         error: null,
+        ...describeArmResult(arm),
       })
     } catch (error) {
       log.warn('could not write the arbiter report:', String(error))
@@ -5186,12 +5228,25 @@ const titleOfSummary = (item) => {
         })
         if (arbiter.startV1 === true) {
           armRollbackWatcher({ backup, profileDir })
-          writeArbiterReport(ARBITERS.V1, arbiter.reason, 'none')
+          writeArbiterReport(ARBITERS.V1, arbiter.reason, 'none', watchdogArm)
+          // The fallback to v1 must say WHY in the log too: without this line
+          // the operator only sees "v1 started" and never learns that a
+          // leftover systemd unit kept v2 away.
+          log.warn('the watchdog v2 is NOT the arbiter, the old watcher takes over', {
+            tier: watchdogArm && watchdogArm.tier ? watchdogArm.tier : 'none',
+            armOutcome: watchdogArm && watchdogArm.armOutcome ? watchdogArm.armOutcome : null,
+            armDetail: watchdogArm && watchdogArm.armDetail ? watchdogArm.armDetail : '',
+            armError: watchdogArm && watchdogArm.error ? watchdogArm.error : null,
+            residualUnits: watchdogArm && Array.isArray(watchdogArm.armResidualUnits)
+              ? watchdogArm.armResidualUnits
+              : [],
+          })
         } else if (arbiter.arbiter === ARBITERS.V2) {
-          writeArbiterReport(ARBITERS.V2, arbiter.reason, watchdogArm.tier)
+          writeArbiterReport(ARBITERS.V2, arbiter.reason, watchdogArm.tier, watchdogArm)
           log.warn('the watchdog v2 takes over: the old rollback watcher is NOT started', {
             tier: watchdogArm.tier,
             tierReason: watchdogArm.tierReason || '',
+            armOutcome: watchdogArm.armOutcome || null,
           })
         }
 
@@ -5329,12 +5384,22 @@ const titleOfSummary = (item) => {
           ? path.join(stateDir, 'restart-' + state.generation + '-watch.ps1')
           : null
         if (arbiter.startV1 === true) {
-          writeArbiterReport(ARBITERS.V1, arbiter.reason, 'none')
+          writeArbiterReport(ARBITERS.V1, arbiter.reason, 'none', watchdogArm)
+          log.warn('the watchdog v2 is NOT the arbiter, the old watcher takes over', {
+            tier: watchdogArm && watchdogArm.tier ? watchdogArm.tier : 'none',
+            armOutcome: watchdogArm && watchdogArm.armOutcome ? watchdogArm.armOutcome : null,
+            armDetail: watchdogArm && watchdogArm.armDetail ? watchdogArm.armDetail : '',
+            armError: watchdogArm && watchdogArm.error ? watchdogArm.error : null,
+            residualUnits: watchdogArm && Array.isArray(watchdogArm.armResidualUnits)
+              ? watchdogArm.armResidualUnits
+              : [],
+          })
         } else if (arbiter.arbiter === ARBITERS.V2) {
-          writeArbiterReport(ARBITERS.V2, arbiter.reason, watchdogArm.tier)
+          writeArbiterReport(ARBITERS.V2, arbiter.reason, watchdogArm.tier, watchdogArm)
           log.warn('the watchdog v2 takes over: the old rollback watcher is NOT started', {
             tier: watchdogArm.tier,
             tierReason: watchdogArm.tierReason || '',
+            armOutcome: watchdogArm.armOutcome || null,
           })
         }
         const watchScript = watchScriptPath === null
