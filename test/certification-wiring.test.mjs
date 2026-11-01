@@ -54,8 +54,10 @@ import {
   buildRestartVerdict,
   compareConfigurationFingerprints,
   decideBootCertification,
+  decideProbeCertification,
   FINGERPRINT_LOG_CHARS,
   FINGERPRINT_STATES,
+  PROBE_CHECK_SOURCE,
   RESTART_CHECK_NAMES,
   shortFingerprint,
   writeRestartVerdict,
@@ -248,6 +250,95 @@ test('the fingerprint comparison on its own names the five outcomes', () => {
   assert.notEqual(mismatch.snapshotShort, mismatch.currentShort);
   assert.equal(shortFingerprint(null), '(none)', '"nothing recorded" is visible as such');
   assert.equal(shortFingerprint(''), '(none)');
+});
+
+/* ------------------------------------------------------------------ *
+ * The SECOND path of the same rule: command mode (the health probe).
+ *
+ * WHY THESE TESTS EXIST: the first path (app mode) got the fingerprint gate in
+ * `c419846`; the command-mode path kept the old shape and stamped the snapshot as
+ * `command-probe` as soon as the probe answered. "A probe answered" says nothing
+ * about whether the configuration in the snapshot can boot, so the same content
+ * gate has to apply — and the two paths must not be able to disagree in wording
+ * either, which is what the last assertion here pins.
+ * ------------------------------------------------------------------ */
+
+test('a health probe on the SAME content certifies the copy — as `command-probe`', () => {
+  const decision = decideProbeCertification(sameContent());
+  assert.equal(decision.certified, true);
+  assert.equal(decision.certifiedBy, PROBE_CHECK_SOURCE);
+  assert.equal(decision.certifiedBy, 'command-probe', 'the source says what really happened: a probe answered');
+  assert.equal(decision.fingerprintState, FINGERPRINT_STATES.EQUAL);
+  assert.equal(decision.fingerprintsEqual, true);
+  assert.equal(decision.snapshotFingerprint, SNAPSHOT_FINGERPRINT);
+  assert.equal(decision.currentFingerprint, SNAPSHOT_FINGERPRINT);
+  assert.match(decision.reason, /the health probe answered and this boot runs exactly the configuration the snapshot holds/);
+});
+
+test('a health probe that answered on a CHANGED configuration certifies NOTHING', () => {
+  // THE SECOND PATH OF THE REAL-MACHINE FAILURE: the probe answered (an instance
+  // was up), but the configuration on disk is not the one in the snapshot — it was
+  // restored / edited / rewritten in between. Certifying that copy is how a broken
+  // state becomes the "safe" one (the copy 2026-11-01T12-04-33-777Z).
+  const decision = decideProbeCertification({
+    snapshotFingerprint: SNAPSHOT_FINGERPRINT,
+    currentFingerprint: OTHER_FINGERPRINT,
+  });
+  assert.equal(decision.certified, false);
+  assert.equal(decision.certifiedBy, 'none');
+  assert.equal(decision.fingerprintState, FINGERPRINT_STATES.MISMATCH);
+  assert.equal(decision.fingerprintsEqual, false);
+  assert.match(
+    decision.reason,
+    /the configuration was changed between the two boots \(a restore, a manual edit or another writer\): this copy was never proven/,
+  );
+  // Both values are in the reason (short form), so the reader sees WHICH differ.
+  assert.match(decision.reason, /sha256:aaaaa/);
+  assert.match(decision.reason, /sha256:bbbbb/);
+
+  // THE TWO PATHS REFUSE WITH THE SAME SENTENCE (no check problems on the app-mode
+  // side, so only the content half can be the reason): one rule, one wording.
+  const bootDecision = decideBootCertification(passingChecks(), {
+    snapshotFingerprint: SNAPSHOT_FINGERPRINT,
+    currentFingerprint: OTHER_FINGERPRINT,
+  });
+  assert.equal(decision.reason, bootDecision.reason, 'command mode and app mode must not disagree about the news');
+});
+
+test('a health probe cannot certify a snapshot that has no fingerprint', () => {
+  const decision = decideProbeCertification({ currentFingerprint: OTHER_FINGERPRINT });
+  assert.equal(decision.certified, false, 'an old copy is not "probably fine" because a probe answered');
+  assert.equal(decision.certifiedBy, 'none');
+  assert.equal(decision.fingerprintState, FINGERPRINT_STATES.SNAPSHOT_MISSING);
+  assert.equal(decision.snapshotFingerprint, null);
+  assert.match(decision.reason, /^the copy stays unproven: /);
+  assert.match(decision.reason, /the snapshot has no contentFingerprint/);
+});
+
+test('a health probe cannot certify when the running configuration cannot be fingerprinted', () => {
+  const decision = decideProbeCertification({ snapshotFingerprint: SNAPSHOT_FINGERPRINT });
+  assert.equal(decision.certified, false);
+  assert.equal(decision.certifiedBy, 'none');
+  assert.equal(decision.fingerprintState, FINGERPRINT_STATES.CURRENT_MISSING);
+  assert.equal(decision.currentFingerprint, null);
+  assert.match(decision.reason, /could not fingerprint its own configuration/);
+});
+
+test('with NO fingerprint at all the probe certifies nothing (the old call shape is not a pass)', () => {
+  // THE SHAPE THE OLD CODE HAD: only the snapshot's own fingerprint was available
+  // and nothing was compared — `decideProbeCertification()` with no input is that
+  // case, and it refuses.
+  const decision = decideProbeCertification();
+  assert.equal(decision.certified, false, 'a probe answering alone is not a proof');
+  assert.equal(decision.certifiedBy, 'none');
+  assert.equal(decision.fingerprintState, FINGERPRINT_STATES.BOTH_MISSING);
+  assert.match(decision.reason, /neither side has a configuration fingerprint/);
+
+  // Empty / non-string values are "not recorded", never a fingerprint.
+  const empty = decideProbeCertification({ snapshotFingerprint: '   ', currentFingerprint: '' });
+  assert.equal(empty.certified, false);
+  assert.equal(empty.fingerprintState, FINGERPRINT_STATES.BOTH_MISSING);
+  assert.equal(decideProbeCertification({ snapshotFingerprint: 42, currentFingerprint: null }).certified, false);
 });
 
 /* ------------------------------------------------------------------ *

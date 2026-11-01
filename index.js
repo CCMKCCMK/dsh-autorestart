@@ -79,7 +79,6 @@ import {
   claimRollbackLock,
   clearRollbackReport,
   CONFIG_FILES,
-  contentFingerprintOf,
   contentScopeOf,
   createBackup,
   DEFAULT_MAX_BACKUPS,
@@ -188,6 +187,7 @@ import {
   buildRestartVerdict,
   buildSnapshotRecord,
   decideBootCertification,
+  decideProbeCertification,
   evaluateRestartChecks,
   localIsoTime,
   readRestartVerdict,
@@ -5761,22 +5761,77 @@ const titleOfSummary = (item) => {
             // restart command, so the proof it has is "the new instance answers".
             // The certifying source therefore says exactly that (`command-probe`)
             // instead of borrowing the name of a check that never ran.
+            //
+            // 但「新实例答了健康路由」并不等于「重启前那份配置能起来」（2026-11-01，本插件第二条同型路径）：
+            //   - 探活可能是**旧实例**答的（端口/引导号没换、或新实例根本起在别的配置上）；
+            //   - 配置可能在快照与这次探活之间被换过（还原、手改、别的写入者）。
+            // 只要这两件事有任何一件发生，把重启前那份盖成 `command-probe` 安全份，
+            // 就是 12-04-33 那次事故的翻版（坏配置被认证，随后被「还原」覆盖回去）。
+            // 所以这里和 app 模式那条（verifyRestartBoot -> decideBootCertification）用**同一条判据**：
+            //   快照 meta 里的 contentFingerprint == 此刻磁盘上这份配置的指纹，两侧都存在且相等才盖章。
+            // 判据本身在 lib/restart-verdict.js 里（decideProbeCertification），两处共用同一个比对函数，
+            // 不许在这里另写一套——两条路径的口径一旦分叉，先坏的那条没人会发现。
+            //
+            // WHERE THE TWO SIDES COME FROM (为什么是这两个值，不是别的)：
+            //   - 快照侧：`readBackupMeta(backup.dir).contentFingerprint`，即复制那份时 meta.json **当时记下**的指纹。
+            //     不能改用 `contentFingerprintOf(backup.dir)`（复算副本现在的内容）：那样一份事后被改过的副本
+            //     就能靠「自己现在的样子」给自己盖章（与 app 模式 verifyRestartBoot 里那段注释同一个理由）。
+            //   - 现役侧：`profileConfigFingerprint(profileDir)`，读的是**这次运行所用的 profile 根目录**里的
+            //     cordis.patch.yml / package.json / pnpm-lock.yaml。这个 `profileDir` 来自本函数的
+            //     `snapshot.profileDir`，而它和 app 模式用的 `runtime.profileDir.dir`（getter 同样调用
+            //     resolveProfileDirDetailed()）是**同一个解析器**的结果，所以两侧指的是同一个目录、同一个布局
+            //     （profile 根目录，不是副本里的 config/ 子目录）。
+            //   - 时机：command 模式下这段跑在**旧宿主进程**里（见上面 5746 附近那段注释），此刻磁盘上的配置
+            //     就是新实例启动时读的那一份；之后若有人又写了配置，指纹就会不一致——那正是要拒绝的时候。
+            // 拿不到任何一侧的可靠指纹时**一律拒绝**：宁可没有安全份，也不许盖错章。
             if (backup && typeof backup.dir === 'string' && backup.dir !== '') {
-              const intervention = detectBootIntervention(stateDir, { sinceMs: restartStartedAt })
-              const promoted = markKnownGood(backup.dir, {
-                reason: 'boot-ok',
-                certifiedBy: CERTIFIED_BY.COMMAND_PROBE,
-                contentFingerprint: contentFingerprintOf(backup.dir),
-                contentScope: contentScopeOf(backup.dir),
-                intervention: intervention.intervention,
-              })
-              log.info('the snapshot of this restart is certified by the health probe', {
-                dir: backup.dir,
-                promoted: promoted.promoted,
-                certifiedBy: CERTIFIED_BY.COMMAND_PROBE,
-                intervention: intervention.intervention,
-                interventionReason: intervention.reason,
-              })
+              const snapshotFingerprint = readBackupMeta(backup.dir).contentFingerprint
+              const currentFingerprint = profileConfigFingerprint(profileDir)
+              const decision = decideProbeCertification({ snapshotFingerprint, currentFingerprint })
+              if (decision.certified !== true) {
+                // NOTHING is promoted and the meta is NOT touched. Same wording as
+                // the app-mode refusal (`... stays UNPROVEN: <reason>`), so an
+                // operator reading the log cannot tell the two paths apart by
+                // accident — and the two short fingerprints say WHICH differ.
+                log.warn('the snapshot of this restart stays UNPROVEN: ' + decision.reason, {
+                  dir: backup.dir,
+                  mode: 'command',
+                  certifiedBy: decision.certifiedBy,
+                  fingerprintState: decision.fingerprintState,
+                  snapshotFingerprint: shortFingerprint(decision.snapshotFingerprint),
+                  currentFingerprint: shortFingerprint(decision.currentFingerprint),
+                  // Said out loud: the probe DID answer, and that is not enough.
+                  probeAnswered: true,
+                })
+              } else {
+                const intervention = detectBootIntervention(stateDir, { sinceMs: restartStartedAt })
+                const promoted = markKnownGood(backup.dir, {
+                  reason: 'boot-ok',
+                  certifiedBy: CERTIFIED_BY.COMMAND_PROBE,
+                  // The content that was PROVEN is the fingerprint that was compared —
+                  // the one the snapshot recorded, now shown to be what this boot runs.
+                  contentFingerprint: decision.snapshotFingerprint,
+                  contentScope: contentScopeOf(backup.dir),
+                  intervention: intervention.intervention,
+                })
+                log.info('the snapshot of this restart is certified: the health probe answered and this boot runs exactly the snapshot content', {
+                  dir: backup.dir,
+                  mode: 'command',
+                  promoted: promoted.promoted,
+                  certifiedBy: decision.certifiedBy,
+                  fingerprintState: decision.fingerprintState,
+                  snapshotFingerprint: shortFingerprint(decision.snapshotFingerprint),
+                  currentFingerprint: shortFingerprint(decision.currentFingerprint),
+                  intervention: intervention.intervention,
+                  interventionReason: intervention.reason,
+                  // Recorded, not part of the decision — same as the app-mode path.
+                  interventionUsedAsEvidence: false,
+                })
+              }
+            } else {
+              // The probe answered but this restart took no snapshot: there is
+              // nothing to certify, and inventing one would be the old mistake.
+              log.warn('the new instance answered, but this restart took no snapshot: nothing is certified')
             }
             writeRestartOutcome({ decided: true, ok: true, reason: 'the new instance answered' })
             recordRestartVerdict({

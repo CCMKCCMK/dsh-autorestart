@@ -41,15 +41,19 @@ import { requestRestart } from '../lib/checkpoint.js'
 import {
   backupStamp,
   claimRollbackLock,
+  contentFingerprintOf,
   KIND_KNOWN_GOOD,
   KIND_SNAPSHOT,
   latestKnownGood,
   listBackupIdentities,
   markKnownGood,
+  META_NAME,
+  readBackupMeta,
   releaseRollbackLock,
 } from '../lib/backup.js'
 import { ACCESS_FILE_NAME, readAccessRecord, resolveAccessUrl, writeAccessRecord } from '../lib/access.js'
 import { healthUrlForPort, probeHealth, waitForHealthyInstance } from '../lib/health.js'
+import { FINGERPRINT_LOG_CHARS } from '../lib/restart-verdict.js'
 import { buildWatcherCommandLine, launchDetachedWatcher, runCommandNow } from '../lib/restart.js'
 
 const APP_EXE = 'C:\\Program Files\\DeepSeek Harness\\DeepSeek Harness.exe'
@@ -301,7 +305,7 @@ async function runHostedRestart(t, options = {}) {
       commands.push(command)
       // The restart command is free to break the profile on its way out; the
       // rollback has to undo whatever it did.
-      if (typeof options.onCommand === 'function') options.onCommand({ command, profile })
+      if (typeof options.onCommand === 'function') options.onCommand({ command, profile, state })
       return options.commandOutcome || { ok: true, command, exitCode: 0, timedOut: false }
     },
     launchWatcher: (options_) => {
@@ -487,6 +491,148 @@ test('the hosted branch does NOT roll back when the new instance answers', async
     false,
     'a healthy restart logs no error',
   )
+})
+
+// ---------------------------------------------------------------------------
+// 2b. THE COMMAND-MODE CERTIFICATION: a probe answering is NOT a proof.
+//
+// WHY: until 2026-11-01 this path stamped the pre-restart snapshot as
+// `command-probe` as soon as the health probe answered, recording the copy's OWN
+// fingerprint and never comparing it with the configuration that was running.
+// "A probe answered" does not prove that the content of the snapshot can boot —
+// the probe may have hit the old instance, and the configuration may have been
+// swapped in between (that is the copy 2026-11-01T12-04-33-777Z). The gate is now
+// the same one the app-mode path uses: both fingerprints exist and are EQUAL.
+// ---------------------------------------------------------------------------
+
+/** The structured detail of a log line (the logger stringifies it as JSON). */
+function logDetail(entry) {
+  const text = String(entry && entry.text ? entry.text : '')
+  const start = text.indexOf('{')
+  assert.notEqual(start, -1, 'the log line carries a structured detail')
+  return JSON.parse(text.slice(start))
+}
+
+/**
+ * The snapshot THIS restart took.
+ *
+ * Two ways to name it, because the two moments differ: while the restart is
+ * running only the plain snapshot exists (`knownGoodDir === null`), and after it
+ * the copy may have BECOME known-good — then it is "the one that is not the seeded
+ * copy". Both ways assert that exactly one candidate is found.
+ *
+ * @param {{ dir: string }} state
+ * @param {string|null} [knownGoodDir]
+ */
+function snapshotOfThisRestart(state, knownGoodDir = null) {
+  const entries = listBackupIdentities(path.join(state.dir, 'backups'))
+  const entry = knownGoodDir === null
+    ? entries.find((candidate) => candidate.kind === KIND_SNAPSHOT)
+    : entries.find((candidate) => candidate.dir !== knownGoodDir)
+  assert.ok(entry, 'this restart took its own snapshot')
+  return entry
+}
+
+test('a probe that answered on the SAME configuration certifies it, and the fingerprint WAS compared', async (t) => {
+  const { state, fake, knownGoodDir } = await runHostedRestart(t, { label: 'probe-equal' })
+  const snapshot = snapshotOfThisRestart(state, knownGoodDir)
+
+  const meta = readBackupMeta(snapshot.dir)
+  assert.equal(meta.kind, KIND_KNOWN_GOOD, 'the probe answered on the snapshot content, so the copy is proven')
+  assert.equal(meta.certifiedBy, 'command-probe', 'and the source says what proved it')
+  assert.equal(
+    meta.contentFingerprint,
+    contentFingerprintOf(snapshot.dir),
+    'the content that was proven is the content the copy really holds',
+  )
+
+  const certified = fake.logs.find((entry) => entry.level === 'info'
+    && entry.text.includes('is certified: the health probe answered'))
+  assert.ok(certified, 'the promotion is reported')
+  const detail = logDetail(certified)
+  assert.equal(detail.fingerprintState, 'equal');
+  assert.equal(detail.snapshotFingerprint, detail.currentFingerprint, 'the two sides really were compared, and matched')
+  assert.equal(detail.snapshotFingerprint.length, FINGERPRINT_LOG_CHARS, 'the log shows short values, not the whole digest')
+  assert.equal(detail.interventionUsedAsEvidence, false, 'the rescue flag is recorded, not the criterion')
+})
+
+test('a probe that answered on a CHANGED configuration certifies NOTHING', async (t) => {
+  const { state, fake, knownGoodDir } = await runHostedRestart(t, {
+    label: 'probe-mismatch',
+    knownGood: { patch: 'rows:\n  - id: known-good\n' },
+    // The configuration is written to between the snapshot and the probe — a
+    // restore, a hand edit, another writer. The probe still answers (an instance
+    // is up), and that is exactly the news that is NOT a proof.
+    onCommand: ({ profile: where }) => fs.writeFileSync(
+      path.join(where, 'cordis.patch.yml'),
+      'rows:\n  - id: edited-after-the-snapshot\n',
+      'utf8',
+    ),
+    probeOutcome: { ok: true, reason: 'the new instance answered its health route' },
+  })
+
+  const snapshot = snapshotOfThisRestart(state, knownGoodDir)
+  const meta = readBackupMeta(snapshot.dir)
+  assert.equal(meta.kind, KIND_SNAPSHOT, 'the copy stays unproven');
+  assert.equal(meta.certifiedBy, 'none', 'an answered probe on other content is NOT a certification')
+  assert.equal(
+    latestKnownGood(path.join(state.dir, 'backups')).dir,
+    knownGoodDir,
+    'no NEW safe copy appeared — the older proven one is still the newest',
+  )
+
+  const refusal = fake.logs.find((entry) => entry.level === 'warn' && entry.text.includes('stays UNPROVEN'))
+  assert.ok(refusal, 'the refusal is REPORTED, not silent')
+  assert.match(
+    refusal.text,
+    /the configuration was changed between the two boots \(a restore, a manual edit or another writer\): this copy was never proven/,
+  )
+  const detail = logDetail(refusal)
+  assert.equal(detail.fingerprintState, 'mismatch')
+  assert.equal(detail.snapshotFingerprint.length, FINGERPRINT_LOG_CHARS)
+  assert.equal(detail.currentFingerprint.length, FINGERPRINT_LOG_CHARS)
+  assert.notEqual(detail.snapshotFingerprint, detail.currentFingerprint, 'the log shows WHICH two values differ')
+  assert.equal(detail.probeAnswered, true, 'the log says the probe DID answer — and that it was not enough')
+
+  // The restart itself still succeeded: only the certification was refused.
+  const marker = JSON.parse(fs.readFileSync(path.join(state.dir, 'restart-outcome.json'), 'utf8'))
+  assert.equal(marker.ok, true)
+  assert.equal(
+    fs.existsSync(path.join(state.dir, 'last-rollback.json')),
+    false,
+    'a refused certification is not a reason to roll anything back',
+  )
+})
+
+test('a snapshot taken before fingerprints existed is not certified by a probe', async (t) => {
+  const { state, fake, knownGoodDir } = await runHostedRestart(t, {
+    label: 'probe-no-fingerprint',
+    knownGood: { patch: 'rows:\n  - id: known-good\n' },
+    // An OLD copy: its meta.json has no `contentFingerprint` at all (it was taken
+    // before fingerprints existed). Nothing can be compared, so nothing is proven.
+    onCommand: ({ state: where }) => {
+      const snapshot = snapshotOfThisRestart(where)
+      const metaPath = path.join(snapshot.dir, META_NAME)
+      const raw = JSON.parse(fs.readFileSync(metaPath, 'utf8'))
+      delete raw.contentFingerprint
+      fs.writeFileSync(metaPath, JSON.stringify(raw), 'utf8')
+    },
+    probeOutcome: { ok: true, reason: 'the new instance answered its health route' },
+  })
+
+  const snapshot = snapshotOfThisRestart(state, knownGoodDir)
+  const meta = readBackupMeta(snapshot.dir)
+  assert.equal(meta.kind, KIND_SNAPSHOT, 'the copy stays unproven')
+  assert.equal(meta.certifiedBy, 'none', 'no proof beats a guessed one')
+  assert.equal(meta.contentFingerprint, null, 'the meta was NOT given a fingerprint it never had')
+  assert.equal(latestKnownGood(path.join(state.dir, 'backups')).dir, knownGoodDir, 'nothing new was certified')
+
+  const refusal = fake.logs.find((entry) => entry.level === 'warn' && entry.text.includes('stays UNPROVEN'))
+  assert.ok(refusal, 'the refusal is reported')
+  const detail = logDetail(refusal)
+  assert.equal(detail.fingerprintState, 'snapshot-missing')
+  assert.match(refusal.text, /the snapshot has no contentFingerprint/)
+  assert.match(refusal.text, /taken before fingerprints existed/)
 })
 
 test('a restart command that fails is reported and rolls the snapshot back', async (t) => {
