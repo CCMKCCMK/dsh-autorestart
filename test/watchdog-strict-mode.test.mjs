@@ -40,11 +40,17 @@ import {
  * ------------------------------------------------------------------ */
 
 /** One backup candidate, newest first when several are listed. */
-function candidate(dir, { certifiedBy = 'full-checks', intervention = false, certified = null } = {}) {
+function candidate(dir, { certifiedBy = 'full-checks', intervention = false, certified = null, certificationEvidence = 'default' } = {}) {
   return {
     dir: '/backups/' + dir,
     name: dir,
     certifiedBy,
+    // THE CRITERION (2026-11-01): a candidate that names a source but records no
+    // criterion is exactly the historical pollution, so the fixture has to say
+    // which one it is building. The default describes an ordinary proven copy.
+    certificationEvidence: certificationEvidence === 'default'
+      ? (certifiedBy === 'none' ? null : 'fingerprint-match')
+      : certificationEvidence,
     intervention,
     certified: certified === null ? certifiedBy !== 'none' : certified,
   };

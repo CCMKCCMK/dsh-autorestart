@@ -398,6 +398,14 @@
     'settings.backup.certified.none': '未认证',
     'settings.backup.certifiedAtTime': '认证于 {time}',
     'settings.backup.certifiedAtMissing': '（没有记录）',
+    // WHAT "certified by" WAS CHECKED WITH (2026-11-01). The row above names WHO
+    // signed; this one names the criterion — and the difference matters, because
+    // the old criterion and the new one both sign as "four checks passed".
+    'settings.backup.evidenceLabel': '认证判据',
+    'settings.backup.evidence.fingerprint-match': '指纹比对通过（新判据）',
+    'settings.backup.evidence.seed': '首装种子：还没被验证过，只是新装时唯一的一份',
+    'settings.backup.evidence.stale': '旧判据盖的章：没有可验证的判据，自动还原不会选它',
+    'settings.backup.evidence.none': '没有判据记录',
     'settings.backup.scopeLabel': '内容范围',
     'settings.backup.scope.config-only': '只含配置',
     'settings.backup.scope.config+plugins': '配置 + 已装插件',
@@ -843,6 +851,13 @@
     'settings.backup.certified.none': 'not certified',
     'settings.backup.certifiedAtTime': 'checked {time}',
     'settings.backup.certifiedAtMissing': '(not recorded)',
+    // The criterion behind "certified by": who signed is not enough, WHAT was
+    // checked is what makes the seal worth something (2026-11-01).
+    'settings.backup.evidenceLabel': 'Certification criterion',
+    'settings.backup.evidence.fingerprint-match': 'the fingerprints matched (current rule)',
+    'settings.backup.evidence.seed': 'first-install seed: never proven, just the only copy a fresh install has',
+    'settings.backup.evidence.stale': "signed under the OLD rule: no checkable criterion, never picked automatically",
+    'settings.backup.evidence.none': 'no criterion recorded',
     'settings.backup.scopeLabel': 'What it holds',
     'settings.backup.scope.config-only': 'configuration only',
     'settings.backup.scope.config+plugins': 'configuration and installed plugins',
@@ -2313,6 +2328,33 @@
     if (certifiedBy === 'command-probe') return 'command-probe'
     if (certifiedBy === 'seed') return 'seed'
     if (certifiedBy === 'manual-rollback') return 'manual-rollback'
+    return 'none'
+  }
+
+  /**
+   * WHICH dictionary entry says WHICH CRITERION proved this copy (2026-11-01).
+   *
+   * WHY A SEPARATE ROW: `certifiedBy` says WHO signed — and the old criterion
+   * ("the host came up") and the new one ("this boot ran exactly the content the
+   * copy holds") both sign as `full-checks`. On the hosted instance that made the
+   * two broken 71B/70B configurations look identical to a proven copy, so the page
+   * has to show the difference instead of leaving it to a footnote.
+   *
+   * THREE ANSWERS, and none of them is rounded up:
+   *   'fingerprint-match'  proven by the comparison;
+   *   nothing recorded + a source named  -> an old stamp, NOT trusted any more;
+   *   nothing recorded + no source       -> never certified at all.
+   * The seed is not a fourth kind of proof: it is a copy taken before anything was
+   * proven, and the wording says exactly that.
+   *
+   * @param {unknown} certificationEvidence
+   * @param {unknown} certifiedBy
+   * @returns {string} the suffix of `settings.backup.evidence.*`
+   */
+  function backupEvidenceKey(certificationEvidence, certifiedBy) {
+    if (certificationEvidence === 'fingerprint-match') return 'fingerprint-match'
+    if (certifiedBy === 'seed') return 'seed'
+    if (typeof certifiedBy === 'string' && certifiedBy !== '' && certifiedBy !== 'none') return 'stale'
     return 'none'
   }
 
@@ -6693,6 +6735,33 @@
                       },
                       fill(t('settings.backup.certifiedAtTime'), { time: formatBackupTime(item && item.certifiedAt) }),
                     ),
+                ),
+                // WHICH CRITERION — the missing half of "certified by" (2026-11-01).
+                // The row above says WHO signed; this one says WHAT WAS CHECKED, and
+                // that is the difference the user must see: an old stamp has a source
+                // and no criterion, so it is refused as a safe copy even though it
+                // still reads `full-checks`. Without this row the two are identical
+                // on screen — which is how the bad copies got trusted on the hosted
+                // instance.
+                h(
+                  'div',
+                  { className: 'dsh-autorestart-settings__backup-row' },
+                  h(
+                    'span',
+                    { className: 'dsh-autorestart-settings__backup-label' },
+                    t('settings.backup.evidenceLabel'),
+                  ),
+                  h(
+                    'span',
+                    {
+                      className: 'dsh-autorestart-settings__backup-badge',
+                      'data-dsh-autorestart-backup': 'certification-evidence',
+                    },
+                    t('settings.backup.evidence.' + backupEvidenceKey(
+                      item && item.certificationEvidence,
+                      item && item.certifiedBy,
+                    )),
+                  ),
                 ),
                 // WHAT the certification is ABOUT: a configuration-only copy
                 // that booted says nothing about the plugin tree, so the scope

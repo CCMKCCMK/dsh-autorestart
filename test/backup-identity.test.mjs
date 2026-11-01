@@ -34,6 +34,7 @@ import test from 'node:test';
 
 import {
   backupsRoot,
+  CERTIFICATION_EVIDENCE,
   CERTIFIED_BY,
   contentFingerprintOf,
   contentScopeOf,
@@ -150,9 +151,16 @@ test('③ pruning NEVER removes the newest known-good copy', (t) => {
   ];
   for (const stamp of stamps) rawBackup(backups, stamp);
   // EVIDENCE IS NOW REQUIRED (2026-11-01): "a boot came up" has to say WHAT was
-  // checked, so the fixture names the source instead of hoping for a stamp.
+  // checked, so the fixture names the source instead of hoping for a stamp — and
+  // since the criterion is part of the identity, it names that too: a copy with a
+  // source and no criterion is the historical pollution, not a safe copy.
   assert.equal(
-    markKnownGood(path.join(backups, stamps[0]), { reason: 'boot-ok', version: '0.8.5', certifiedBy: 'full-checks' }).promoted,
+    markKnownGood(path.join(backups, stamps[0]), {
+      reason: 'boot-ok',
+      version: '0.8.5',
+      certifiedBy: 'full-checks',
+      certificationEvidence: CERTIFICATION_EVIDENCE.FINGERPRINT_MATCH,
+    }).promoted,
     true,
   );
 
@@ -187,14 +195,21 @@ test('⑤ markKnownGood promotes a copy and keeps its version', async (t) => {
   assert.equal(latestKnownGood(backups), null, 'an unproven copy is not a rollback target');
 
   // EVIDENCE, NOT A STAMP (2026-11-01): the promotion now says which check backed
-  // it, so the meta can answer "why is this copy safe?" afterwards.
+  // it AND which criterion was applied, so the meta can answer "why is this copy
+  // safe?" afterwards.
   assert.equal(
-    markKnownGood(snapshot.dir, { reason: 'boot-ok', version: '0.8.5', certifiedBy: 'full-checks' }).promoted,
+    markKnownGood(snapshot.dir, {
+      reason: 'boot-ok',
+      version: '0.8.5',
+      certifiedBy: 'full-checks',
+      certificationEvidence: CERTIFICATION_EVIDENCE.FINGERPRINT_MATCH,
+    }).promoted,
     true,
   );
   const meta = readBackupMeta(snapshot.dir);
   assert.equal(meta.kind, KIND_KNOWN_GOOD);
   assert.equal(meta.certifiedBy, 'full-checks', 'the source that certified it');
+  assert.equal(meta.certificationEvidence, CERTIFICATION_EVIDENCE.FINGERPRINT_MATCH, 'and the criterion that was applied');
   assert.equal(meta.version, '0.8.5', 'the version it was proven with');
   assert.equal(meta.reason, 'boot-ok');
   assert.equal(meta.requestId, 7, 'the request that took it is kept');
@@ -365,6 +380,9 @@ test('⑦ markKnownGood writes the evidence: source, time, fingerprint, scope, i
     reason: 'the four startup checks passed',
     version: '0.8.5',
     certifiedBy: CERTIFIED_BY.FULL_CHECKS,
+    // THE CRITERION IS PART OF THE EVIDENCE (2026-11-01): the fingerprint of this
+    // copy was compared with the configuration that really booted.
+    certificationEvidence: CERTIFICATION_EVIDENCE.FINGERPRINT_MATCH,
     certifiedAt,
     intervention: false,
   });
@@ -374,6 +392,7 @@ test('⑦ markKnownGood writes the evidence: source, time, fingerprint, scope, i
   const after = readBackupMeta(backup.dir);
   assert.equal(after.kind, KIND_KNOWN_GOOD);
   assert.equal(after.certifiedBy, CERTIFIED_BY.FULL_CHECKS, 'which check backed it');
+  assert.equal(after.certificationEvidence, CERTIFICATION_EVIDENCE.FINGERPRINT_MATCH, 'and WHICH criterion was applied');
   assert.equal(after.certifiedAt, certifiedAt, 'when it was checked');
   assert.equal(after.contentFingerprint, before.contentFingerprint, 'the same content that was certified');
   assert.equal(after.contentScope, CONTENT_SCOPES.CONFIG_ONLY);
@@ -497,11 +516,14 @@ test('⑦ pruning never deletes the LAST certified copy, even when the limit say
   for (const stamp of stamps) certRawBackup(backups, stamp);
   // The certified one is a MIDDLE copy and it is NOT known-good: the only thing
   // standing between it and the "oldest first" order is the certification floor.
+  // It is certified by source AND criterion (2026-11-01) — a source alone protects
+  // nothing any more, exactly as it restores nothing any more.
   assert.equal(
     writeBackupMeta(path.join(backups, stamps[1]), {
       kind: KIND_SNAPSHOT,
       at: 1_000,
       certifiedBy: CERTIFIED_BY.COMMAND_PROBE,
+      certificationEvidence: CERTIFICATION_EVIDENCE.FINGERPRINT_MATCH,
       certifiedAt: '2026-02-02T00:00:00.000Z',
     }),
     true,

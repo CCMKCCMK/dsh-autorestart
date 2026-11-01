@@ -221,6 +221,13 @@
       },
       "certifiedAtTime": "checked {time}",
       "certifiedAtMissing": "(not recorded)",
+      "evidenceLabel": "Certification criterion",
+      "evidence": {
+        "fingerprint-match": "the fingerprints matched (current rule)",
+        "seed": "first-install seed: never proven, just the only copy a fresh install has",
+        "stale": "signed under the OLD rule: no checkable criterion, never picked automatically",
+        "none": "no criterion recorded"
+      },
       "scopeLabel": "What it holds",
       "scope": {
         "config-only": "configuration only",

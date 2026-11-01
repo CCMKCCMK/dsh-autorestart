@@ -1922,6 +1922,12 @@ function pluginRecoveryFixture(label, { plugin = 'broken-plugin', error = 'Error
       at: 1_761_000_000_000,
       version: '0.9.0',
       reason: 'boot-ok',
+      // THE CRITERION (2026-11-01): a `known-good` KIND with no evidence is the
+      // historical pollution — a stamp nobody can check. The fixture builds the
+      // ordinary case (a copy whose configuration was compared with the boot that
+      // ran on it), which is the only copy a recovery may restore from.
+      certifiedBy: 'full-checks',
+      certificationEvidence: 'fingerprint-match',
     }));
   }
 

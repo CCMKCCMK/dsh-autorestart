@@ -78,11 +78,19 @@ function makeBackup(root, { copied = ['copied-plugin'], linked = ['linked-plugin
     writeFile(path.join(backupDir, 'node_modules-link', name, 'package.json'), `{"name":"${name}","version":"0.9.0"}`);
     writeFile(path.join(backupDir, 'node_modules-link', name, 'index.js'), 'export const linked = true;\n');
   }
+  // A COPY A RECOVERY MAY USE (2026-11-01): `kind: 'known-good'` alone is not a
+  // safe copy any more — the identity needs a source AND the criterion that was
+  // applied to it (`fingerprint-match`). A fixture that only stamped the kind
+  // would now describe exactly the historical pollution: a copy that looks proven
+  // and cannot be checked. What the tests below exercise is an ORDINARY proven
+  // copy, so the fixture states both halves.
   writeBackupMeta(backupDir, {
     kind: KIND_KNOWN_GOOD,
     at: 1_761_000_000_000,
     version: '0.9.0',
     reason: 'boot-ok',
+    certifiedBy: 'full-checks',
+    certificationEvidence: 'fingerprint-match',
   });
   return backupDir;
 }

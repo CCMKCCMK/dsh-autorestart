@@ -158,7 +158,16 @@ function seedKnownGood(state, options = {}) {
   // A copy whose intervention is `null` ("nobody recorded it") is deliberately
   // NOT restorable, so a fixture that wants a restorable copy has to say so.
   assert.equal(
-    markKnownGood(dir, { reason: 'test', version, certifiedBy: 'manual-rollback', intervention: false }).promoted,
+    markKnownGood(dir, {
+      reason: 'test',
+      version,
+      certifiedBy: 'manual-rollback',
+      // AND THE CRITERION (2026-11-01): a source alone is not a safe copy any
+      // more. The fixture describes a copy whose content was compared with what
+      // really booted, which is the only shape an automatic rollback may use.
+      certificationEvidence: 'fingerprint-match',
+      intervention: false,
+    }).promoted,
     true,
     'the test copy is marked known-good',
   );

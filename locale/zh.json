@@ -221,6 +221,13 @@
       },
       "certifiedAtTime": "认证于 {time}",
       "certifiedAtMissing": "（没有记录）",
+      "evidenceLabel": "认证判据",
+      "evidence": {
+        "fingerprint-match": "指纹比对通过（新判据）",
+        "seed": "首装种子：还没被验证过，只是新装时唯一的一份",
+        "stale": "旧判据盖的章：没有可验证的判据，自动还原不会选它",
+        "none": "没有判据记录"
+      },
       "scopeLabel": "内容范围",
       "scope": {
         "config-only": "只含配置",

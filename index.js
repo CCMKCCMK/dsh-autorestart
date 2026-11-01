@@ -4299,6 +4299,11 @@ const titleOfSummary = (item) => {
       // that has none of these fields arrives as `'none'` / `null` — not as an
       // error, and above all not as "safe": the interface shows "not certified".
       certifiedBy: item.certifiedBy,
+      // WHICH CRITERION BACKED IT (2026-11-01), so the settings page can show the
+      // one difference the user must be able to see: a copy proven by the
+      // fingerprint comparison vs. a copy stamped by the OLD criterion, whose seal
+      // cannot be checked any more (and is therefore not used as a restore point).
+      certificationEvidence: item.certificationEvidence,
       certifiedAt: item.certifiedAt,
       contentScope: item.contentScope,
       // true / false / null — `null` means "not recorded", and the interface has
@@ -5837,6 +5842,14 @@ const titleOfSummary = (item) => {
                   const promoted = markKnownGood(backup.dir, {
                     reason: 'boot-ok',
                     certifiedBy: CERTIFIED_BY.COMMAND_PROBE,
+                    // AND WHICH CRITERION PROVED IT (2026-11-01): `fingerprint-match`,
+                    // i.e. the comparison `decideProbeCertification` just accepted.
+                    // Without it the seal would name a source and nothing else — the
+                    // exact shape of the two broken 71B/70B configurations this
+                    // change exists to invalidate. The value comes FROM the decision
+                    // (`null` when it refused), so a refusal can never be written as
+                    // a stamp even if a future edit forgets to check `certified`.
+                    certificationEvidence: decision.certificationEvidence,
                     // The content that was PROVEN is the fingerprint that was compared —
                     // recorded in the meta, or computed from the copy when the meta had
                     // none. Either way THIS is the value the comparison accepted, so it
@@ -5850,6 +5863,7 @@ const titleOfSummary = (item) => {
                     mode: 'command',
                     promoted: promoted.promoted,
                     certifiedBy: decision.certifiedBy,
+                    certificationEvidence: decision.certificationEvidence,
                     fingerprintState: decision.fingerprintState,
                     fingerprintSource: side.source,
                     snapshotFingerprint: shortFingerprint(decision.snapshotFingerprint),
@@ -7997,6 +8011,15 @@ export async function verifyRestartBoot(runtime, options = {}) {
             const promoted = markKnownGood(snapshotDir, {
               reason: 'boot-ok',
               certifiedBy: CERTIFIED_BY.FULL_CHECKS,
+              // AND THE CRITERION, from the decision itself (`null` when it
+              // refused): the two fingerprints were compared and matched. This is
+              // the "补封条" channel — an OLD copy whose meta recorded no
+              // fingerprint gets one computed from its own `config/` and is then
+              // sealed exactly like a fresh one, so an upgrade does not take away
+              // the safe copies a user already had. What it never does is seal a
+              // copy whose content did NOT match: `decideBootCertification` refuses
+              // those, and a refusal carries `certificationEvidence: null`.
+              certificationEvidence: decision.certificationEvidence,
               // The content that was PROVEN is the fingerprint that was compared —
               // recorded in the meta, or computed from the copy when the meta had
               // none. Either way THIS is the value the comparison accepted, so it
@@ -8009,6 +8032,7 @@ export async function verifyRestartBoot(runtime, options = {}) {
               dir: snapshotDir,
               promoted: promoted.promoted,
               certifiedBy: decision.certifiedBy,
+              certificationEvidence: decision.certificationEvidence,
               fingerprintSource: side.source,
               contentFingerprint: shortFingerprint(decision.snapshotFingerprint),
               intervention: intervention.intervention,

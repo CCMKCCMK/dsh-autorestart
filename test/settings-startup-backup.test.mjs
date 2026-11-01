@@ -601,14 +601,14 @@ test('two backups are two spaced groups, each with a labelled time row and size 
     )
     const rows = walk(group).filter((node) => node.props
       && String(node.props.className).includes('dsh-autorestart-settings__backup-row'))
-    // FIVE ROWS SINCE 2026-11-01: the three evidence rows (certified by,
-    // certified at, content scope — plus the intervention row) join the time
-    // and the size. The two that were already there are still exactly one each.
-    assert.equal(rows.length, 5, `backup ${index + 1} keeps its time row, its size row and the evidence rows`)
+    // SIX ROWS SINCE 2026-11-01 (the criterion row joined them): the four evidence
+    // rows (certified by, WHICH CRITERION, content scope, intervention), plus the
+    // time and the size. The two that were already there are still exactly one each.
+    assert.equal(rows.length, 6, `backup ${index + 1} keeps its time row, its size row and the evidence rows`)
     const marks = new Set(walk(group)
       .map((node) => node.props && node.props['data-dsh-autorestart-backup'])
       .filter((value) => typeof value === 'string'))
-    for (const name of ['time', 'size', 'certified', 'certified-at', 'scope', 'intervention']) {
+    for (const name of ['time', 'size', 'certified', 'certification-evidence', 'certified-at', 'scope', 'intervention']) {
       assert.equal(marks.has(name), true, `backup ${index + 1} shows its "${name}" row`)
     }
   }
@@ -782,16 +782,24 @@ test('② the three identities are written out in plain Chinese on every row', a
     assert.ok(first, `backup ${index + 1} names its identity`)
     const rows = walk(group).filter((node) => node.props
       && String(node.props.className).includes('dsh-autorestart-settings__backup-row'))
-    // FIVE ROWS SINCE 2026-11-01: the identity is followed by its evidence
-    // (certified by / certified at / content scope / intervention), and the time
-    // and size rows are still there — one each, as before.
-    assert.equal(rows.length, 5, `backup ${index + 1} keeps the time row, the size row and the evidence rows`)
+    // SIX ROWS SINCE 2026-11-01: the identity is followed by its evidence
+    // (certified by / WHICH CRITERION / content scope / intervention), and the
+    // time and size rows are still there — one each, as before.
+    assert.equal(rows.length, 6, `backup ${index + 1} keeps the time row, the size row and the evidence rows`)
     // An OLD copy has no evidence: the rows say "未认证" / "（没有记录）" instead of
     // disappearing, so the interface never implies a proof that does not exist.
     assert.deepEqual(
       backupValues(panel, 'certified'),
       ['未认证', '未认证', '未认证'],
       'a copy without evidence says it is not certified',
+    )
+    // AND THE CRITERION ROW says which of the two absences it is: no source at all
+    // (`没有判据记录`) is different from a stamp that cannot be checked
+    // (`旧判据盖的章`). These three copies name no source, so they read the first.
+    assert.deepEqual(
+      backupValues(panel, 'certification-evidence'),
+      ['没有判据记录', '没有判据记录', '没有判据记录'],
+      'a copy with no stamp at all says so, and does not borrow the words of a stamped one',
     )
     assert.deepEqual(
       backupValues(panel, 'intervention'),

@@ -574,6 +574,10 @@ test('a boot whose four checks passed certifies the copy — with the evidence',
   const meta = readBackupMeta(snapshot.dir);
   assert.equal(meta.kind, KIND_KNOWN_GOOD, 'the four checks on the SAME content certified the copy');
   assert.equal(meta.certifiedBy, 'full-checks');
+  // AND THE CRITERION (2026-11-01): without it the seal would name a source and
+  // nothing else — indistinguishable from the two broken 71B/70B copies the old
+  // code stamped with the very same `full-checks`.
+  assert.equal(meta.certificationEvidence, 'fingerprint-match', 'the criterion travels with the source');
   assert.ok(Number.isFinite(Date.parse(meta.certifiedAt)));
   assert.equal(meta.contentScope, 'config-only');
   assert.equal(
@@ -828,6 +832,11 @@ test('a boot whose snapshot is an OLD copy certifies it when the content is what
   const meta = readBackupMeta(snapshot.dir);
   assert.equal(meta.kind, KIND_KNOWN_GOOD, '没指纹 ≠ 内容不对：补算出来的指纹对上了，这份副本就是被证明的');
   assert.equal(meta.certifiedBy, 'full-checks', '四条启动检查都过了，来源照实写');
+  // THE UPGRADE CHANNEL WRITES THE CRITERION TOO (user decision 2026-11-01): an
+  // old copy whose content really matches is "re-sealed", and the seal now names
+  // HOW it was proven — otherwise the rescued copy would be as unverifiable as the
+  // polluted ones it sits next to.
+  assert.equal(meta.certificationEvidence, 'fingerprint-match', '老备份补封条时也要写明判据');
 
   const certified = runtime.infos.find((entry) => /is certified/.test(String(entry.message)));
   assert.ok(certified, 'the promotion is reported');
@@ -856,6 +865,7 @@ test('a boot whose OLD snapshot does NOT match the running content certifies not
   assert.equal(fs.readFileSync(path.join(snapshot.dir, META_NAME), 'utf8'), before, 'meta.json is byte-for-byte unchanged');
   assert.equal(readBackupMeta(snapshot.dir).kind, KIND_SNAPSHOT);
   assert.equal(readBackupMeta(snapshot.dir).certifiedBy, 'none');
+  assert.equal(readBackupMeta(snapshot.dir).certificationEvidence, null, 'and no criterion was recorded either');
   // 现算值只用于这一次判定：判失败了，它更没有理由被写进 meta。
   assert.equal(readBackupMeta(snapshot.dir).contentFingerprint, null, 'the computed value was NOT written back');
 
@@ -935,6 +945,10 @@ test('backupsInfo hands certifiedBy / certifiedAt / contentScope / intervention 
   markKnownGood(certified.dir, {
     reason: 'boot-ok',
     certifiedBy: 'full-checks',
+    // THE CRITERION (2026-11-01): the interface has to be able to tell a copy
+    // proven by the fingerprint comparison from one that only carries a stamp, so
+    // the fixture states both halves, exactly as the boot path does.
+    certificationEvidence: 'fingerprint-match',
     certifiedAt: '2026-11-01T10:00:00.000Z',
     intervention: true,
   });
@@ -990,7 +1004,12 @@ test('backupsInfo reports an unrecorded intervention as null, and a "no" as fals
     includePlugins: false,
     now: 12_000,
   });
-  markKnownGood(clean.dir, { reason: 'boot-ok', certifiedBy: 'command-probe', intervention: false });
+  markKnownGood(clean.dir, {
+    reason: 'boot-ok',
+    certifiedBy: 'command-probe',
+    certificationEvidence: 'fingerprint-match',
+    intervention: false,
+  });
 
   const runtime = createRuntime(hostContext(), normalizeConfig({
     stateFile: values.stateFile,
