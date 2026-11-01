@@ -187,6 +187,7 @@ import {
   buildSnapshotRecord,
   decideBootCertification,
   evaluateRestartChecks,
+  localIsoTime,
   readRestartVerdict,
   RESTART_RESULTS,
   summarizeRestartVerdict,
@@ -2427,6 +2428,295 @@ export function writeRestartPending(stateDir, pending) {
 }
 
 /**
+ * THE FATE OF THE LAST RESTART REQUEST — one durable record, one vocabulary.
+ *
+ * WHY THIS EXISTS (real-host report, hosted `dsh web` on WSL/5601): `POST /park`
+ * answered `pendingRestart: true, restartRequested: true`, and afterwards
+ * `state.restart` was `null`, the generation had not moved, no restart had
+ * happened and `last-restart-verdict.json` had no new record. Nothing anywhere
+ * said what had become of that request — the operator could only observe that
+ * the request was gone.
+ *
+ * The request is dropped in exactly six places in this file (see
+ * `dropRestartRequest`, which every one of them now calls). Before this record
+ * existed, four of them wrote only a log line and two wrote nothing at all — and
+ * a log line is not a record: it rotates, it is not in the state directory, and
+ * the UI/health surfaces never see it.
+ *
+ * The verdict file (`last-restart-verdict.json`) is NOT reused for this: its
+ * `result` vocabulary is `pending` / `ok` / `failed` — it describes a restart
+ * that HAPPENED, and a cancellation is not one. Writing `pending` there would
+ * claim a restart is in flight that never was.
+ */
+export const RESTART_REQUEST_FILE = 'last-restart-request.json'
+
+/** What can happen to a restart request. */
+export const RESTART_REQUEST_STATES = Object.freeze({
+  /** Accepted, nobody has executed it yet (the gate is waiting). */
+  QUEUED: 'queued',
+  /** The gate postponed it; the request is STILL ALIVE (never a cancel). */
+  DEFERRED: 'deferred',
+  /** The restart is being carried out (snapshot / arm / command). */
+  EXECUTING: 'executing',
+  /** The request was withdrawn; `reason` + `by` + `at` say why, who, when. */
+  CANCELLED: 'cancelled',
+})
+
+/**
+ * @param {string} stateDir
+ * @returns {string} where the record of the last restart request lives
+ */
+export function restartRequestPath(stateDir) {
+  return path.join(String(stateDir ?? ''), RESTART_REQUEST_FILE)
+}
+
+/** @param {unknown} value */
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+/**
+ * The record of one restart request, normalized.
+ *
+ * Every field is deliberately flat and nullable: this file is read by a human
+ * with `cat`, by the health route and by `continuum_status`, and none of them
+ * should have to know the internals of the checkpoint.
+ *
+ * @param {{
+ *   result?: string,
+ *   reason?: string|null,
+ *   by?: string|null,
+ *   restart?: object|null,
+ *   now?: number,
+ *   extra?: object,
+ * }} [input]
+ * @returns {object}
+ */
+export function buildRestartRequestRecord({
+  result = RESTART_REQUEST_STATES.QUEUED,
+  reason = null,
+  by = null,
+  restart = null,
+  now = Date.now(),
+  extra = {},
+} = {}) {
+  const known = Object.values(RESTART_REQUEST_STATES)
+  const request = isPlainObject(restart) ? restart : {}
+  const requestedAt = Number.isFinite(request.requestedAt) ? Number(request.requestedAt) : null
+  const at = Number.isFinite(now) ? Number(now) : Date.now()
+  const requesters = Array.isArray(request.requesters)
+    ? request.requesters
+      .map((entry) => (isPlainObject(entry) && typeof entry.sessionId === 'string' ? entry.sessionId : null))
+      .filter((id) => typeof id === 'string' && id !== '')
+    : []
+  return {
+    version: 1,
+    // WHICH REQUEST this is about: the generation of the checkpoint request.
+    generation: Number.isFinite(request.generation) ? Math.trunc(request.generation) : null,
+    result: known.includes(result) ? result : RESTART_REQUEST_STATES.QUEUED,
+    // WHY it was postponed / cancelled — the sentence the operator needs.
+    reason: typeof reason === 'string' && reason !== '' ? reason : null,
+    // WHO did it: 'tool', 'route', 'boot', 'gate', 'rollback', 'snapshot-cancel', …
+    by: typeof by === 'string' && by !== '' ? by : null,
+    // WHEN (epoch + the wall clock the operator reads).
+    at,
+    atLocal: localIsoTime(at),
+    requestedAt,
+    requestedAtLocal: localIsoTime(requestedAt),
+    // HOW LONG the request was alive before this record was written.
+    waitedMs: requestedAt === null ? null : Math.max(0, at - requestedAt),
+    attempts: Number.isFinite(request.attempt) ? Math.trunc(request.attempt) : 0,
+    snapshotTaken: Boolean(request.snapshot),
+    requesters,
+    bySessionId: typeof request.bySessionId === 'string' && request.bySessionId !== '' ? request.bySessionId : null,
+    ...extra,
+  }
+}
+
+/**
+ * Write the record (atomically: temporary file + rename, so a half-written
+ * record is never read).
+ *
+ * @param {string} stateDir
+ * @param {object} record
+ * @param {{ writeFile?: Function, rename?: Function, mkdir?: Function }} [io]
+ * @returns {{ ok: boolean, path: string, error: string|null }}
+ */
+export function writeRestartRequestRecord(stateDir, record, {
+  writeFile = (target, content) => fs.writeFileSync(target, content, 'utf8'),
+  rename = (from, to) => fs.renameSync(from, to),
+  mkdir = (dir) => fs.mkdirSync(dir, { recursive: true }),
+} = {}) {
+  const dir = typeof stateDir === 'string' ? stateDir.trim() : ''
+  if (dir === '') return { ok: false, path: '', error: 'there is no state directory to write the request record into' }
+  const target = restartRequestPath(dir)
+  const temporary = target + '.tmp-' + crypto.randomBytes(6).toString('hex')
+  try {
+    mkdir(dir)
+    writeFile(temporary, JSON.stringify(record, null, 2) + '\n')
+    rename(temporary, target)
+    return { ok: true, path: target, error: null }
+  } catch (error) {
+    return { ok: false, path: target, error: String(error && error.message ? error.message : error) }
+  }
+}
+
+/**
+ * Read the record of the last restart request. Never throws: a missing or
+ * corrupt file is `null` (there is nothing to report).
+ *
+ * @param {string} stateDir
+ * @returns {object|null}
+ */
+export function readRestartRequestRecord(stateDir) {
+  const dir = typeof stateDir === 'string' ? stateDir.trim() : ''
+  if (dir === '') return null
+  try {
+    let text = fs.readFileSync(restartRequestPath(dir), 'utf8')
+    if (text.charCodeAt(0) === 0xfeff) text = text.slice(1)
+    const parsed = JSON.parse(text)
+    return isPlainObject(parsed) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * THE HONEST ANSWER about the restart request: what the park response, the
+ * health route and `continuum_status` report.
+ *
+ * The three answers are deliberately different words, because they are three
+ * different situations:
+ *
+ *   - `queued`    — accepted, waiting for the idle gate;
+ *   - `deferred`  — the gate postponed it, and it is STILL waiting (`deadlineAt`
+ *                   says when the wait stops being "patient" — see `note`);
+ *   - `cancelled` — it will not happen; `reason`/`by`/`at` say why, who, when.
+ *
+ * @param {{ restart?: object|null, record?: object|null, now?: number }} [input]
+ * @returns {object}
+ */
+export function summarizeRestartRequest({ restart = null, record = null, now = Date.now() } = {}) {
+  const live = isPlainObject(restart) ? restart : null
+  const last = isPlainObject(record) ? record : null
+  const at = Number.isFinite(Number(now)) ? Number(now) : Date.now()
+  if (live !== null) {
+    // A live request: the RECORD tells whether it was ever postponed, and for
+    // which reason. A record about a different request is stale and ignored.
+    const sameRequest = last !== null
+      && (last.requestedAt === null || last.requestedAt === live.requestedAt)
+    const deferred = sameRequest && last.result === RESTART_REQUEST_STATES.DEFERRED
+    const requestedAt = Number.isFinite(live.requestedAt) ? Number(live.requestedAt) : null
+    const deadlineAt = sameRequest && Number.isFinite(last.deadlineAt) ? last.deadlineAt : null
+    return {
+      state: deferred ? RESTART_REQUEST_STATES.DEFERRED : RESTART_REQUEST_STATES.QUEUED,
+      pending: true,
+      reason: deferred ? last.reason : null,
+      by: deferred ? last.by : null,
+      at: deferred ? last.at : null,
+      atLocal: deferred ? last.atLocal : null,
+      requestedAt,
+      requestedAtLocal: requestedAt === null ? null : localIsoTime(requestedAt),
+      // How long the user has been waiting ALREADY.
+      waitedMs: requestedAt === null ? null : Math.max(0, at - requestedAt),
+      // When the hard deadline is. `deadlineCutsTheRequest: false` means "past
+      // this moment the plugin keeps waiting instead of giving up" — that is the
+      // default, and saying it out loud is the difference between a documented
+      // wait and a request that silently evaporates.
+      deadlineAt,
+      deadlineInMs: deadlineAt === null ? null : Math.max(0, deadlineAt - at),
+      deadlineCutsTheRequest: sameRequest ? last.deadlineCutsTheRequest === true : false,
+      requesters: Array.isArray(live.requesters)
+        ? live.requesters.map((entry) => (isPlainObject(entry) ? entry.sessionId : null)).filter(Boolean)
+        : [],
+      note: deferred
+        ? 'the gate postponed this restart; the request is kept and retried while the host waits for the conversations to finish'
+        : 'the request is queued; it runs as soon as the idle gate allows it',
+    }
+  }
+  if (last === null) {
+    return { state: 'none', pending: false, reason: null, by: null, at: null, atLocal: null, note: 'no restart was ever requested' }
+  }
+  // No live request: the record of the LAST one is the whole answer.
+  return {
+    state: last.result === RESTART_REQUEST_STATES.CANCELLED
+      ? RESTART_REQUEST_STATES.CANCELLED
+      : (last.result === RESTART_REQUEST_STATES.EXECUTING ? RESTART_REQUEST_STATES.EXECUTING : 'none'),
+    pending: false,
+    reason: typeof last.reason === 'string' ? last.reason : null,
+    by: typeof last.by === 'string' ? last.by : null,
+    at: Number.isFinite(last.at) ? last.at : null,
+    atLocal: typeof last.atLocal === 'string' ? last.atLocal : null,
+    requestedAt: Number.isFinite(last.requestedAt) ? last.requestedAt : null,
+    requestedAtLocal: typeof last.requestedAtLocal === 'string' ? last.requestedAtLocal : null,
+    waitedMs: Number.isFinite(last.waitedMs) ? last.waitedMs : null,
+    requesters: Array.isArray(last.requesters) ? last.requesters : [],
+    note: last.result === RESTART_REQUEST_STATES.CANCELLED
+      ? 'this restart request was withdrawn; reason, who and when are in this record'
+      : 'the last restart request is no longer pending',
+  }
+}
+
+/**
+ * DID THIS BOOT CONSUME THE PENDING RESTART, OR IS IT STILL WAITING FOR ONE?
+ *
+ * The boot recovery pass used to clear a pending restart unconditionally ("a
+ * restart requested before the last shutdown has been consumed by this boot").
+ * That is true only when the old instance had really STARTED the restart. A
+ * request that was merely QUEUED (deferred by the idle gate, nothing executed:
+ * `attempt === 0`, no snapshot) was never consumed by anything — dropping it on
+ * the next boot is exactly the silent disappearance this change removes.
+ *
+ * The rule, in one place:
+ *
+ *   - the old instance executed it (`attempt > 0` or a snapshot was taken) →
+ *     this boot replaced that instance: the request is CONSUMED, drop it with a
+ *     record;
+ *   - never executed and still FRESH → keep it, it is still what the user asked
+ *     for;
+ *   - never executed and older than `freshMs` → do not restart the host for a
+ *     request from another day: drop it WITH a record.
+ *
+ * @param {{ restart?: object|null, now?: number, freshMs?: number }} [input]
+ * @returns {{ action: 'none'|'keep'|'drop', why: string, detail: string }}
+ */
+export function decidePendingRestartOnBoot({
+  restart = null,
+  now = Date.now(),
+  freshMs = RESTART_VERDICT_FRESH_MS,
+} = {}) {
+  const request = isPlainObject(restart) ? restart : null
+  if (request === null) {
+    return { action: 'none', why: 'no-restart-pending', detail: 'nothing was pending' }
+  }
+  const at = Number.isFinite(Number(now)) ? Number(now) : Date.now()
+  const requestedAt = Number.isFinite(request.requestedAt) ? Number(request.requestedAt) : 0
+  const attempts = Number.isFinite(request.attempt) ? Math.trunc(request.attempt) : 0
+  const executed = attempts > 0 || Boolean(request.snapshot)
+  if (executed) {
+    return {
+      action: 'drop',
+      why: 'consumed-by-boot',
+      detail: 'the previous instance had already started this restart (attempts ' + attempts + ')',
+    }
+  }
+  const age = at - requestedAt
+  const window = Number.isFinite(freshMs) ? Number(freshMs) : RESTART_VERDICT_FRESH_MS
+  if (age <= window) {
+    return {
+      action: 'keep',
+      why: 'never-executed-and-fresh',
+      detail: 'queued ' + Math.max(0, age) + ' ms ago and never executed; this boot carries it out',
+    }
+  }
+  return {
+    action: 'drop',
+    why: 'stale-never-executed',
+    detail: 'queued ' + Math.max(0, age) + ' ms ago (> ' + window + ' ms) and never executed',
+  }
+}
+
+/**
  * The plugin's whole runtime state.
  *
  * @param {object} ctx
@@ -3414,18 +3704,23 @@ const titleOfSummary = (item) => {
     state.restart.failedAttempts = (Number(state.restart.failedAttempts) || 0) + 1
     if (state.restart.failedAttempts >= 2) {
       log.error('restart could not be scheduled twice; cancelling the pending restart instead of retrying forever:', reason)
-      // The restart is gone: so is its stage (a stage without a restart would
-      // draw a card for nothing).
-      clearRestartStage()
-      releaseRequesters()
-      cancelRestart(state, { now: Date.now() })
-      persist()
-      stopPolling()
+      // THE REQUEST IS GONE, SO IT SAYS SO: reason + who + when go into
+      // last-restart-request.json (this used to be a log line and nothing else).
+      dropRestartRequest({
+        reason: 'the restart could not be scheduled twice: ' + String(reason),
+        by: 'rollback',
+        extra: { failedAttempts: state.restart.failedAttempts },
+      })
       return
     }
     // A retry is scheduled: the stage goes back to waiting, WITH the reason, so
     // no surface keeps showing the step that already ended.
     deferRestartStage(String(reason))
+    recordRestartRequestFate(RESTART_REQUEST_STATES.DEFERRED, {
+      reason: 'the restart could not be scheduled (retrying once): ' + String(reason),
+      by: 'rollback',
+      extra: { failedAttempts: state.restart.failedAttempts },
+    })
     setPhase(state, 'deferred')
     if (state.restart.attempt > 0) state.restart.attempt -= 1
     // Back off before the next attempt: no tight retry loop on a broken scheduler.
@@ -3452,6 +3747,11 @@ const titleOfSummary = (item) => {
         // exact path that left the backup card on screen for ever.
         deferRestartStage('detached helper denied the idle gate', {
           blocked: countBlockerTasks(gate().blockedBy),
+        })
+        recordRestartRequestFate(RESTART_REQUEST_STATES.DEFERRED, {
+          reason: 'the detached helper denied the idle gate (the request is kept)',
+          by: 'gate-watchdog',
+          extra: { gateAborts: aborts },
         })
         setPhase(state, 'deferred')
         if (aborts > 20) {
@@ -3554,6 +3854,10 @@ const titleOfSummary = (item) => {
       })
       deferRestartStage('conversation-active while restarting', {
         blocked: verdict && Array.isArray(verdict.blockedBy) ? countBlockerTasks(verdict.blockedBy) : 0,
+      })
+      recordRestartRequestFate(RESTART_REQUEST_STATES.DEFERRED, {
+        reason: 'a conversation became active while the restart was being carried out (the request is kept)',
+        by: 'busy-watch',
       })
       setPhase(state, 'deferred')
       persist()
@@ -3688,6 +3992,130 @@ const titleOfSummary = (item) => {
   const clearRestartStage = () => {
     if (clearRestartPhase(state)) persist()
   }
+
+  /**
+   * The record of the fate of the LAST restart request (see RESTART_REQUEST_FILE
+   * at the top of this file). It is read lazily, so a request that was cancelled
+   * by an EARLIER instance is still visible after a reload.
+   */
+  let lastRestartRequest = null
+  const restartRequestPathOf = () => restartRequestPath(stateDirOf())
+  const restartRequestOutcome = () => {
+    if (lastRestartRequest === null) lastRestartRequest = readRestartRequestRecord(stateDirOf())
+    return lastRestartRequest
+  }
+
+  /** The honest answer about the restart request (queued / deferred / cancelled). */
+  const restartRequestInfo = () => summarizeRestartRequest({
+    restart: state.restart,
+    record: restartRequestOutcome(),
+    now: Date.now(),
+  })
+
+  /**
+   * The deadlines the idle gate really uses.
+   *
+   * They are written into every record on purpose (task requirement): "the
+   * restart has been waiting for two minutes and nothing happened" is only a
+   * mystery as long as the numbers and the POLICY behind them are invisible.
+   * `deadlineCutsTheRequest` is the important one: with the default settings the
+   * hard deadline does NOT cancel anything (see lib/lifecycle.js
+   * `restartDecision` — it answers `long-wait`), so a waiting request is not a
+   * request with an expiry date.
+   */
+  const restartDeadlineInfo = (restart) => {
+    const requestedAt = restart !== null && isPlainObject(restart) && Number.isFinite(restart.requestedAt)
+      ? Number(restart.requestedAt)
+      : Date.now()
+    const softMs = Number.isFinite(config.deferSoftMs) ? Number(config.deferSoftMs) : null
+    const hardMs = Number.isFinite(config.deferHardMs) ? Number(config.deferHardMs) : null
+    return {
+      softMs,
+      hardMs,
+      policy: typeof config.deferPolicy === 'string' ? config.deferPolicy : 'auto',
+      forceRestartWhenBusy: config.forceRestartWhenBusy === true,
+      deadlineAt: hardMs === null ? null : requestedAt + hardMs,
+      deadlineCutsTheRequest: config.forceRestartWhenBusy === true,
+    }
+  }
+
+  /**
+   * Write down what happened to the restart request — the ONE place that writes
+   * `last-restart-request.json`.
+   *
+   * @param {string} result one of RESTART_REQUEST_STATES
+   * @param {{ reason?: string|null, by?: string|null, extra?: object, restart?: object|null }} [options]
+   *   `restart` defaults to the request that is pending RIGHT NOW; a caller that
+   *   drops the request first (the "withdraw my own" paths, where `cancelOwnRestart`
+   *   clears it) passes the request it saw before.
+   */
+  const recordRestartRequestFate = (result, { reason = null, by = null, extra = {}, restart = undefined } = {}) => {
+    const request = restart === undefined ? state.restart : restart
+    const record = buildRestartRequestRecord({
+      result,
+      reason,
+      by,
+      restart: request,
+      now: Date.now(),
+      extra: { ...restartDeadlineInfo(request), ...extra },
+    })
+    const written = writeRestartRequestRecord(stateDirOf(), record)
+    lastRestartRequest = record
+    if (written.ok !== true) {
+      log.warn('could not write the restart-request record:', written.error)
+    }
+    return { record, written }
+  }
+
+  /**
+   * THE ONE WAY A RESTART REQUEST IS DROPPED — and it always leaves a record.
+   *
+   * WHY ONE CHOKE POINT (real-host report, hosted `dsh web` on 5601): a request
+   * answered by `POST /park` disappeared — no restart, no bumped generation, no
+   * verdict, no reason. The request was cleared in six different places, and not
+   * one of them wrote a record of it:
+   *
+   *   1. the boot recovery pass, "nothing to recover" (index.js:recoverAfterRestart);
+   *   2. the boot recovery pass, end of the batch loop (same function);
+   *   3. `rollbackRestart` giving up after two failed scheduling attempts;
+   *   4. `tick` on the gate's `give-up` answer;
+   *   5. the snapshot cancelled while the profile was being copied;
+   *   6. the explicit cancels (the tool, the `/cancel` route).
+   *
+   * They all come through here now: clear the stage, release the waiters,
+   * cancel, persist, stop polling — and WRITE DOWN reason + who + when, so the
+   * question "what happened to my restart?" has an answer after the fact.
+   *
+   * @param {{ reason?: string, by?: string, extra?: object }} options
+   * @returns {{ dropped: boolean, record: object|null }}
+   */
+  const dropRestartRequest = ({ reason = '', by = '', extra = {} } = {}) => {
+    const restart = state.restart
+    if (!restart) return { dropped: false, record: null }
+    const text = typeof reason === 'string' && reason !== '' ? reason : 'no reason was given'
+    const who = typeof by === 'string' && by !== '' ? by : 'unknown'
+    const { record } = recordRestartRequestFate(RESTART_REQUEST_STATES.CANCELLED, { reason: text, by: who, extra })
+    // The stage of a request that is gone must not draw a card for it.
+    clearRestartStage()
+    releaseRequesters()
+    cancelRestart(state, { now: Date.now() })
+    persist()
+    stopPolling()
+    log.warn('the restart request is withdrawn: ' + text, {
+      by: who,
+      generation: record.generation,
+      waitedMs: record.waitedMs,
+      record: restartRequestPathOf(),
+    })
+    return { dropped: true, record }
+  }
+
+  /**
+   * Read the whole record in one line (used by the diagnostics surfaces).
+   *
+   * @returns {object} the summary of the restart request
+   */
+  const restartRequestSummary = () => restartRequestInfo()
 
   /**
    * The stage as every surface shows it (state route, health route, client).
@@ -4011,9 +4439,15 @@ const titleOfSummary = (item) => {
       resume: false,
       now: Date.now(),
     })
-    markRestartStage('waiting')
-    persist()
-    startPolling()
+      markRestartStage('waiting')
+      persist()
+      // A request that was accepted says so, with the deadlines the gate uses:
+      // the record is what makes "queued / deferred / cancelled" answerable.
+      recordRestartRequestFate(RESTART_REQUEST_STATES.QUEUED, {
+        reason: 'manual rollback to ' + target.name,
+        by: 'manual-rollback',
+      })
+      startPolling()
     receipt.restartRequested = true
     writeReceipt()
     log.warn('the manual rollback was done; a restart was requested', {
@@ -4940,6 +5374,10 @@ const titleOfSummary = (item) => {
       deferRestartStage(verdict.reason || 'conversation-active', {
         blocked: countBlockerTasks(verdict.blockedBy),
       })
+      recordRestartRequestFate(RESTART_REQUEST_STATES.DEFERRED, {
+        reason: 'the idle gate postponed the restart: ' + String(verdict.reason || 'conversation-active'),
+        by: 'idle-gate',
+      })
       persist()
       startPolling()
       return
@@ -4947,6 +5385,14 @@ const titleOfSummary = (item) => {
     setPhase(state, 'restarting')
     state.restart.attempt += 1
     persist()
+    // THE REQUEST IS BEING CARRIED OUT: from here the record says so, so "it
+    // was executing and then nothing came back" is distinguishable after the
+    // fact from "it was never executed".
+    recordRestartRequestFate(RESTART_REQUEST_STATES.EXECUTING, {
+      reason: 'the idle gate allowed the restart; the snapshot / arming / command follows',
+      by: 'execute-restart',
+      extra: { attempt: state.restart.attempt },
+    })
     log.warn('executing graceful restart', { generation: state.generation, pid: process.pid })
     try {
       // How the host is restarted: the custom command, or the desktop app.
@@ -5034,11 +5480,10 @@ const titleOfSummary = (item) => {
         // host does not restart, and the request is WITHDRAWN — a restart the
         // user cancelled must not be retried five seconds later.
         log.warn('the restart was cancelled while the snapshot was being written')
-        clearRestartStage()
-        releaseRequesters()
-        cancelRestart(state, { now: Date.now() })
-        persist()
-        stopPolling()
+        dropRestartRequest({
+          reason: 'the restart was cancelled while the snapshot was being written',
+          by: 'snapshot-cancel',
+        })
         return
       }
       // A COPY THAT IS DONE IS NOT A RESTART YET (user report, 2026-10-30): "the
@@ -5057,6 +5502,11 @@ const titleOfSummary = (item) => {
         })
         deferRestartStage('conversation-active after snapshot: ' + why, {
           blocked: afterCopy && Array.isArray(afterCopy.blockedBy) ? countBlockerTasks(afterCopy.blockedBy) : 0,
+        })
+        recordRestartRequestFate(RESTART_REQUEST_STATES.DEFERRED, {
+          reason: 'a conversation became active right after the snapshot: ' + why,
+          by: 'idle-gate-after-snapshot',
+          extra: { snapshotReused: paid !== null },
         })
         setPhase(state, 'deferred')
         persist()
@@ -5539,10 +5989,14 @@ const titleOfSummary = (item) => {
       }
       case 'give-up': {
         log.warn('giving up on the pending restart:', decision.reason)
-        releaseRequesters()
-        cancelRestart(state, { now })
-        persist()
-        stopPolling()
+        // The gate only says this when the operator opted in
+        // (`forceRestartWhenBusy`) and the forced attempt was already spent —
+        // so the reason is part of the record, with who ended it.
+        dropRestartRequest({
+          reason: 'the idle gate gave up: ' + String(decision.reason || 'give-up'),
+          by: 'idle-gate',
+          extra: { forceRestartWhenBusy: config.forceRestartWhenBusy === true },
+        })
         return
       }
       default:
@@ -5942,6 +6396,14 @@ const titleOfSummary = (item) => {
     recordSnapshotProgress,
     clearRestartStage,
     restartStageInfo,
+    // THE FATE OF THE RESTART REQUEST: the tool, the routes and the boot pass all
+    // go through these, and every one of them leaves a record (see
+    // RESTART_REQUEST_FILE).
+    recordRestartRequestFate,
+    dropRestartRequest,
+    restartRequestInfo,
+    restartRequestSummary,
+    restartRequestOutcome,
     requestSnapshotCancel,
     snapshotCancelled,
     resetSnapshotCancel,
@@ -6739,6 +7201,95 @@ async function recoverSession(ctx, runtime, entry, config) {
   return { sessionId, action: pendingAction, detail: pendingDetail }
 }
 
+/**
+ * THE PENDING RESTART AT BOOT — consumed, kept, or dropped with a record.
+ *
+ * WHY THIS IS A FUNCTION AND NOT AN `if` (real-host report, hosted `dsh web` on
+ * 5601): the recovery pass cleared `state.restart` on EVERY boot with the
+ * comment "a restart that was requested before the last shutdown has been
+ * consumed by this boot" — a claim it never checked. A request that was merely
+ * QUEUED (postponed by the idle gate, nothing executed) was not consumed by
+ * anything, so booting the plugin silently threw the user's request away: no
+ * restart, no generation bump, no verdict, no reason. That is the disappearance.
+ *
+ * Now the decision is explicit (`decidePendingRestartOnBoot`), and the two
+ * "drop" outcomes leave a record behind.
+ *
+ * @param {object} runtime
+ */
+export function settlePendingRestartOnBoot(runtime) {
+  const state = runtime.state
+  const log = runtime.log
+  if (!state.restart) return { action: 'none', why: 'no-restart-pending' }
+  const decision = decidePendingRestartOnBoot({ restart: state.restart, now: Date.now() })
+  if (decision.action === 'keep') {
+    // The request of an earlier instance that never got as far as executing:
+    // this boot carries it out. Saying it in the log is not enough — the record
+    // says it too, and polling is re-armed so it really happens.
+    log.warn('a restart request was queued before this boot and never executed; this boot carries it out', {
+      why: decision.why,
+      detail: decision.detail,
+      requestedAt: state.restart.requestedAt,
+    })
+    recordRestartRequestFateSafe(runtime, 'queued', {
+      reason: 'the request survived a boot without having been executed (' + decision.why + ')',
+      by: 'boot-recovery',
+    })
+    try {
+      runtime.startPolling()
+    } catch (error) {
+      log.warn('could not re-arm the restart polling for the request of the earlier boot:', String(error))
+    }
+    return { action: 'keep', why: decision.why }
+  }
+  log.warn('the pending restart of the earlier boot is settled: ' + decision.why, { detail: decision.detail })
+  const dropped = dropRestartRequestSafe(runtime, {
+    reason: 'the boot settled this request: ' + decision.why + ' (' + decision.detail + ')',
+    by: 'boot-recovery',
+  })
+  return { action: dropped.dropped ? 'drop' : 'none', why: decision.why }
+}
+
+/**
+ * `recordRestartRequestFate` on the runtime, without throwing when the runtime
+ * is a test double that does not have it.
+ *
+ * @param {object} runtime
+ * @param {string} result
+ * @param {{ reason?: string|null, by?: string|null }} [options]
+ */
+function recordRestartRequestFateSafe(runtime, result, options = {}) {
+  if (!runtime || typeof runtime.recordRestartRequestFate !== 'function') return null
+  try {
+    return runtime.recordRestartRequestFate(result, options)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * `dropRestartRequest` on the runtime, tolerating a runtime that lacks it.
+ *
+ * @param {object} runtime
+ * @param {{ reason?: string, by?: string }} [options]
+ */
+function dropRestartRequestSafe(runtime, options = {}) {
+  if (!runtime || typeof runtime.dropRestartRequest !== 'function') {
+    // Last resort (a runtime without the choke point): still cancel, but never
+    // silently — the log line names the reason.
+    if (runtime && runtime.state && runtime.state.restart) {
+      cancelRestart(runtime.state, { now: Date.now() })
+      if (typeof runtime.persist === 'function') runtime.persist()
+    }
+    return { dropped: false, record: null }
+  }
+  try {
+    return runtime.dropRestartRequest(options)
+  } catch {
+    return { dropped: false, record: null }
+  }
+}
+
 /** The boot recovery pass. Runs once per host boot, bounded and idempotent. */
 async function recoverAfterRestart(ctx, runtime, config) {
   const log = runtime.log
@@ -6746,9 +7297,9 @@ async function recoverAfterRestart(ctx, runtime, config) {
   const plan = bootPlan(state, { resumeOnBoot: config.resumeOnBoot, limit: config.maxSessions })
   if (!plan.recover) {
     setPhase(state, 'idle')
-    // A restart that was requested before the last shutdown has been consumed by
-    // this boot; never leave a stale pending restart behind.
-    if (state.restart) cancelRestart(state, { now: Date.now() })
+    // NOT "a pending restart was consumed by this boot": that is only true when
+    // the old instance had started it. See settlePendingRestartOnBoot.
+    settlePendingRestartOnBoot(runtime)
     persistSafely(runtime)
     log.info('no interrupted work to recover')
     return { recovered: [], phase: 'idle' }
@@ -6792,9 +7343,11 @@ async function recoverAfterRestart(ctx, runtime, config) {
     }
   }
 
-  if (state.restart) {
-    cancelRestart(state, { now: Date.now() })
-  }
+  // The recovery of the sessions is over; the restart request of the earlier
+  // instance gets the SAME treatment as in the "nothing to recover" branch: it is
+  // kept when it was never executed and is still fresh, and dropped WITH a
+  // record otherwise. It used to be cancelled here unconditionally and silently.
+  settlePendingRestartOnBoot(runtime)
   setPhase(state, 'running')
   // Never cap away recoverable work: keep every pending entry, only expire
   // finished ones by age so an unfinished backlog still recovers next boot.
@@ -7244,6 +7797,13 @@ function registerTools(ctx, runtime, config) {
       // answer in well under a second.
       runtime.markRestartStage('waiting', { blocked: countBlockerTasks(runtime.gate().blockedBy) })
       runtime.persist()
+      // The accepted request lands in the record at once (queued + the deadlines
+      // of the gate), so the tool's answer and the file say the same thing.
+      runtime.recordRestartRequestFate(RESTART_REQUEST_STATES.QUEUED, {
+        reason: typeof args.reason === 'string' && args.reason.trim() !== '' ? args.reason.trim() : 'agent requested restart',
+        by: 'tool:restart',
+        extra: { sessionId: sessionId || null },
+      })
       runtime.startPolling()
       log.info('restart requested', { generation: state.generation, sessionId, resume, parkGoals })
       return {
@@ -7251,6 +7811,9 @@ function registerTools(ctx, runtime, config) {
         generation: state.generation,
         phase: state.phase,
         willResume: resume && Boolean(sessionId),
+        // WHAT HAPPENS NEXT, in the words the record uses: a request is not a
+        // restart yet — it is queued until the idle gate allows it.
+        restartRequest: runtime.restartRequestInfo(),
         note: parkGoals
           ? 'The restart runs at the next safe point (all agents idle). Keep this reply short; the session resumes afterwards.'
           : 'The restart runs at the next safe point (all agents idle), but no goal is parked: a goal-driven session keeps its own agent busy and may therefore keep the restart waiting.',
@@ -7337,6 +7900,11 @@ function registerTools(ctx, runtime, config) {
           // The last restart: the snapshot that was taken before it and the
           // verdict of the instance that came up.
           lastRestart: { type: 'object' },
+          // WHAT HAPPENED TO THE RESTART REQUEST: queued / deferred / cancelled,
+          // with the reason, who ended it and when (RESTART_REQUEST_FILE). The
+          // field is declared here because this schema is strict — an undeclared
+          // key would refuse the whole tool.
+          restartRequest: { type: 'object' },
           // The access link of the running instance (with the boot token).
           accessUrl: { type: 'string' },
           environment: { type: 'object' },
@@ -7356,6 +7924,10 @@ function registerTools(ctx, runtime, config) {
         phase: state.phase,
         generation: state.generation,
         pendingRestart: state.restart !== null,
+        // WHAT HAPPENED TO THE REQUEST (queued / deferred / cancelled, with the
+        // reason, who ended it and when). This is the answer to "I asked for a
+        // restart and nothing happened, and nothing said why".
+        restartRequest: runtime.restartRequestInfo(),
         gateAllow: verdict.allow,
         quietForMs: Math.round(verdict.quietForMs),
         // The RESTART reserve (the extra wait after the last conversation
@@ -7621,10 +8193,18 @@ function registerTools(ctx, runtime, config) {
       if (scope === 'all') {
         // The explicit "nobody restarts any more": the whole request goes.
         const hadPending = state.restart !== null
-        runtime.releaseRequesters()
-        cancelRestart(state, { now })
-        runtime.stopPolling()
-        runtime.persist()
+        if (hadPending) {
+          // Through the choke point, so the withdrawal is recorded (reason +
+          // "who" = the tool + when) instead of only logged.
+          runtime.dropRestartRequest({
+            reason: 'continuum_cancel_restart scope "all": ' + (reason || '(no reason was given)'),
+            by: 'tool:cancel-all',
+            extra: { sessionId },
+          })
+        } else {
+          runtime.stopPolling()
+          runtime.persist()
+        }
         if (hadPending) log.info('pending restart cancelled for EVERYONE:', reason || '(no reason)')
         return { ok: true, cancelled: hadPending, scope: 'all', remainingRequesters: 0, phase: state.phase }
       }
@@ -7648,6 +8228,9 @@ function registerTools(ctx, runtime, config) {
           error: 'The calling session is unknown, so its own request cannot be identified. Nothing was cancelled. Call this tool from the session that requested the restart, or pass scope "all" to cancel the request for everyone.',
         }
       }
+      // The request as it is BEFORE the withdrawal: `cancelOwnRestart` clears it,
+      // and the record must still name who had asked and when.
+      const pendingBefore = state.restart
       const outcome = cancelOwnRestart(state, { sessionId, now })
       if (!outcome.removed) {
         log.warn(`session ${sessionId} did not request the pending restart; nothing was cancelled`)
@@ -7665,7 +8248,15 @@ function registerTools(ctx, runtime, config) {
       // stay pinned for the restart they asked for.
       runtime.releaseRequesters([sessionId])
       if (outcome.cancelled) {
-        // The last requester left: the restart is really over.
+        // The last requester left: the restart is really over. `cancelOwnRestart`
+        // already dropped `state.restart`, so the record is written here (the
+        // request is gone before the choke point could see it).
+        runtime.recordRestartRequestFate(RESTART_REQUEST_STATES.CANCELLED, {
+          reason: 'the last requester withdrew its restart request: ' + (reason || '(no reason was given)'),
+          by: 'tool:cancel-mine',
+          extra: { sessionId },
+          restart: pendingBefore,
+        })
         runtime.stopPolling()
         log.info(`session ${sessionId} withdrew the last restart request; the pending restart is cancelled`, reason || '')
       } else {
@@ -8206,8 +8797,20 @@ function buildParkRoute(ctx, runtime, config) {
           // this POST is already "waiting for the sessions", never silence.
           runtime.markRestartStage('waiting', { blocked: blockingSessionIds(runtime).length })
           runtime.persist()
+          // THE REQUEST IS IN THE RECORD AS SOON AS IT EXISTS: `restartRequested:
+          // true` used to mean only "it was written down somewhere". The record
+          // (and the answer below) says what will happen to it.
+          runtime.recordRestartRequestFate('queued', {
+            reason: 'the park route requested a restart for ' + sessionId,
+            by: 'route:park',
+            extra: { sessionId },
+          })
           runtime.startPolling()
         }
+        // WHAT THE ANSWER MEANS, spelled out: a request is queued, not done. And
+        // if the LAST request was withdrawn, that is reported here as well — a
+        // caller must never have to guess why the earlier restart never came.
+        const restartRequest = runtime.restartRequestInfo()
         res.statusCode = 200
         res.setHeader('content-type', 'application/json; charset=utf-8')
         res.setHeader('cache-control', 'no-store')
@@ -8217,6 +8820,8 @@ function buildParkRoute(ctx, runtime, config) {
           reported,
           pendingRestart: runtime.state.restart !== null,
           restartRequested: restart === true && sessionId !== '',
+          restartRequest,
+          lastRestartRequest: runtime.restartRequestOutcome(),
         }))
       }).catch((error) => {
         res.statusCode = 400
@@ -8322,6 +8927,9 @@ function buildCancelRoute(ctx, runtime, config) {
           })
           return
         }
+        // The request as it is BEFORE the withdrawal (see the tool): the record
+        // must still name who had asked and when it was requested.
+        const pendingBefore = runtime.state.restart
         const outcome = cancelOwnRestart(runtime.state, { sessionId, now: Date.now() })
         if (!outcome.removed) {
           // Nothing was changed: the caller is not a requester (or the
@@ -8350,6 +8958,15 @@ function buildCancelRoute(ctx, runtime, config) {
           // directory (the host never restarts); otherwise the stage just goes.
           if (stage.phase === 'snapshotting') runtime.requestSnapshotCancel()
           runtime.clearRestartStage()
+          // `cancelOwnRestart` already dropped `state.restart`, so the record is
+          // written here: the route withdrew the LAST request (reason + who +
+          // when), which used to be an info line in the log and nothing more.
+          runtime.recordRestartRequestFate('cancelled', {
+            reason: 'the last requester withdrew its restart request through the cancel route',
+            by: 'route:cancel',
+            extra: { sessionId },
+            restart: pendingBefore,
+          })
           runtime.stopPolling()
         }
         runtime.persist()
@@ -9975,6 +10592,10 @@ function registerHealthRoute(ctx, runtime, config, sleep) {
             pendingRestart,
             phase: live.phase,
             generation: live.generation,
+            // WHAT HAPPENED TO THE REQUEST: queued / deferred / cancelled, with
+            // the reason, who ended it and when. Without this a vanished restart
+            // request is a fact nobody can look up.
+            restartRequest: runtime.restartRequestInfo(),
             waiters,
             blockedBy,
             // THE ONE NUMBER both client surfaces read: the capsule and the
