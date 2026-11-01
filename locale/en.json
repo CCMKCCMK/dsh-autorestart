@@ -432,9 +432,9 @@
     "failed": "{plugin} was not restored: {reason}",
     "noBackup": "There is no usable backup on this machine; it has to be handled by hand."
   },
-  "watchdog.title": "Should the watchdog stay on?",
-  "watchdog.explain": "During a restart it watches the new version in the background. If the new version never comes up, it puts the last backup back and starts the program again, so you do not have to rescue it yourself.",
-  "watchdog.warnOff": "With it off, a new version that does not start has to be handled by hand.",
+  "watchdog.title": "Turn on \"Watchman\"?",
+  "watchdog.explain": "When the app restarts, it watches the version that just came up. If that version never comes up (about 3 minutes), it restores a backup that has been verified to work, then starts the app again. If it has no such backup, it will not guess: it tells you there is no trusted restore point and asks you to handle it manually. If it did anything, it leaves a record of what it tried and how it went.",
+  "watchdog.warnOff": "With it off, if a new version fails to start, you will have to handle it manually.",
   "watchdog.keepOn": "Keep it on (recommended)",
   "watchdog.turnOff": "No, I will handle it",
   "watchdog.savedOn": "The watchdog is on: the next restart is protected.",

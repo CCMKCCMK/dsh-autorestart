@@ -74,8 +74,10 @@ The plugin turns a restart into a **resumable** event, and the order never chang
    itself; the hosted web client is covered below);
 4. **The new process checks itself** — four things: is the port up, are the routes there, did the
    plugin load, did the sessions resume;
-5. **If it did not come up, it rolls back** — the pre-restart snapshot (configuration + installed
-   plugins) is put back, and the verdict of that restart is written down honestly.
+5. **If it did not come up, it rolls back** — a snapshot (configuration + installed plugins) that has
+   been **verified to work** is put back, and the verdict of that restart is written down honestly.
+   **When there is not a single verified one**, it does not put "the newest one" in its place: it
+   reports plainly that there is no trusted restore point.
 
 So "the restart lost my work" becomes "the restart carried on": you do not have to type "continue".
 

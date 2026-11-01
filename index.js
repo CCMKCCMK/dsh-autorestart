@@ -1551,17 +1551,28 @@ function watchdogAllowed(stateDir, config) {
 /**
  * Should the watchdog question be asked on this boot?
  *
- * Asked when there is no answer yet, or when the plugin changed version since
- * the answer was given: a new version may do something different, so the old
- * answer is not an answer to the new question.
+ * ASKED ONCE PER PROFILE (user decision, 2026-11-01). The only thing that
+ * decides is whether the user has EVER answered: a recorded `watchdog: true`
+ * or `watchdog: false` means the question is over, for good, whatever the
+ * plugin version is.
+ *
+ * WHY THE VERSION CHECK IS GONE: this used to ask again on every release,
+ * because `askedForPluginVersion` remembered the version the answer was given
+ * for and a newer version was treated as a new question. Being asked the same
+ * yes/no on every upgrade is a nuisance rather than a decision, and the answer
+ * a user gave once — including "no" — is their answer, not a default to re-open.
+ * `askedForPluginVersion` is still RECORDED (it is worth knowing when the
+ * question was answered), but it no longer takes part in this decision.
+ *
+ * @param {string} stateDir
  */
-function shouldAskWatchdog(stateDir, version) {
+function shouldAskWatchdog(stateDir) {
   const choice = typeof stateDir === 'string' && stateDir !== '' ? readInstallChoice(stateDir) : null
+  // No file at all: a fresh profile, nothing was ever asked.
   if (choice === null) return true
-  if (choice.watchdog === null) return true
-  const asked = typeof choice.askedForPluginVersion === 'string' ? choice.askedForPluginVersion : ''
-  const now = typeof version === 'string' && version !== '' ? version : pluginVersionNow()
-  return asked !== now
+  // `null` here means "no answer recorded" — either no file, or a file written
+  // by a build that did not know this question yet. `true`/`false` is an answer.
+  return choice.watchdog === null
 }
 
 
@@ -11092,9 +11103,10 @@ function registerHealthRoute(ctx, runtime, config, sleep) {
             // The route that reports (and records) the one-time feature
             // announcements, so the client never has to guess the prefix.
             announcementsUrl: resolveAnnouncementsPath(config),
-            // SHOULD THE WATCHDOG QUESTION BE ASKED? The client cannot read the disk,
-            // so the decision is made here and sent along with the answer's version.
-            watchdogAsk: shouldAskWatchdog(resolveStateDir(config), pluginVersionNow()),
+            // SHOULD THE WATCHDOG QUESTION BE ASKED? The client cannot read the
+            // disk, so the decision is made here: it is asked only while no
+            // answer has ever been recorded (see `shouldAskWatchdog`).
+            watchdogAsk: shouldAskWatchdog(resolveStateDir(config)),
             pluginVersion: pluginVersionNow(),
             backupOnRestart: config.backupOnRestart !== false,
             backupIncludePlugins: config.backupIncludePlugins !== false,
@@ -11208,9 +11220,10 @@ function registerHealthRoute(ctx, runtime, config, sleep) {
             rollbackUrl: resolveManualRollbackPath(config),
             choiceUrl: resolveChoicePath(config),
             announcementsUrl: resolveAnnouncementsPath(config),
-            // SHOULD THE WATCHDOG QUESTION BE ASKED? The client cannot read the disk,
-            // so the decision is made here and sent along with the answer's version.
-            watchdogAsk: shouldAskWatchdog(resolveStateDir(config), pluginVersionNow()),
+            // SHOULD THE WATCHDOG QUESTION BE ASKED? The client cannot read the
+            // disk, so the decision is made here: it is asked only while no
+            // answer has ever been recorded (see `shouldAskWatchdog`).
+            watchdogAsk: shouldAskWatchdog(resolveStateDir(config)),
             pluginVersion: pluginVersionNow(),
             backupOnRestart: config.backupOnRestart !== false,
             backupIncludePlugins: config.backupIncludePlugins !== false,
