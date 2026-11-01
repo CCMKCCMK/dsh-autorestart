@@ -2390,6 +2390,37 @@ export function planWatchdogArmCommand(options = {}) {
 }
 
 /**
+ * THE MARKERS OF ONE RESTART, written in the one order that is safe.
+ *
+ * A ready marker is the RECEIPT OF ONE RESTART, not a fact about the machine.
+ * On 2026-11-01 (hosted web instance, port 5601) a restart was asked with a
+ * broken profile, the host never came up — and the `watchdog-ready.json` of the
+ * PREVIOUS boot was still on disk: written 09:54:21, while this restart's
+ * pending marker was written at 09:57:10. The watchdog read "there is a ready
+ * marker", concluded "the host is up", waited 0 ms and reported
+ * `{ result: 'not-needed', ready: true, restored: false, relaunched: false,
+ * attempts: 0 }` while nothing listened on 5601 for more than two minutes.
+ *
+ * So the ready marker of the earlier boot is removed BEFORE the marker of this
+ * restart is written: from the moment the watchdog can see a pending marker,
+ * the only ready marker it can see is one written after it. `clearReady` was
+ * imported for exactly this and had no caller — a defined-but-never-called
+ * helper is not a guard, it is a comment.
+ *
+ * Both writes are synchronous and back to back on purpose: no watchdog can run
+ * between them and see "new pending marker + old ready marker".
+ *
+ * @param {string} stateDir
+ * @param {object} pending the marker of THIS restart (see buildPending)
+ * @returns {object} the marker that was written
+ */
+export function writeRestartPending(stateDir, pending) {
+  clearReady(stateDir)
+  writePending(stateDir, pending)
+  return pending
+}
+
+/**
  * The plugin's whole runtime state.
  *
  * @param {object} ctx
@@ -4190,7 +4221,12 @@ const titleOfSummary = (item) => {
       hostKind: hostKindOf().kind,
       now: Date.now(),
     })
-    writePending(stateDir, pending)
+    // THE READY MARKER OF THE EARLIER BOOT GOES FIRST (2026-11-01 blocker).
+    // The watchdog of this restart must not be able to read a marker written
+    // before this restart's own pending marker: that is exactly how the hosted
+    // instance on 5601 was called "up" 2m49s after its own marker had been
+    // written and nothing was restored or started for over two minutes.
+    writeRestartPending(stateDir, pending)
 
     let registered = { ok: false, error: 'the watchdog was not registered' }
     try {

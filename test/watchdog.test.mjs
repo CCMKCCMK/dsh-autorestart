@@ -28,6 +28,8 @@ import {
   readPendingState,
   readReport,
   readReady,
+  readyIsCurrent,
+  readyPath,
   reportPath,
   restoreFromSnapshot,
   runWatchdogFlow,
@@ -35,6 +37,10 @@ import {
   writeReady,
   writeReport,
 } from '../lib/watchdog.js';
+// The REAL arm-path marker writer of index.js — the function `armWatchdog`
+// calls before it registers anything. Imported (not copied) so the arm test
+// exercises the code that runs in production.
+import { writeRestartPending } from '../index.js';
 
 /** Every directory this file created, so a FAILING test cannot leak one. */
 const createdDirs = [];
@@ -501,4 +507,190 @@ test('restoreFromSnapshot: forced, or a second attempt, replaces a healthy link 
   });
   assert.equal(secondResult.links[0].action, 'replaced', 'the link had its chance on the first attempt');
   fs.rmSync(second.base, { recursive: true, force: true });
+});
+
+// ---------------------------------------------------------------------------
+// A READY MARKER IS THE RECEIPT OF ONE RESTART, NOT A FACT ABOUT THE MACHINE
+// (blocker reproduced on the real machine, 2026-11-01).
+//
+// What the hosted web instance on port 5601 had on disk:
+//
+//   - `watchdog-pending.json` (this restart's ticket)     09:57:10Z
+//   - `watchdog-ready.json`  (the PREVIOUS boot's receipt) 09:54:21Z
+//     {"at":"...09:54:21.208Z","bootId":"c344d6a9-...","port":5601}
+//   - 2m49s apart, the host never came up (`ss -ltn`: nothing on 5601 for
+//     more than two minutes while `dsh web` started and died again and again)
+//   - the watchdog reported
+//     {"result":"not-needed","ready":true,"restored":false,"relaunched":false,
+//      "attempts":0} — it waited 0 ms and did nothing at all
+//
+// So the flow must (a) refuse a marker that provably belongs to an earlier
+// restart, (b) still accept the marker THIS restart writes, and (c) the arm
+// path must clear the earlier marker so the watchdog starts from a clean slate.
+// ---------------------------------------------------------------------------
+
+const PENDING_AT = Date.parse('2026-11-01T09:57:10.000Z');
+const PREVIOUS_READY_AT = Date.parse('2026-11-01T09:54:21.000Z');
+const PREVIOUS_BOOT_ID = 'c344d6a9-af4f-45a8-97ad-6705f65e6395';
+
+/**
+ * The dependencies of a run, stubbed out EXCEPT `readReady`: these tests are
+ * about the marker on the disk, so the real reader is used and never overridden
+ * (the `deps()` helper above answers `readReady` with a boolean, which is a
+ * different question).
+ *
+ * @param {object} [overrides]
+ */
+function staleReadyDeps(overrides = {}) {
+  const clock = { now: 0 };
+  const state = { restores: 0, relaunches: 0, released: 0 };
+  return {
+    state,
+    clock,
+    sleep: async (ms) => { clock.now += ms; },
+    now: () => clock.now,
+    pollMs: 1000,
+    isWithdrawn: () => false,
+    probeAlive: async () => false,
+    askHealth: async () => 'unhealthy',
+    clearCookies: async () => ({ ok: true, removed: 0, error: null }),
+    runRestore: () => { state.restores += 1; return { ok: true, error: null }; },
+    runRelaunch: () => { state.relaunches += 1; return { ok: true, error: null }; },
+    acquireLock: () => true,
+    releaseLock: () => { state.released += 1; },
+    removeSchedule: () => {},
+    writeReport: () => {},
+    ...overrides,
+  };
+}
+
+test('the ready marker of the PREVIOUS boot does not count as "the host is up"', async () => {
+  const dir = tempDir('stale-previous-boot');
+  const pending = buildPending({ timeoutMs: 2000, recheckMs: 1000, readyTimeoutMs: 1000, maxAttempts: 1, now: PENDING_AT });
+  writePending(dir, pending);
+  // Exactly what the machine really had on disk during the incident.
+  writeReady(dir, { at: PREVIOUS_READY_AT, bootId: PREVIOUS_BOOT_ID, port: 5601 });
+  assert.ok(fs.existsSync(readyPath(dir)), 'the stale marker IS there — that is the whole point');
+
+  const d = staleReadyDeps();
+  const report = await runWatchdogFlow({ pending, stateDir: dir, deps: d });
+
+  assert.notEqual(report.result, 'not-needed', 'a 2m49s old marker must not be reported as "nothing to do"');
+  assert.equal(report.ready, false, 'the host was not up');
+  assert.equal(d.state.restores, 1, 'the snapshot was restored (the rescue actually ran)');
+  assert.equal(d.state.relaunches, 1, 'and the host was started again');
+  assert.equal(report.attempts, 1);
+  assert.equal(report.result, 'failed', 'the host never came up: a failed rescue, not a quiet one');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('a refused ready marker is OBSERVABLE in the report (the 2026-11-01 run said nothing)', async () => {
+  const dir = tempDir('stale-observable');
+  const pending = buildPending({ timeoutMs: 2000, recheckMs: 1000, readyTimeoutMs: 1000, maxAttempts: 1, now: PENDING_AT });
+  writePending(dir, pending);
+  writeReady(dir, { at: PREVIOUS_READY_AT, bootId: PREVIOUS_BOOT_ID, port: 5601 });
+
+  const report = await runWatchdogFlow({ pending, stateDir: dir, deps: staleReadyDeps() });
+
+  assert.equal(report.staleReadyIgnored, true, 'the report says a ready marker was read and refused');
+  assert.equal(
+    report.staleReadyAt,
+    new Date(PREVIOUS_READY_AT).toISOString(),
+    'and WHICH marker it was, so an operator can line it up with the earlier boot',
+  );
+  assert.equal(report.attemptLog[0].staleReadyIgnored, true, 'the attempt log carries it too');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('a marker that belongs to this restart is NOT called stale', async () => {
+  const dir = tempDir('stale-current');
+  const pending = buildPending({ timeoutMs: 2000, recheckMs: 1000, readyTimeoutMs: 1000, maxAttempts: 1, now: PENDING_AT });
+  writePending(dir, pending);
+  writeReady(dir, { at: PENDING_AT + 5000, bootId: 'the-new-boot', port: 5601 });
+
+  const d = staleReadyDeps();
+  const report = await runWatchdogFlow({ pending, stateDir: dir, deps: d });
+
+  assert.equal(report.result, 'not-needed', 'the host really is up: nothing to do');
+  assert.equal(report.ready, true);
+  assert.equal(report.staleReadyIgnored, false, 'a current marker is not "ignored"');
+  assert.equal(report.staleReadyAt, null);
+  assert.equal(d.state.restores, 0, 'nothing was restored');
+  assert.equal(d.state.relaunches, 0, 'no second instance was started');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('the marker written AFTER the relaunch is accepted: the rescue reports "recovered"', async () => {
+  const dir = tempDir('stale-recovered');
+  // timeoutMs/readyTimeoutMs 0: the flow looks at the disk exactly once per
+  // step, so the marker written by the relaunch is the ONLY thing that can make
+  // the last look count.
+  const pending = buildPending({ timeoutMs: 0, recheckMs: 0, readyTimeoutMs: 0, maxAttempts: 1, now: PENDING_AT });
+  writePending(dir, pending);
+  writeReady(dir, { at: PREVIOUS_READY_AT, bootId: PREVIOUS_BOOT_ID, port: 5601 });
+
+  const d = staleReadyDeps();
+  d.runRelaunch = () => {
+    d.state.relaunches += 1;
+    // The new host finishes its boot after being started again.
+    writeReady(dir, { at: PENDING_AT + 20000, bootId: 'the-new-boot', port: 5601 });
+    return { ok: true, error: null };
+  };
+  const report = await runWatchdogFlow({ pending, stateDir: dir, deps: d });
+
+  assert.equal(report.result, 'recovered', 'the new marker was believed');
+  assert.equal(report.ready, true);
+  assert.equal(report.restored, true);
+  assert.equal(report.relaunched, true);
+  assert.equal(d.state.restores, 1);
+  assert.equal(d.state.relaunches, 1);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('readyIsCurrent: the rule itself, including its deliberate leniencies', () => {
+  // The blocker: earlier than the ticket -> refused.
+  assert.equal(readyIsCurrent({ at: new Date(PREVIOUS_READY_AT).toISOString() }, PENDING_AT), false);
+  // Written at the same millisecond -> this restart's (>=, not >).
+  assert.equal(readyIsCurrent({ at: new Date(PENDING_AT).toISOString() }, PENDING_AT), true);
+  assert.equal(readyIsCurrent({ at: new Date(PENDING_AT + 1).toISOString() }, PENDING_AT), true);
+  // No marker at all -> not ready.
+  assert.equal(readyIsCurrent(null, PENDING_AT), false);
+  assert.equal(readyIsCurrent(undefined, PENDING_AT), false);
+  // The pending marker carries no usable time: no lower bound, accepted as before.
+  assert.equal(readyIsCurrent({ at: new Date(PREVIOUS_READY_AT).toISOString() }, null), true);
+  // A marker without a usable `at` cannot be attributed to a restart at all
+  // (a rescue script wrote it by hand): accepted, because the flow still asks
+  // the health route before it touches anything.
+  assert.equal(readyIsCurrent({ bootId: 'no-timestamp' }, PENDING_AT), true);
+  // A dependency that answers with a bare boolean carries no timestamp either.
+  assert.equal(readyIsCurrent(true, PENDING_AT), true);
+});
+
+test("arming writes this restart's marker and removes the earlier ready marker", () => {
+  const dir = tempDir('stale-arm');
+  // What the incident left behind: the receipt of the boot that is replaced.
+  writeReady(dir, { at: PREVIOUS_READY_AT, bootId: PREVIOUS_BOOT_ID, port: 5601 });
+  assert.ok(fs.existsSync(readyPath(dir)), 'the stale marker is there before the arm');
+
+  const pending = buildPending({ tier: 'scheduled-task', taskName: 'dsh-autorestart-watchdog', now: PENDING_AT });
+  writeRestartPending(dir, pending);
+
+  assert.equal(fs.existsSync(readyPath(dir)), false, 'the ready marker of the earlier boot is GONE');
+  assert.equal(readReady(dir), null, 'and it cannot be read as a marker any more');
+  assert.equal(readPending(dir).at, pending.at, "while THIS restart's pending marker is on the disk");
+  // What the watchdog now sees is "no marker yet": it waits.
+  assert.equal(readyIsCurrent(readReady(dir), pending.at), false);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('arming twice in a row is harmless (no marker is left behind the second time either)', () => {
+  const dir = tempDir('stale-arm-twice');
+  writeReady(dir, { at: PREVIOUS_READY_AT, bootId: PREVIOUS_BOOT_ID, port: 5601 });
+  const first = buildPending({ tier: 'scheduled-task', now: PENDING_AT });
+  writeRestartPending(dir, first);
+  const second = buildPending({ tier: 'scheduled-task', now: PENDING_AT + 60000 });
+  writeRestartPending(dir, second);
+  assert.equal(fs.existsSync(readyPath(dir)), false);
+  assert.equal(readPending(dir).at, second.at, 'the newest marker is the one on the disk');
+  fs.rmSync(dir, { recursive: true, force: true });
 });
