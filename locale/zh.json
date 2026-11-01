@@ -378,5 +378,18 @@
     "disabled": "按钮目前关闭，可在设置里打开。",
     "button": "知道了",
     "error": "没能记下来：{message}"
+  },
+  "pluginFailure": {
+    "title": "有插件没加载成功",
+    "intro": "宿主照常起来了，只是下面这些插件这次没激活，它们的功能用不了：",
+    "entry": "{plugin} —— {error}",
+    "backup": "可以只把这一个插件恢复到上一个备份版本（备份时间 {at}）。",
+    "noBackup": "这台机器没有可用备份，只能手动处理。",
+    "restore": "只恢复 {plugin}",
+    "restoring": "正在恢复 {plugin}…",
+    "restored": "已经把 {plugin} 恢复到备份版本（备份时间 {at}），重启后生效。",
+    "consistent": "{plugin} 本来就和备份一致，没有改动任何文件。",
+    "failed": "没能恢复 {plugin}：{reason}",
+    "hint": "恢复只动这一个插件，别的插件和 profile 配置都不碰。"
   }
 }

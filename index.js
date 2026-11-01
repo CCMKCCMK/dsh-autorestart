@@ -190,14 +190,18 @@ import { findPluginFailures, mergeFailuresByPlugin } from './lib/plugin-failure.
 import {
   applyPluginRecovery,
   buildRecoveryReport,
+  detectPluginRecovery,
   findLatestStartupLog,
   markHandled,
   planPluginRecovery,
   readRecoveryReport,
   readRecoveryState,
+  readRestoreHistory,
   recordAttempt,
   resetRecoveryCycle,
+  restoreOnePlugin,
   summarizeRecoveryReport,
+  summarizeRestoreHistory,
   writeRecoveryReport,
   writeRecoveryState,
 } from './lib/plugin-recover.js'
@@ -952,6 +956,54 @@ function resolveManualRollbackPath(config) {
   const index = healthPath.lastIndexOf('/')
   const prefix = index > 0 ? healthPath.slice(0, index) : '/__dsh_autorestart'
   return `${prefix}/rollback-to`
+}
+
+/**
+ * Resolve the single-plugin restore path: a sibling of the health route, under
+ * the same prefix (`POST /plugin-restore` puts ONE failed plugin back from the
+ * last known-good backup — the button in the popup).
+ *
+ * @param {object} config
+ * @returns {string}
+ */
+function resolvePluginRestorePath(config) {
+  const healthPath = resolveHealthPath(config)
+  const index = healthPath.lastIndexOf('/')
+  const prefix = index > 0 ? healthPath.slice(0, index) : '/__dsh_autorestart'
+  return `${prefix}/plugin-restore`
+}
+
+/**
+ * The answer of one restore attempt, in the wire shape the popup reads.
+ *
+ * Every failure is an HTTP 200 with `ok:false` and a `reason`: "no backup for
+ * this plugin" is an ANSWER, not a server error, and a browser that gets a 500
+ * cannot tell it apart from a crashed host.
+ *
+ * @param {object} result
+ * @returns {object}
+ */
+export function pluginRestorePayload(result) {
+  const source = result && typeof result === 'object' ? result : {}
+  return {
+    ok: source.ok === true,
+    plugin: typeof source.plugin === 'string' ? source.plugin : null,
+    mode: typeof source.mode === 'string' ? source.mode : null,
+    restoredFrom: typeof source.restoredFrom === 'string' ? source.restoredFrom : null,
+    restoredAt: Number.isFinite(Number(source.restoredAt)) ? Math.trunc(Number(source.restoredAt)) : null,
+    backupKind: typeof source.backupKind === 'string' ? source.backupKind : null,
+    needsRestart: source.needsRestart === true,
+    changed: source.changed === true,
+    evidence: source.evidence && typeof source.evidence === 'object'
+      ? {
+        renamedFrom: typeof source.evidence.renamedFrom === 'string' ? source.evidence.renamedFrom : null,
+        renamedTo: typeof source.evidence.renamedTo === 'string' ? source.evidence.renamedTo : null,
+      }
+      : null,
+    at: Number.isFinite(Number(source.at)) ? Math.trunc(Number(source.at)) : null,
+    atIso: typeof source.atIso === 'string' ? source.atIso : null,
+    reason: typeof source.reason === 'string' ? source.reason : '',
+  }
 }
 
 /**
@@ -5248,6 +5300,63 @@ const titleOfSummary = (item) => {
       }
     },
     /**
+     * THE ONLY REMAINING WRITER INTO THE PROFILE: put ONE plugin back, because a
+     * human pressed the button (user decision, 2026-11-01).
+     *
+     * The boot pass no longer restores anything — it reports and stops. This is
+     * the "只把这一个插件恢复到上一个备份版本" action, and it never touches a
+     * second plugin: the name comes from the request, not from a log.
+     *
+     * Never throws: a restore that cannot run comes back as `ok:false` with a
+     * `reason`, which is an answer the popup can show.
+     *
+     * @param {string} plugin the one plugin to put back
+     * @returns {object} `{ ok, plugin, mode, restoredFrom, restoredAt, backupKind, needsRestart, … }`
+     */
+    pluginRestore(plugin) {
+      const at = Date.now()
+      try {
+        const profileDir = runtime.profileDir && typeof runtime.profileDir.dir === 'string'
+          ? runtime.profileDir.dir
+          : ''
+        return restoreOnePlugin({
+          stateDir: stateDirOf(),
+          profileDir,
+          backupsDir: profileDir === '' ? '' : backupsDirFor(stateDirOf()),
+          plugin,
+          now: at,
+        })
+      } catch (error) {
+        return {
+          ok: false,
+          plugin: typeof plugin === 'string' ? plugin : '',
+          mode: null,
+          restoredFrom: null,
+          restoredAt: null,
+          backupKind: null,
+          needsRestart: false,
+          changed: false,
+          evidence: null,
+          at,
+          atIso: new Date(at).toISOString(),
+          reason: 'the restore failed: ' + String(error && error.message ? error.message : error),
+        }
+      }
+    },
+    /**
+     * The newest restore a human asked for (what health carries so the popup can
+     * say "already put back, restart to load it").
+     *
+     * @returns {object|null}
+     */
+    pluginRestoreInfo() {
+      try {
+        return summarizeRestoreHistory(readRestoreHistory(stateDirOf()))
+      } catch {
+        return null
+      }
+    },
+    /**
      * DISARM THE WATCHDOG: "this host is up, so nothing may roll it back".
      *
      * The ready marker is written on the FIRST tick of the first attempt (so a
@@ -7845,6 +7954,97 @@ function buildManualRollbackRoute(ctx, runtime, config) {
 }
 
 /**
+ * Build the single-plugin restore route — the button in the popup.
+ *
+ * `POST /plugin-restore` with `{ "plugin": "<name>" }` puts THAT ONE plugin back
+ * from the last known-good backup and nothing else:
+ *
+ *   - a real copy in the backup overwrites the live directory (`overwrite`);
+ *   - a `link:` installation is replaced by the backup's copied contents
+ *     (`replace-link`);
+ *   - in both cases the live tree is RENAMED to `<name>.broken-<ts>` first, so
+ *     the broken version stays on disk as evidence — nothing is ever deleted;
+ *   - a plugin that already equals the backup answers `already-consistent`,
+ *     writes nothing and asks for no restart (idempotent: pressing twice is
+ *     harmless);
+ *   - no backup, an unknown name, or a failed copy answers `ok:false` with a
+ *     `reason` AND HTTP 200 — "there is no backup for this plugin" is an
+ *     answer, not a server error.
+ *
+ * It is the ONLY path that still writes into the profile, and it only runs
+ * because a human pressed the button (the boot pass looks and reports, it does
+ * not act — see the boot section further down).
+ *
+ * The answer is `{ ok, plugin, mode, restoredFrom, restoredAt, backupKind,
+ * needsRestart }` plus the evidence and the timestamp; every attempt is also
+ * appended to `<stateDir>/plugin-restore-history.json` (newest 20).
+ *
+ * It sits next to the health route and uses the same authentication rule
+ * (loopback OR a request the connection service admits).
+ */
+function buildPluginRestoreRoute(ctx, runtime, config) {
+  const routePath = resolvePluginRestorePath(config)
+  return {
+    kind: 'exact',
+    path: routePath,
+    handler: (req, res) => {
+      const remote = req && req.socket ? req.socket.remoteAddress : undefined
+      const loopback = remote === undefined
+        || remote === '127.0.0.1'
+        || remote === '::1'
+        || remote === '::ffff:127.0.0.1'
+      if (!loopback && !admittedByConnection(ctx, req)) {
+        res.statusCode = 403
+        res.setHeader('content-type', 'application/json; charset=utf-8')
+        res.end('{"ok":false,"error":"loopback-only"}')
+        return
+      }
+      const answer = (payload, status = 200) => {
+        res.statusCode = status
+        res.setHeader('content-type', 'application/json; charset=utf-8')
+        res.setHeader('cache-control', 'no-store')
+        res.end(JSON.stringify(payload))
+      }
+      if (!req || req.method !== 'POST') {
+        res.statusCode = 405
+        res.setHeader('content-type', 'application/json; charset=utf-8')
+        res.setHeader('allow', 'POST')
+        res.end('{"ok":false,"error":"method-not-allowed"}')
+        return
+      }
+      void readJsonBody(req).then((payload) => {
+        const body = payload && typeof payload === 'object' ? payload : {}
+        const plugin = typeof body.plugin === 'string' ? body.plugin.trim() : ''
+        if (plugin === '') {
+          answer({ ...pluginRestorePayload({ ok: false, plugin: '', reason: 'the body must name one plugin: { "plugin": "<name>" }' }) })
+          return
+        }
+        const result = runtime.pluginRestore(plugin)
+        // A restore that changed nothing is reported, not hidden: the popup
+        // shows the reason next to the plugin.
+        runtime.pluginRestores = (runtime.pluginRestores ?? 0) + 1
+        if (result && result.ok === true && result.changed === true) {
+          runtime.log.info('one plugin was put back from the backup as asked', {
+            plugin,
+            mode: result.mode,
+            restoredAt: result.restoredAt,
+            needsRestart: result.needsRestart === true,
+          })
+        } else if (result && result.ok !== true) {
+          runtime.log.warn('a plugin could not be put back from the backup:', {
+            plugin,
+            reason: result.reason,
+          })
+        }
+        answer(pluginRestorePayload(result))
+      }).catch((error) => {
+        answer(pluginRestorePayload({ ok: false, plugin: '', reason: describeError(error) }))
+      })
+    },
+  }
+}
+
+/**
  * Build the announcements route: the one-time announcement of a new feature.
  *
  * It sits next to the health route and uses the same authentication rule
@@ -9100,6 +9300,11 @@ function registerHealthRoute(ctx, runtime, config, sleep) {
             // to which point in time. Always present (null = never had one), so
             // the interface can tell "no incident" from "the field is missing".
             pluginRecovery: runtime.pluginRecoveryInfo(),
+            // THE LAST RESTORE A HUMAN ASKED FOR (user decision, 2026-11-01):
+            // the popup's "put THIS one plugin back" writes it, and the answer
+            // says which plugin, from which backup, and whether a restart is
+            // needed to load it. Absent when nobody ever asked.
+            ...(runtime.pluginRestoreInfo() ? { pluginRestore: runtime.pluginRestoreInfo() } : {}),
             // THE RESCUE KIT: where the two scripts are, so a user whose DSH
             // does not come up can find them (and copy the path) even though
             // they cannot open a README.
@@ -9296,6 +9501,9 @@ function registerHealthRoute(ctx, runtime, config, sleep) {
         // this machine never had one; the PROCESS-LEVEL failure is NOT reported
         // here (that is the rollback report and the watchdog).
         pluginRecovery: runtime.pluginRecoveryInfo(),
+        // THE LAST RESTORE A HUMAN ASKED FOR (the popup's button): "this one
+        // plugin was put back from that backup at that time, restart to load it".
+        ...(runtime.pluginRestoreInfo() ? { pluginRestore: runtime.pluginRestoreInfo() } : {}),
         // THE FIRST SAFE COPY: what happened when this machine looked for a
         // known-good backup and found none (user decision, 2026-10-30). Absent
         // when nothing was ever tried.
@@ -9339,6 +9547,7 @@ function registerHealthRoute(ctx, runtime, config, sleep) {
     const choiceRoute = buildChoiceRoute(ctx, runtime, config)
     const cancelRoute = buildCancelRoute(ctx, runtime, config)
     const manualRollbackRoute = buildManualRollbackRoute(ctx, runtime, config)
+    const pluginRestoreRoute = buildPluginRestoreRoute(ctx, runtime, config)
     const announcementsRoute = buildAnnouncementsRoute(ctx, runtime, config)
     const supervisorRoute = buildSupervisorRoute(ctx, runtime, config)
     const rescueRoute = buildRescueRoute(ctx, runtime, config)
@@ -9371,6 +9580,10 @@ function registerHealthRoute(ctx, runtime, config, sleep) {
       { name: 'rescue', route: rescueRoute },
     ]
     if (sleepRoute !== null) routes.push({ name: 'sleep', route: sleepRoute })
+    // THE SINGLE-PLUGIN RESTORE comes LAST ON PURPOSE. The order of the routes
+    // above is part of what the boot check reports (and what the tests pin), so
+    // a new route is APPENDED instead of being pushed into the middle of it.
+    routes.push({ name: 'plugin-restore', route: pluginRestoreRoute })
     for (const entry of routes) {
       try {
         target.effect(() => webServer.register(entry.route), 'dsh-autorestart: ' + entry.name + ' route')
@@ -9661,61 +9874,47 @@ export function apply(ctx, rawConfig, options = {}) {
   registerSystemPrompt(ctx, runtime)
   registerHealthRoute(ctx, runtime, config, sleep)
 
-  // THE REPORTED KIND OF PLUGIN FAILURE (user decision, 2026-11-01).
+  // THE REPORTED KIND OF PLUGIN FAILURE — LOOK ONLY (user decision, 2026-11-01).
   //
-  // Runs here on purpose: AFTER everything above is in place (so a restart can
-  // be asked for through the normal entry) and BEFORE the ready marker below
-  // (the host is not "up and done" while a plugin it knows about is broken).
+  // The pass runs here on purpose: AFTER everything above is in place and BEFORE
+  // the ready marker below, so the popup can show what the previous boot found.
   //
-  // IT ONLY LOOKS AT THE PREVIOUS BOOT'S LOG. The log of the boot that is
-  // looking cannot hold its own audit verdict yet, and reading an older one
-  // would dig up an incident that is already handled — both are what
-  // `findLatestStartupLog({ before })` plus the recorded fingerprints prevent.
+  // IT LOOKS AT THE PREVIOUS BOOT'S LOG AND WRITES THE REPORT. THAT IS ALL.
+  //
+  //   - it does NOT restore anything (`applyPluginRecovery` is never called from
+  //     here): DSH already drops a broken entry and boots normally — measured at
+  //     22 s on the desktop and 2.0–2.6 s on hosted `dsh web`, with the profile's
+  //     `package.json` byte-identical and no repeated restarts under
+  //     `supervise-web.sh`. An automatic restore only added a second writer into
+  //     the profile at boot;
+  //   - it does NOT ask for a restart (`requestRestart` is never called from
+  //     here): "关就是关" — a boot never starts another boot.
+  //
+  // The USER decides: the popup names the plugin and its error and offers
+  // "put THIS one plugin back from the last backup", which goes through
+  // POST <healthPath>/plugin-restore — the only remaining writer.
   //
   // IT NEVER TOUCHES THE PROCESS-LEVEL FAILURE: a host that does not come up is
   // the snapshot + the watchdog. This is the "up, but one entry silently did
   // not activate" case only.
   if (runtime.isNewBoot) {
     try {
-      const recovery = runPluginRecovery({
+      const detection = detectPluginRecovery({
         stateDir: runtime.stateDir,
-        profileDir: runtime.profileDir.dir,
         backupsDir: runtime.profileDir.dir ? backupsDirFor(runtime.stateDir) : '',
         logsDir: resolveStartupLogsDir(),
         // The moment this process started: only a log written BEFORE it
         // describes a boot that finished.
         bootAt: Date.now() - Math.round((typeof process.uptime === 'function' ? process.uptime() : 0) * 1000),
         now: Date.now(),
-        // THE EXISTING RESTART ENTRY — the same `requestRestart` the tool and
-        // the routes use. A second mechanism would bypass the gate, the snapshot
-        // and the resume path.
-        requestRestart: (request) => {
-          requestRestart(runtime.state, {
-            reason: typeof request.reason === 'string' && request.reason !== ''
-              ? request.reason
-              : 'a plugin failed to load and was restored from the known-good backup',
-            bySessionId: null,
-            // Nothing to resume for a boot-time restart, and the goals of other
-            // sessions are not this pass's business: it asks for ONE restart of
-            // a machine that has just started.
-            resume: false,
-            parkGoals: true,
-            now: Date.now(),
-          })
-          runtime.markRestartStage('waiting')
-          runtime.persist()
-          runtime.startPolling()
-          return true
-        },
       })
-      runtime.pluginRecovery = recovery
-      if (recovery && recovery.ran === true && recovery.found === true) {
-        log.warn('the previous boot reported a plugin failure', {
-          log: recovery.log,
-          plugins: recovery.failures.map((failure) => failure.plugin).filter((name) => typeof name === 'string'),
-          changed: recovery.changed === true,
-          needsHuman: recovery.needsHuman === true,
-          restartRequested: recovery.restartRequested === true,
+      runtime.pluginRecovery = detection
+      if (detection && detection.ran === true && detection.found === true) {
+        log.warn('the previous boot reported a plugin failure (nothing was changed: the popup offers a restore)', {
+          log: detection.log,
+          plugins: detection.failures.map((failure) => failure.plugin).filter((name) => typeof name === 'string'),
+          backupKind: detection.backupKind,
+          restoredAt: detection.restoredAt,
         })
       }
     } catch (error) {
@@ -9724,9 +9923,9 @@ export function apply(ctx, rawConfig, options = {}) {
       runtime.pluginRecovery = {
         ran: false,
         ok: false,
-        reason: 'the plugin-failure recovery failed: ' + String(error && error.message ? error.message : error),
+        reason: 'the plugin-failure detection failed: ' + String(error && error.message ? error.message : error),
       }
-      log.warn('the plugin-failure recovery failed:', String(error))
+      log.warn('the plugin-failure detection failed:', String(error))
     }
   }
 

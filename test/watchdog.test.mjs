@@ -150,7 +150,11 @@ test('a host that stays down is restored ONCE and started at most maxAttempts ti
   assert.equal(d.state.relaunches, DEFAULT_MAX_ATTEMPTS, 'one start per attempt');
   assert.ok(report.error, 'the report says why');
   assert.match(String(report.error), /attempt/, 'the report names the number of attempts');
-  assert.match(String(report.error), /sentry/, 'and says what has to take over now');
+  // The message must say that NOTHING ELSE will pick it up (the sentry standby
+  // was deleted on 2026-11-01, so it must not promise a rescuer that no longer
+  // exists) — and it must not name that removed component any more.
+  assert.match(String(report.error), /no further rollback will be attempted/, 'and says that this was the last automatic step');
+  assert.doesNotMatch(String(report.error), /sentry/i, 'it points at nothing that no longer exists');
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

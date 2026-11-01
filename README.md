@@ -719,11 +719,16 @@ Be clear about the window, because the whole thing is a **window**:
 - `watchdogEnabled: false` (and a machine whose tier is `none`) means no
   automatic rollback at all, and the settings page says so.
 
-A resident watchman that covers the window **outside** a restart (0 processes,
-plus a profile emptied by the official `sanitizeProfile`) exists in this
-repository as an **unwired standby** — see [`docs/sentry.md`](docs/sentry.md).
-It registers no tool, installs nothing by itself, and is not part of the flow
-described here.
+**The sentry resident watchman was removed (2026-11-01, user decision: it
+conflicts with "off means off", it is no longer maintained).** This repository
+used to carry an **unwired standby** for the window outside a restart (0
+processes, plus a profile emptied by the official `sanitizeProfile`):
+`lib/sentry.js`, `lib/sentry-install.js`, `supervisor/sentry.js`, its two tests
+and `docs/sentry.md`. It registered no tool and installed nothing by itself —
+but a resident watchman is exactly what "off means off" forbids: once automatic
+rollback is switched off, nothing may quietly bring the host back. The whole
+standby has been **deleted** and is no longer maintained. The paragraph above
+therefore still holds — and there is now **no standby left to wire in**.
 
 ### A plugin that did not load: the REPORTED kind of failure
 
@@ -738,9 +743,33 @@ The two failures are handled by two different mechanisms, and they never overlap
 | failure | who handles it |
 |---|---|
 | **process level** — the host does not come up at all | the pre-restart snapshot + the watchdog: one snapshot is restored and the host is started again |
-| **reported** — the host is up, one plugin silently did not activate | the boot pass described here: the known-good copy is put back, ONE restart is requested, and a report is written |
+| **reported** — the host is up, one plugin silently did not activate | **a report and a popup, nothing else** — the user decides, and one button puts ONE plugin back |
 
-What the boot pass does, per failed plugin:
+**THE BOOT PASS DOES NOT FIX ANYTHING** (user decision, 2026-11-01). It used to
+put the known-good copy back and ask for one restart; measurement showed that
+was redundant work on top of what the host already does:
+
+- the host **already survives** a broken plugin — measured at **22 s** on the
+  desktop (normal boot, the broken plugin's route 404s, the configuration is not
+  touched) and at **2.0–2.6 s** on a hosted `dsh web` instance (the profile's
+  `package.json` was byte-identical across five samples, and `supervise-web.sh`
+  started the host **once** in 62.9 s);
+- so an automatic restore only added a second writer into the profile at boot,
+  and an automatic restart on top of it.
+
+What the boot pass does now: **read the previous boot's log, recognise the
+failed plugins, write `<stateDir>/last-plugin-recovery.json`.** It never calls
+the restore, it never asks for a restart — both facts are pinned by tests (every
+file in the profile keeps its sha256, no `<plugin>.broken-<ts>` evidence is
+created, `state.restart` stays empty).
+
+**The popup is the half that was missing.** A card in the composer dock says
+which plugin did not load and what error it reported, and offers exactly one
+action: *"Restore `<plugin>` only"*.
+
+**`POST /__dsh_autorestart/plugin-restore`** with `{ "plugin": "<name>" }` is
+the ONLY remaining writer into the profile, and it only runs because a human
+pressed the button:
 
 - **`overwrite`** — the newest **known-good** backup holds a real copy: the live
   directory is renamed to `<name>.broken-<ts>` (**evidence — nothing is ever
@@ -748,9 +777,22 @@ What the boot pass does, per failed plugin:
 - **`replace-link`** — the backup only holds the CONTENTS of a `link:` install
   (`node_modules-link/<name>`): the live link is moved aside the same way and the
   copied contents take its place;
-- **`no-backup`** — the backup holds nothing for that plugin, or the plugin is not
-  part of this profile's enabled list: nothing is touched and the reason is written
-  down.
+- **`already-consistent`** — the live plugin already equals the backup: no file
+  is written and no restart is asked for (pressing twice is harmless);
+- **`no-backup` / a copy that fails** — `ok:false` with a `reason` **and HTTP
+  200**: "there is no backup for this plugin" is an answer, not a server error.
+
+A restore touches **that one plugin**: every other plugin, and the profile's
+`package.json` / `cordis.patch.yml`, are byte-identical afterwards (asserted
+file by file). Each attempt is appended to
+`<stateDir>/plugin-restore-history.json` (newest 20) and the newest one is
+carried by the health route as `pluginRestore`, so the card can say "already put
+back — restart to load it".
+
+The loop guards of the old automatic pass (`duplicate` / `needs-human`) are
+**not** applied to a button press: "should the machine act on its own" is a
+different question from "a person asked again", and the idempotency check still
+protects the disk.
 
 Two loops are possible, and both are stopped:
 

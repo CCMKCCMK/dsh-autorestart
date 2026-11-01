@@ -499,6 +499,19 @@
     'announcement.disabled': '按钮目前关闭，可在设置里打开。',
     'announcement.button': '知道了',
     'announcement.error': '没能记下来：{message}',
+    // THE PLUGIN THAT DID NOT LOAD (用户拍板 2026-11-01)：宿主照常起来，只是某个
+    // 插件这次没激活 —— 把这件事搬到前台，并且只给一个动作：只恢复这一个。
+    'pluginFailure.title': '有插件没加载成功',
+    'pluginFailure.intro': '宿主照常起来了，只是下面这些插件这次没激活，它们的功能用不了：',
+    'pluginFailure.entry': '{plugin} —— {error}',
+    'pluginFailure.backup': '可以只把这一个插件恢复到上一个备份版本（备份时间 {at}）。',
+    'pluginFailure.noBackup': '这台机器没有可用备份，只能手动处理。',
+    'pluginFailure.restore': '只恢复 {plugin}',
+    'pluginFailure.restoring': '正在恢复 {plugin}…',
+    'pluginFailure.restored': '已经把 {plugin} 恢复到备份版本（备份时间 {at}），重启后生效。',
+    'pluginFailure.consistent': '{plugin} 本来就和备份一致，没有改动任何文件。',
+    'pluginFailure.failed': '没能恢复 {plugin}：{reason}',
+    'pluginFailure.hint': '恢复只动这一个插件，别的插件和 profile 配置都不碰。',
     // THE COPY OF THE COMPOSER ROW. It is one SHORT line and never a sentence:
     // the long stage sentence was clipped away there (user report,
     // 2026-10-29). While the gate waits the pill keeps its own composed line
@@ -874,6 +887,20 @@
     'announcement.disabled': 'The button is currently switched off; you can turn it on in the settings.',
     'announcement.button': 'Got it',
     'announcement.error': 'Could not record it: {message}',
+    // THE PLUGIN THAT DID NOT LOAD (user decision 2026-11-01): the host came up,
+    // one plugin simply did not activate this time. Say so, and offer exactly
+    // one action: put THIS one plugin back.
+    'pluginFailure.title': 'A plugin did not load',
+    'pluginFailure.intro': 'The host came up fine; these plugins did not activate this time, so their features are unavailable:',
+    'pluginFailure.entry': '{plugin} — {error}',
+    'pluginFailure.backup': 'You can put just this one plugin back from the last backup (taken {at}).',
+    'pluginFailure.noBackup': 'This machine has no usable backup, so this has to be handled by hand.',
+    'pluginFailure.restore': 'Restore {plugin} only',
+    'pluginFailure.restoring': 'Restoring {plugin}…',
+    'pluginFailure.restored': 'Put {plugin} back to the backup version (taken {at}); it takes effect after a restart.',
+    'pluginFailure.consistent': '{plugin} already matches the backup, so no file was changed.',
+    'pluginFailure.failed': 'Could not restore {plugin}: {reason}',
+    'pluginFailure.hint': 'A restore touches this one plugin only; the other plugins and the profile configuration stay as they are.',
     // THE COPY OF THE COMPOSER ROW (see the Chinese block): one short line,
     // never a sentence.
     'restart.stage.snapshotting': 'Backing up…',
@@ -8136,6 +8163,178 @@
         )
       }
 
+      /**
+       * The single-plugin restore: the button in the plugin-failure panel.
+       *
+       * `POST /plugin-restore` with `{ "plugin": "<name>" }` puts THAT ONE
+       * plugin back from the last known-good backup. The Host answers with
+       * `ok:false` + a reason for "no backup" / "could not copy" — and it says
+       * so with HTTP 200, because that is an answer, not a server error.
+       */
+      const DEFAULT_PLUGIN_RESTORE_URL = ROUTE_PREFIX + '/plugin-restore'
+
+      async function restorePluginOnce(plugin) {
+        const response = await fetch(DEFAULT_PLUGIN_RESTORE_URL, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ plugin }),
+          cache: 'no-store',
+        })
+        if (!response.ok) throw new Error('HTTP ' + response.status)
+        const body = await response.json()
+        if (!body || typeof body !== 'object') throw new Error('the Host sent no answer')
+        return body
+      }
+
+      /**
+       * THE PLUGIN THAT DID NOT LOAD — the popup the user asked for.
+       *
+       * WHY IT EXISTS: the host ALREADY survives a broken plugin (measured: 22 s
+       * on the desktop, 2.0–2.6 s on hosted `dsh web`, profile untouched, no
+       * repeated restarts under the supervisor), so the plugin no longer
+       * restores anything by itself at boot. What was missing was the OTHER
+       * half: the user finding out. This panel says which plugin did not
+       * activate and what error it reported, and offers exactly one action —
+       * "put THIS one plugin back from the last backup".
+       *
+       * It is an ordinary block in the composer dock (the same place as the
+       * install prompt and the announcement): it never covers the interface and
+       * never touches the countdown. It is not dismissible by hiding a problem:
+       * it disappears when the plugin loads again (a new boot with a clean log,
+       * which clears the report).
+       */
+      function PluginFailurePanel() {
+        const info = useSharedInfo(true)
+        const [busy, setBusy] = useState('')
+        const [answer, setAnswer] = useState(null)
+        const [error, setError] = useState('')
+        const t = makeTranslate(translate)
+
+        const recovery = info && typeof info === 'object'
+          && info.pluginRecovery && typeof info.pluginRecovery === 'object'
+          ? info.pluginRecovery
+          : null
+        const failures = recovery && Array.isArray(recovery.failures)
+          ? recovery.failures.filter((entry) => entry && typeof entry.plugin === 'string' && entry.plugin !== '')
+          : []
+        if (failures.length === 0) return null
+
+        const lastRestore = info && typeof info === 'object'
+          && info.pluginRestore && typeof info.pluginRestore === 'object'
+          ? info.pluginRestore
+          : null
+        const hasBackup = typeof recovery.backupKind === 'string' && recovery.backupKind !== ''
+        const takenAt = recovery.restoredAt === null || recovery.restoredAt === undefined
+          ? null
+          : new Date(Number(recovery.restoredAt))
+        const when = takenAt !== null && Number.isFinite(takenAt.getTime())
+          ? takenAt.toLocaleString()
+          : '?'
+        ensureAnnouncementStyle()
+
+        const restore = (plugin) => {
+          if (busy !== '') return
+          setBusy(plugin)
+          setError('')
+          setAnswer(null)
+          void (async () => {
+            try {
+              const restored = await restorePluginOnce(plugin)
+              setAnswer(restored)
+            } catch (failure) {
+              setError(fill(t('pluginFailure.failed'), { plugin, reason: describeError(failure) }))
+            }
+            setBusy('')
+          })()
+        }
+
+        // Three at a time is enough to be actionable; the rest is a count. A
+        // wall of broken plugins is not something the popup can fix anyway.
+        const shown = failures.slice(0, 3)
+        const rest = failures.length - shown.length
+
+        const lines = []
+        for (const failure of shown) {
+          const plugin = failure.plugin
+          const entryError = typeof failure.error === 'string' && failure.error !== ''
+            ? failure.error
+            : '—'
+          lines.push(h(
+            'p',
+            { className: 'dsh-autorestart-announcement__line', key: 'entry:' + plugin },
+            fill(t('pluginFailure.entry'), { plugin, error: entryError }),
+          ))
+          const restoredAlready = lastRestore
+            && lastRestore.plugin === plugin
+            && lastRestore.ok === true
+            && lastRestore.mode !== 'already-consistent'
+          if (restoredAlready === true) {
+            lines.push(h(
+              'p',
+              { className: 'dsh-autorestart-announcement__note', key: 'done:' + plugin },
+              fill(t('pluginFailure.restored'), { plugin, at: when }),
+            ))
+            continue
+          }
+          if (hasBackup !== true) continue
+          lines.push(h(
+            'button',
+            {
+              type: 'button',
+              className: 'dsh-autorestart-announcement__cta',
+              key: 'cta:' + plugin,
+              'data-dsh-autorestart-plugin-restore': plugin,
+              disabled: busy !== '',
+              onClick: () => restore(plugin),
+            },
+            busy === plugin
+              ? fill(t('pluginFailure.restoring'), { plugin })
+              : fill(t('pluginFailure.restore'), { plugin }),
+          ))
+        }
+        if (rest > 0) {
+          lines.push(h('p', { className: 'dsh-autorestart-announcement__note', key: 'rest' }, '+' + rest))
+        }
+
+        return h(
+          'div',
+          {
+            className: 'dsh-autorestart-announcement dsh-autorestart-plugin-failure',
+            role: 'status',
+            'data-dsh-autorestart-plugin-failure': 'true',
+          },
+          h('h3', { className: 'dsh-autorestart-announcement__title' }, t('pluginFailure.title')),
+          h('p', { className: 'dsh-autorestart-announcement__line' }, t('pluginFailure.intro')),
+          ...lines,
+          hasBackup === true
+            ? h('p', { className: 'dsh-autorestart-announcement__line' }, fill(t('pluginFailure.backup'), { at: when }))
+            : h('p', { className: 'dsh-autorestart-announcement__note' }, t('pluginFailure.noBackup')),
+          h('p', { className: 'dsh-autorestart-announcement__note' }, t('pluginFailure.hint')),
+          answer === null
+            ? null
+            : h(
+              'p',
+              {
+                className: answer.ok === true
+                  ? 'dsh-autorestart-announcement__note'
+                  : 'dsh-autorestart-announcement__error',
+                role: answer.ok === true ? 'status' : 'alert',
+              },
+              answer.ok === true
+                ? (answer.mode === 'already-consistent'
+                  ? fill(t('pluginFailure.consistent'), { plugin: answer.plugin || '' })
+                  : fill(t('pluginFailure.restored'), { plugin: answer.plugin || '', at: when }))
+                : fill(t('pluginFailure.failed'), {
+                  plugin: answer.plugin || '',
+                  reason: typeof answer.reason === 'string' && answer.reason !== '' ? answer.reason : '—',
+                }),
+            ),
+          error === ''
+            ? null
+            : h('p', { className: 'dsh-autorestart-announcement__error', role: 'alert' }, error),
+        )
+      }
+
       return {
         inject: ['slots', 'locale'],
         apply(ctx) {
@@ -8158,6 +8357,11 @@
           // same dock (it never covers the interface and never touches the
           // countdown) and disappears for good once the user answered it.
           ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({ name: 'conversation.input.dock', id: 'autorestart-feature-announcement', order: 8, locale: NS }, FeatureAnnouncementPanel))
+          // THE PLUGIN THAT DID NOT LOAD (user decision, 2026-11-01): the boot
+          // pass only REPORTS now, so this panel is where the user finds out
+          // which plugin did not activate — and where the ONE action lives:
+          // "put this one plugin back from the last backup".
+          ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({ name: 'conversation.input.dock', id: 'autorestart-plugin-failure', order: 9, locale: NS }, PluginFailurePanel))
           // The graceful-shutdown button: a LIST slot at the foot of the left
           // sidebar, beside the Settings row. The slot is a ROOT slot, so the
           // button is there even when no conversation is open — and the

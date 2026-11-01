@@ -1,5 +1,66 @@
 # Changelog
 
+## 未发布 — 修掉测试的「墙上时钟依赖」
+
+**症状**：同一份代码，08:56 全量 999/999 绿，09:01 变三条红（`integration.test.mjs` 的「boot pass restores…」、`plugin-recover.test.mjs` 的「THE BOOT PASS ONLY LOOKS…」与「a clean previous boot writes no report at all」）。
+
+**根因**（不在实现，在 fixture）：`lib/plugin-recover.js` 的 `findLatestStartupLog` 用 `log.mtime <= cutoff` 判断"这是上一轮已结束启动的日志"——这是被测行为，**一行没动**。而这几处测试把 `bootAt` 写死成 `2026-11-01T01:00:00Z`（北京 09:00），它们写出的启动日志却是 `writeFile` 落的盘，**mtime 是运行时真实时钟**。于是真实时间一越过 09:00，日志就被判为"本次启动写的"，查找返回 `null`，三个用例同时红。
+
+**修法**：把日志的 mtime **钉死到它自己描述的那一刻**（`fs.utimesSync`），让测试与墙上时钟彻底解耦；同时把两个 fixture 的"日志时刻 / 启动时刻"提成命名常量（`LOG_AT` / `BOOT_AT`、`RECOVERY_LOG_AT` / `RECOVERY_BOOT_AT`），避免有人把 `bootAt` 推到未来去"修"它——那等于改掉被测语义。
+
+- `test/plugin-recover.test.mjs`：新增 `pinLogTime()`，`writeStartupLog` 与另外两处直接写日志的用例（clean boot、sinceMs guard）全部走它。
+- `test/integration.test.mjs`：`pluginRecoveryFixture` 写完日志即钉 mtime（早于它用到的两个 `bootAt`）；「只读更早启动的日志」那条用例仍然在之后把 mtime 顶到 `01:00:04Z`，语义不变。
+- **新增 2 条守卫断言**：`the boot-pass fixture pins its log strictly BEFORE the boot under test` / `the plugin-recovery fixture pins its log strictly BEFORE the boot under test` —— 断言 `logMtime < bootAt`、盘上 mtime 约等于钉死值（容忍文件系统取整）、且钉死之后 `findLatestStartupLog` 仍然找得到这份日志。以后谁再引入"靠 now 决定"的 fixture，会当场红。
+- 实测：修复前 09:01 三条红 → 修复后 **09:04 全量 1001/1001 绿（exit 0）**；拷问脚本显示钉死后 mtime = `2026-11-01T00:00:01.100Z`，距 bootAt 恒 +3598.9 秒，与真实时间无关。
+- 断言**一条没删、一条没放宽**，只是把 fixture 的时间来源从"现在"换成"它描述的那一刻"。
+
+## 未发布 — 收敛：启动只提示不改文件、按需恢复单个插件、守夜人全部删除
+
+> **这一节取代下面「报错型插件故障：自动换回好版本、只重启一次、写出可读报告」那节里的自动恢复部分。** 那节的检测、纯函数和报告格式都还在用；被拿掉的是「启动时自己动手 + 自己请求重启」。
+
+### 用户拍板（2026-11-01）
+
+三件事，两件是"少做"，一件是"补上缺的那半"：
+
+1. **不要再自动修** —— 实测证明 DSH 自己就能剔除坏插件并照常起来：桌面版 22 秒正常启动、坏插件路由 404、配置不动；WSL 托管版 2.0–2.6 秒起来、`package.json` md5 五次一致、守护脚本 62.9 秒内只 +1 次启动。插件再插一手自动恢复，等于在启动路径上多一个改文件的写者 + 多一次自动重启。
+2. **把提醒搬到前台** —— 原来"检测到了"这件事只落在 health 字段和日志里，用户看不见。现在弹出来：哪个插件坏了、报了什么错，并给**一个**选项「只把这一个插件恢复到上一个备份版本」。
+3. **守夜人（sentry）全部删掉** —— 与「关就是关」冲突，不再维护。
+
+### ① 启动路径：只读、只写报告，不动文件、不请求重启
+
+- 启动时改调新函数 `detectPluginRecovery()`（`lib/plugin-recover.js`）：读**上一次启动**的日志 → `findPluginFailures` 解析 → `mergeFailuresByPlugin` 归并 → 写 `<stateDir>/last-plugin-recovery.json` → 暴露 health 字段。
+- **启动路径不再调用 `applyPluginRecovery`，也不再调用 `requestRestart`**（单测钉住：恢复前后 profile 里每个文件的 sha256 不变、没有 `<plugin>.broken-*` 证据目录、`state.restart === null`）。
+- 报告里的 `actions` **恒为空**：什么都没做，就不能写"overwrite"假装恢复过。`backupKind` / `restoredAt` 仍然填（回答"有没有备份可恢复、恢复到哪个时点"），弹窗据此决定按钮是否可用。
+- `plugin-recovery.json`（attempt 预算 / handled 指纹）**启动路径也不再写**：自动恢复没了，这两个记账就没有读者了。
+- `runPluginRecovery()` / `collectPluginRecovery()` 保留导出（现有集成测试直接驱动它们，且逻辑本身没错），但**启动流程不再调用**。
+
+### ② 新增按需入口：只恢复一个插件
+
+- `POST /__dsh_autorestart/plugin-restore`，body `{ "plugin": "<name>" }`。
+- 返回 `{ ok, plugin, mode, restoredFrom, restoredAt, backupKind, needsRestart }`（另带 `changed` / `evidence` / `at` / `reason`）。
+- 只恢复**被点名的那一个**：真副本 → `overwrite`（现场目录先改名为 `<name>.broken-<ts>` 留证据，绝不删除）；链接安装 → `replace-link`（软链同样改名留证据，备份内容顶替）。
+- **幂等**：现场已等于备份 → `already-consistent`，不写任何文件，`needsRestart: false`。
+- **失败也是 HTTP 200**：`ok:false` + `reason`（"没有备份" / "拷不进去"）。500 会让浏览器分不清"没有备份"和"宿主崩了"。
+- 每次尝试写 `<stateDir>/plugin-restore-history.json`（最多 20 条，最新在前）；health 新增 `pluginRestore` 字段带最近一条。`pluginRecovery` 的形状**保持不变**（`continuum_status` 的严格 output schema 也没动）。
+- 这一条路径**跳过**自动恢复的两个循环守卫（`duplicate` / `needs-human`）：那两条是"机器该不该自己动手"，人再点一次不是循环；幂等检查仍在保护磁盘。
+
+### ③ 前台弹窗（`client.js`）
+
+- 新增 `PluginFailurePanel`，挂在 `conversation.input.dock`（和安装提问、新功能公告同一个位置：不盖界面、不碰倒计时）。
+- 显示：标题「有插件没加载成功」、每个插件的名字 + 它报的错（最多 3 条，其余只报数量）、备份时间、以及每个插件一个按钮「只恢复 <plugin>」。没有可用备份时按钮不出现，直接说"只能手动处理"。
+- 点完就地显示结果：恢复成功（重启后生效）/ 已经和备份一致 / 恢复失败的原因。
+- 新增中英词条 12 条（`pluginFailure.*`）。
+
+### ④ 守夜人删除
+
+- 删除 `lib/sentry.js`、`lib/sentry-install.js`、`supervisor/sentry.js`、`test/sentry.test.mjs`、`test/sentry-install.test.mjs`、`docs/sentry.md`（共 6 份）。
+- `README.md` / `docs/README.zh.md` 的"未接线备用件"段落改写成「已移除（2026-11-01，用户拍板：与『关就是关』冲突，不再维护）」。
+- 源码里**没有任何 import 引用**过它（这几份文件本来就是未接线的备用件），所以删掉不影响任何加载路径。
+- **清理守夜人残留引用**（3 处，都指向已删除的文件/概念，删完才不留悬空指针）：
+  - `package.json` 的 `files` 数组删掉 `"supervisor/sentry.js"` —— 那个文件已经不存在了，留着只会让打包清单指空；
+  - `lib/watchdog.js` 里"用尽次数"的失败文案由「rely on the sentry」改成「no further rollback will be attempted」，如实描述现在的行为：看门狗是**最后一道自动步骤**，它放弃之后就得人来看报告（同时把该处注释补上这个理由）；
+  - `test/watchdog.test.mjs` 里那条 `/sentry/` 断言不再是「指向谁接手」，改成**正向断言新文案** + **反向断言旧词已不存在**（`doesNotMatch(/sentry/i)`）——断言没有删，只是跟着文案走。
+
 ## 未发布 — 报错型插件故障：自动换回好版本、只重启一次、写出可读报告
 
 ### 缺口

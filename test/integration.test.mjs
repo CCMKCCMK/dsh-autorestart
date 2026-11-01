@@ -41,7 +41,7 @@ function blocker(sessionId, reason, label = null) {
     kind: 'session',
     label,
     // No title, no name: the host never invents a generic one (a list of
-    // "会话、会话、会话" says nothing and looks like a bug).
+    // "浼氳瘽銆佷細璇濄€佷細璇? says nothing and looks like a bug).
     name: label === null ? '' : label,
     parentTitle: null,
     parentSessionId: null,
@@ -510,7 +510,7 @@ test('the served index gets a boot-token heartbeat for dsh web pages', () => {
     },
   })
   apply(fake.ctx, { stateFile: file, recoveryDelayMs: 0, enabled: true })
-  assert.equal(routes.length, 11, '11 since the manual rollback route (2026-10-30)')
+  assert.equal(routes.length, 12, '12 since the single-plugin restore route (2026-11-01)')
   assert.equal(routes[0].kind, 'exact')
   assert.equal(routes[0].path, '/__dsh_autorestart/health')
   assert.equal(routes[1].kind, 'exact')
@@ -568,7 +568,7 @@ test('autoReloadPage: false suppresses the heartbeat but keeps the health route'
     },
   })
   apply(fake.ctx, { stateFile: file, recoveryDelayMs: 0, enabled: true, autoReloadPage: false })
-  assert.equal(routes.length, 11, '11 since the manual rollback route (2026-10-30)')
+  assert.equal(routes.length, 12, '12 since the single-plugin restore route (2026-11-01)')
   assert.equal(taps.length, 0, 'without the heartbeat there is nothing to inject')
   const html = taps.length === 0 ? '<html><head></head><body>app</body></html>' : taps[0]('<html><head></head><body>app</body></html>')
   assert.doesNotMatch(html, /data-dsh-autorestart-heartbeat/, 'the heartbeat must stay off')
@@ -736,7 +736,7 @@ test('the ?gate=1 probe refuses a restart while a conversation has queued inbox 
   agent.inbox = { nextTurn: [{ id: 'm1' }], nextStep: [] };
   const { fake, routes } = contextWithRoutes({ runningAgents: [agent] });
   apply(fake.ctx, { stateFile: file, recoveryDelayMs: 0, enabled: true });
-  assert.equal(routes.length, 11, 'the health route must be registered (11 routes since the manual rollback one)');
+  assert.equal(routes.length, 12, 'the health route must be registered (12 routes since the manual rollback one)');
   const res = fakeResponse();
   routes[0].handler({ url: '/__dsh_autorestart/health?gate=1', socket: { remoteAddress: '127.0.0.1' } }, res);
   assert.equal(res.statusCode, 200);
@@ -787,7 +787,7 @@ test('the ?state=1 probe reports the pending-restart state a UI banner needs', (
   });
   const { fake, routes } = contextWithRoutes();
   apply(fake.ctx, { stateFile: file, recoveryDelayMs: 0, enabled: true });
-  assert.equal(routes.length, 11, 'the health route must be registered (11 routes since the manual rollback one)');
+  assert.equal(routes.length, 12, 'the health route must be registered (12 routes since the manual rollback one)');
   const res = fakeResponse();
   routes[0].handler({ url: '/__dsh_autorestart/health?state=1', socket: { remoteAddress: '127.0.0.1' } }, res);
   assert.equal(res.statusCode, 200);
@@ -1703,7 +1703,7 @@ test('the plugin reports the version of the package, and the health route report
   assert.match(pkg.version, /^\d+\.\d+\.\d+$/, 'the package carries a semantic version')
 
   // The health route is a custom route, so the version it reports is read from
-  // the running plugin — the one thing a real machine can check.
+  // the running plugin 鈥?the one thing a real machine can check.
   const { ctx, routes } = createRouteContext()
   apply(ctx, { stateFile: tempStateFile('health-version').file, recoveryDelayMs: 0, enabled: true })
   const route = routes.find((entry) => entry.path === '/__dsh_autorestart/health')
@@ -1886,6 +1886,18 @@ function writeAt(file, content) {
 }
 
 /**
+ * The two instants the plugin-recovery fixture owns.
+ *
+ * `RECOVERY_BOOT_AT` is the boot the tests pretend to be, `RECOVERY_LOG_AT` is
+ * the moment the fixture's startup log DESCRIBES — and the mtime it is pinned to.
+ * They are named instead of repeated so nobody can "fix" the wall-clock problem
+ * by moving the boot time into the future: the log has to stay older than the
+ * boot, and it does, forever.
+ */
+const RECOVERY_LOG_AT = Date.parse('2026-11-01T00:00:01.100Z');
+const RECOVERY_BOOT_AT = Date.parse('2026-11-01T01:00:00.000Z');
+
+/**
  * A synthetic profile + one known-good backup of it + one startup log that
  * reports `plugin` as failed, plus the state directory of the plugin.
  */
@@ -1915,12 +1927,53 @@ function pluginRecoveryFixture(label, { plugin = 'broken-plugin', error = 'Error
 
   const logsDir = path.join(root, 'logs');
   const logName = 'startup-2026-11-01T00-00-00.000Z-aaaa.log';
-  writeAt(path.join(logsDir, logName), [
+  const logPath = path.join(logsDir, logName);
+  writeAt(logPath, [
     `2026-11-01T00:00:01.000Z dsh: warning: 1 entry did not activate`,
     `2026-11-01T00:00:01.100Z - ${plugin}: failed to import: ${error}`,
   ].join('\n'));
-  return { root, stateDir, profileDir, backupsDir, backupDir, logsDir, logPath: path.join(logsDir, logName) };
+  // THE WALL CLOCK MUST NOT DECIDE THESE TESTS.
+  //
+  // `findLatestStartupLog` keeps a log only when its mtime is NOT LATER than the
+  // boot under test (`log.mtime <= cutoff` in lib/plugin-recover.js) — that is
+  // the behaviour under test, and it stays exactly as it is. But a file written
+  // by `writeAt` carries the REAL clock, while the boot time below is a fixed
+  // date, so the fixture used to be green only until the calendar passed that
+  // fixed moment: on 2026-11-01 the whole recovery group turned red at 09:00
+  // (+08:00) although nothing in the code had changed.
+  //
+  // Pinning the mtime to the moment the log DESCRIBES (00:00:01.100Z — strictly
+  // before every boot time the tests use) makes the fixture honest and
+  // time-independent at once.
+  fs.utimesSync(logPath, new Date(RECOVERY_LOG_AT), new Date(RECOVERY_LOG_AT));
+  return {
+    root,
+    stateDir,
+    profileDir,
+    backupsDir,
+    backupDir,
+    logsDir,
+    logPath,
+    // The two instants the fixture guarantees: the log is pinned to one and the
+    // tests boot at the other, so `logMtime < bootAt` never depends on "now".
+    logMtime: RECOVERY_LOG_AT,
+    bootAt: RECOVERY_BOOT_AT,
+  };
 }
+
+test('the plugin-recovery fixture pins its log strictly BEFORE the boot under test', () => {
+  const fixture = pluginRecoveryFixture('clock-guard');
+  // The property the whole group relies on, asserted instead of assumed.
+  assert.equal(fixture.logMtime < fixture.bootAt, true, 'the fixture owes a log older than the boot');
+  const mtimeMs = fs.statSync(fixture.logPath).mtimeMs;
+  assert.equal(
+    mtimeMs < fixture.bootAt,
+    true,
+    'the log on disk is strictly older than the boot under test — not "now vs 09:00"',
+  );
+  // A small tolerance: some file systems round the mtime they store.
+  assert.equal(Math.abs(mtimeMs - fixture.logMtime) < 5, true, 'the mtime really was pinned to the fixture instant');
+});
 
 test('the boot pass restores the failed plugin and writes last-plugin-recovery.json', () => {
   const fixture = pluginRecoveryFixture('restore');

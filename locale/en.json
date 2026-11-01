@@ -378,5 +378,18 @@
     "disabled": "The button is currently switched off; you can turn it on in the settings.",
     "button": "Got it",
     "error": "Could not record it: {message}"
+  },
+  "pluginFailure": {
+    "title": "A plugin did not load",
+    "intro": "The host came up fine; these plugins did not activate this time, so their features are unavailable:",
+    "entry": "{plugin} — {error}",
+    "backup": "You can put just this one plugin back from the last backup (taken {at}).",
+    "noBackup": "This machine has no usable backup, so this has to be handled by hand.",
+    "restore": "Restore {plugin} only",
+    "restoring": "Restoring {plugin}…",
+    "restored": "Put {plugin} back to the backup version (taken {at}); it takes effect after a restart.",
+    "consistent": "{plugin} already matches the backup, so no file was changed.",
+    "failed": "Could not restore {plugin}: {reason}",
+    "hint": "A restore touches this one plugin only; the other plugins and the profile configuration stay as they are."
   }
 }

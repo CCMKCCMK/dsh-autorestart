@@ -209,24 +209,27 @@ session resume on boot, durable-goal re-arm, and an agent-callable idle-aware gr
 - 看门狗只**还原一份快照 + 把宿主拉起来**，它修不了宿主自己的 bug：每次都因为同一个原因死的宿主，最后就是 `failed` 加一份写明试了几次的报告；
 - `watchdogEnabled: false`、或者这台机器没有档位（`none`），就**完全没有自动回滚**，设置页会明说。
 
-> 覆盖"窗口之外"的常驻守夜人（0 进程 + profile 被 `sanitizeProfile` 清空）在这个仓库里有一份**未接线的备用件**，见 [sentry.md](sentry.md)：它不注册任何工具、不会自动安装、也不在这条流程里。
+> **守夜人（sentry）已移除（2026-11-01，用户拍板：与「关就是关」冲突，不再维护）。**
+> 这个仓库里曾有一份**未接线的**常驻守夜人备用件（`lib/sentry.js`、`lib/sentry-install.js`、`supervisor/sentry.js`、`docs/sentry.md` 和它的两份测试）：它不注册工具、不会自动安装、也不在这条流程里。既然「关就是关」——用户关掉自动回滚之后就不该有任何东西在背后悄悄把宿主拉回来——这份常驻方案与那条拍板正面冲突，已经**整份删掉**，不再维护。上面「窗口之外没有人看着」那段因此仍然成立，而且现在**也没有任何备用件**可以临时接上去。
 
-### 报错型故障：插件没加载成功时，自动换回好版本
+### 报错型故障：插件没加载成功时，只提示，不自动修
 
 「坏法」有两种，**两种由两个机制分别负责，互不插手**：
 
 | 故障 | 谁负责 |
 |---|---|
 | **进程级**：宿主根本起不来（端口冲突、启动即崩） | 重启前快照 + 看门狗：回滚一份快照、把宿主拉起来 |
-| **报错型**：宿主起来了，但某个插件 entry **静默没激活**（功能直接 404） | 本节：检测 → 从 known-good 备份换回好版本 → 请求**一次**重启 → 写报告 |
+| **报错型**：宿主起来了，但某个插件 entry **静默没激活**（功能直接 404） | 本节：检测 → **只提示** → 用户点一下才恢复**那一个**插件 → 写报告 |
 
 启动日志里其实写着答案（`<plugin>: failed to import: <错误>`、`<plugin>: import failed …`、`- <plugin>: loading`，以及总括行 `dsh: warning: N entry did not activate`），原来没有任何人读它。现在每次启动、写 ready 标记**之前**都会读**上一次启动**那份日志：
 
-- **换回好版本**：备份里有 `node_modules/<name>` 真副本 → `overwrite`：现场目录**改名**成 `<name>.broken-<ts>`（**留证据，不删任何文件**），副本拷回去；备份里只有 `node_modules-link/<name>`（链接安装的内容）→ `replace-link`：现场软链同样改名留证据、备份内容顶替；备份里没有、或这个插件不在本 profile 的启用清单里 → `no-backup`：**不动**，写清原因。
-- **幂等**：拷贝前先比现场与副本（相对路径 + 大小 + sha256），一致就**不拷、不重启**（`already-consistent`）。
-- **只改过文件才重启**：`no-backup` / `duplicate` / `already-consistent` / `needs-human` 四种情况的 `restartRequested` 恒为 `false`。重启走**现有入口**（同一个 gate、同一份快照、同一条续跑路径），**没有第二套重启机制**。
-- **防循环（两条，都是硬要求）**：① 同一份旧日志不许被当成新故障 —— 只读上一次启动那份日志 + 行时间早于该次启动的一律不算 + 用「插件 + 错误首行 + 日志时间」做指纹，指纹进 `plugin-recovery.json` 的 `handled` 后只处理一次（再遇到记 `duplicate`）；② 根因不在插件（缺 peer 依赖、缺宿主能力）时换回也没用 —— **同一插件一个周期内只动手一次**，第二次只报不动、`needs-human`，且不请求重启；一次没有任何插件故障的启动会把周期清零。注意：**不存在"越修越坏"的循环** —— 恢复是拿好版本顶替现场，恢复完现场就是好代码。
-- **报告**：`<stateDir>/last-plugin-recovery.json`（`{ at, atIso, failures[], actions[{plugin, mode, restoredFrom, restoredAt, backupKind}], restartRequested, needsHuman }`），其中 `restoredAt` / `backupKind` **取备份自己的 `meta.json`**，回答"恢复到了哪个时点"，而不是"现在几点"。同一个对象也出现在 health 路由的 `pluginRecovery` 字段和 `continuum_status` 工具里（没发生过就是 `null` / 不返回）；界面上怎么讲，是另一条任务。
+- **只检测，绝不自动改文件、绝不自动重启。** 实测证明 DSH 自己就会剔除坏插件并照常起来（桌面版 22 秒正常启动、坏插件路由 404、配置不动；WSL 托管版 2.0–2.6 秒起来、`package.json` md5 五次一致、守护脚本 62.9 秒内只 +1 次启动）。所以启动路径上**不调用**恢复、**不请求**重启：它只读日志、只写自己的报告。单测钉住了这件事：恢复前后 profile 里每个文件的 sha256 不变、没有任何 `<plugin>.broken-*` 证据目录、`state.restart` 仍是空。
+- **报告**：`<stateDir>/last-plugin-recovery.json`（`{ at, atIso, failures[], actions[]（恒为空：什么都没做）, restartRequested: false, needsHuman: false, backupKind, restoredAt }`），其中 `restoredAt` / `backupKind` **取备份自己的 `meta.json`**，回答"有没有备份可恢复、恢复到哪个时点"。同一个对象也出现在 health 路由的 `pluginRecovery` 字段和 `continuum_status` 工具里（没发生过就是 `null` / 不返回）。
+- **前台弹窗**：界面上直接说「有插件没加载成功」，列出是哪个插件、报了什么错（最多 3 条，其余只报数量），并给**一个**按钮「只恢复 <plugin>」。没有可用备份时按钮不出现，直接说只能手动处理。
+- **按需恢复只动那一个插件**（`POST /__dsh_autorestart/plugin-restore`，body `{ "plugin": "<name>" }`）：备份里有 `node_modules/<name>` 真副本 → `overwrite`：现场目录**改名**成 `<name>.broken-<ts>`（**留证据，不删任何文件**），副本拷回去；备份里只有 `node_modules-link/<name>`（链接安装的内容）→ `replace-link`：现场软链同样改名留证据、备份内容顶替。别的插件、以及 profile 的 `package.json` / `cordis.patch.yml` **一个字节都不动**（单测逐字节钉住）。
+- **幂等**：现场已经等于备份 → `already-consistent`，**不写任何文件、不要求重启**；按钮点两次是安全的。
+- **失败也是个答案**：没有备份 / 拷不进去 → `ok:false` + 原因，而且 **HTTP 200**（JSON 报错体）。用 500 会让浏览器分不清"没有备份"和"宿主崩了"。
+- **历史**：每次尝试写 `<stateDir>/plugin-restore-history.json`（最近 20 条，最新在前）；health 的 `pluginRestore` 字段带最近一条，所以弹窗能说"已经恢复过、重启后生效"。
 
 ### 开机自启：插件自带的守护
 

@@ -32,7 +32,6 @@
     "client.js",
     "lib/**/*.js",
     "supervisor/supervisor.js",
-    "supervisor/sentry.js",
     "scripts/*.ps1",
     "scripts/*.cmd",
     "scripts/*.sh",
