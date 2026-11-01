@@ -78,6 +78,7 @@ import {
   CERTIFIED_BY,
   claimRollbackLock,
   clearRollbackReport,
+  CONFIG_FILES,
   contentFingerprintOf,
   contentScopeOf,
   createBackup,
@@ -91,6 +92,7 @@ import {
   listBackups,
   markKnownGood,
   PLUGINS_DIR,
+  readBackupMeta,
   readManifest,
   readRollbackReport,
   releaseRollbackLock,
@@ -190,6 +192,7 @@ import {
   localIsoTime,
   readRestartVerdict,
   RESTART_RESULTS,
+  shortFingerprint,
   summarizeRestartVerdict,
   writeRestartVerdict,
 } from './lib/restart-verdict.js'
@@ -7563,6 +7566,56 @@ export function detectBootIntervention(stateDir, { sinceMs = null } = {}) {
 }
 
 /**
+ * THE FINGERPRINT OF THE CONFIGURATION THAT IS ON DISK **RIGHT NOW**.
+ *
+ * WHY THIS EXISTS: certifying a copy asks ONE question — "is the content in the
+ * snapshot the content this boot is running?" — and the snapshot side of that
+ * answer is `contentFingerprintOf(snapshotDir)`, which reads
+ * `<snapshot>/config/<name>`. The LIVE profile keeps the same three files at its
+ * ROOT, so that reader cannot be pointed at it; reading the live profile is what
+ * turns the comparison into a physical fact instead of a guess.
+ *
+ * WHY THE FORMAT IS REPEATED HERE instead of imported: the input stream belongs to
+ * lib/backup.js (CONFIG_FILES, each hashed as name + length + content so two
+ * different name/content splits can never produce the same stream). That module
+ * is not part of this change, and copying the profile into a temporary tree just
+ * to reuse the reader would write to disk on every boot. The two formats are
+ * therefore PINNED TO EACH OTHER BY A TEST (test/certification-wiring.test.mjs,
+ * "the drift guard"): if either side ever changes, that test fails instead of the
+ * comparison quietly comparing apples with oranges.
+ *
+ * `null` — not a digest — when there is nothing to fingerprint: an unknown profile
+ * directory, or one that holds NONE of the three files. A digest over
+ * "everything missing" would equal the fingerprint of an empty copy and would
+ * certify a boot that proved nothing at all.
+ *
+ * @param {string|null|undefined} profileDir the profile whose configuration is running
+ * @returns {string|null} `sha256:<hex>`, or null when nothing could be read
+ */
+export function profileConfigFingerprint(profileDir) {
+  const dir = typeof profileDir === 'string' ? profileDir.trim() : ''
+  if (dir === '') return null
+  const hash = crypto.createHash('sha256')
+  let read = 0
+  for (const name of CONFIG_FILES) {
+    let text = null
+    try {
+      text = fs.readFileSync(path.join(dir, name), 'utf8')
+    } catch {
+      text = null
+    }
+    if (text === null) {
+      hash.update(name + '\u0000missing\u0000')
+      continue
+    }
+    read += 1
+    hash.update(name + '\u0000' + Buffer.byteLength(text, 'utf8') + '\u0000' + text)
+  }
+  if (read === 0) return null
+  return 'sha256:' + hash.digest('hex')
+}
+
+/**
  * Finish the durable restart record.
  *
  * The instance that replaced the old one reads the `pending` record, runs the
@@ -7571,6 +7624,14 @@ export function detectBootIntervention(stateDir, { sinceMs = null } = {}) {
  *
  * Nothing is written when there is no pending record (this boot was not the
  * result of a restart) or when the pending record belongs to another day.
+ *
+ * CERTIFICATION IS PART OF THIS: when all four checks passed, the snapshot the
+ * pending record points at is a candidate — and it is promoted only if its
+ * recorded `contentFingerprint` EQUALS the fingerprint of the configuration this
+ * boot is running (`profileConfigFingerprint`). A difference means the disk was
+ * written to between the two boots (restore / hand edit / another writer), so this
+ * boot proved other content and the snapshot stays unproven. A missing fingerprint
+ * on either side refuses too: no proof beats a guessed one.
  *
  * @param {object} runtime
  * @param {{ timeoutMs?: number, now?: number, sleep?: Function }} [options]
@@ -7614,43 +7675,69 @@ export async function verifyRestartBoot(runtime, options = {}) {
       log.warn('the new instance verified itself:', { durationMs: record.durationMs, checks })
       // THIS SNAPSHOT HAS NOW PROVEN IT BOOTS — but "it boots" is the verdict of
       // THIS restart, and certification is a DIFFERENT question (2026-11-01):
-      // only a boot whose four startup checks all RAN and passed may call the
-      // copy it came from safe. `decideBootCertification` answers that one, and
-      // it refuses a list that is merely non-empty: a boot that skipped the
-      // checks proves nothing about the configuration.
+      // it may only happen when this boot ran on EXACTLY the content the snapshot
+      // holds. `decideBootCertification` answers that one, and it refuses a list
+      // that is merely non-empty: a boot that skipped the checks proves nothing
+      // about the configuration.
       const snapshotDir = pending && pending.snapshot && typeof pending.snapshot.dir === 'string'
         ? pending.snapshot.dir
         : ''
       if (snapshotDir !== '') {
-        const decision = decideBootCertification(checks)
+        // THE TWO FINGERPRINTS, both read HERE, from the two places that really
+        // hold them:
+        //   - the snapshot side is what its meta.json recorded when the copy was
+        //     taken (NOT the copy's content right now: a copy edited after the
+        //     fact must not be able to certify itself);
+        //   - the current side is the configuration on disk in this very boot.
+        const snapshotFingerprint = readBackupMeta(snapshotDir).contentFingerprint
+        const liveProfileDir = runtime.profileDir && typeof runtime.profileDir.dir === 'string'
+          ? runtime.profileDir.dir
+          : ''
+        const currentFingerprint = profileConfigFingerprint(liveProfileDir)
+        const decision = decideBootCertification(checks, { snapshotFingerprint, currentFingerprint })
         if (decision.certified !== true) {
           // NOTHING is promoted and the meta is NOT touched. The reason names
-          // which of the four did not pass, because "it stayed unproven" alone
-          // would throw away the only useful half of the news.
+          // WHAT was different (two short fingerprints, or which check did not
+          // pass), because "it stayed unproven" alone would throw away the only
+          // useful half of the news.
           log.warn('the snapshot of this restart stays UNPROVEN: ' + decision.reason, {
             dir: snapshotDir,
+            fingerprintState: decision.fingerprintState,
+            // SHORT VALUES ONLY: the point is "which one differs from which",
+            // and twelve characters say that without flooding the log.
+            snapshotFingerprint: shortFingerprint(decision.snapshotFingerprint),
+            currentFingerprint: shortFingerprint(decision.currentFingerprint),
             failed: decision.failed,
             missing: decision.missing,
             extraFailed: decision.extraFailed,
           })
         } else {
-          // THE INTERVENTION IS PART OF THE EVIDENCE. A boot that had to be
-          // rescued can still be certified — the copy is kept WITH the fact that
-          // the system had to help, so a later selector can refuse it.
+          // 为什么 `intervention` 继续写、但**不再参与判据**（真机证据，2026-11-01）：
+          // 兜底那份 `2026-11-01T12-04-33-777Z` 的 meta 里 `intervention=false`，可那次
+          // 宿主其实是先被还原过才起来的 —— 说明「谁介入过」这件事**检测不准**（没检测到
+          // 不等于没发生）。而「这次启动跑的配置 == 快照里那份」是当场能算的硬事实，所以
+          // 判据换成指纹比对；intervention 只留作事后排查的线索，写而不判。
+          // 也正因如此：指纹一致 + 四检全过才会走到这里，restore 改过盘就一定不一致。
           const intervention = detectBootIntervention(stateDir, { sinceMs: pending.startedAt })
           const promoted = markKnownGood(snapshotDir, {
             reason: 'boot-ok',
             certifiedBy: CERTIFIED_BY.FULL_CHECKS,
-            contentFingerprint: contentFingerprintOf(snapshotDir),
+            // The content that was PROVEN is the fingerprint that was compared —
+            // the one the snapshot recorded, now shown to be what this boot ran.
+            contentFingerprint: decision.snapshotFingerprint,
             contentScope: contentScopeOf(snapshotDir),
             intervention: intervention.intervention,
           })
-          log.info('the snapshot of this restart is certified by the four startup checks', {
+          log.info('the snapshot of this restart is certified: the four startup checks passed and this boot runs exactly the snapshot content', {
             dir: snapshotDir,
             promoted: promoted.promoted,
             certifiedBy: decision.certifiedBy,
+            contentFingerprint: shortFingerprint(decision.snapshotFingerprint),
             intervention: intervention.intervention,
             interventionReason: intervention.reason,
+            // Said out loud so nobody re-reads this line as "the intervention was
+            // checked": it is recorded, it is not part of the decision any more.
+            interventionUsedAsEvidence: false,
           })
         }
       }

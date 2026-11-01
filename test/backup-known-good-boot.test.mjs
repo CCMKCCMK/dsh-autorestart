@@ -127,11 +127,19 @@ test('② a machine that already has a known-good copy is not seeded twice', asy
  * ③ / ④ The snapshot is promoted only when the boot really worked.
  * ------------------------------------------------------------------ */
 
-/** A runtime good enough for verifyRestartBoot, with a pending record on disk. */
-function bootRuntime({ stateFile, snapshotDir, checksOk }) {
+/**
+ * A runtime good enough for verifyRestartBoot, with a pending record on disk.
+ *
+ * `profileDir` is the profile whose configuration is RUNNING in this boot: the
+ * certification compares its fingerprint with the one the snapshot recorded, so a
+ * fixture that does not name it can never be certified (which is the point of the
+ * 2026-11-01 rule, not a test detail).
+ */
+function bootRuntime({ stateFile, snapshotDir, checksOk, profileDir = null }) {
   return {
     log: { info: () => {}, warn: () => {}, error: () => {} },
     stateFile,
+    profileDir: { dir: typeof profileDir === 'string' ? profileDir : null, source: 'test' },
     bootId: 'boot-test-2',
     webPort: 1234,
     registeredRoutes: [{ path: '/__dsh_autorestart/health' }],
@@ -168,7 +176,7 @@ test('③ a restart that came up leaves its snapshot UNPROVEN until the caller s
   assert.equal(readBackupMeta(snapshot.dir).kind, KIND_SNAPSHOT, 'a pre-restart copy starts unproven')
   assert.equal(latestKnownGood(backups), null, 'and it is not a rollback target yet')
 
-  const runtime = bootRuntime({ stateFile, snapshotDir: snapshot.dir, checksOk: true })
+  const runtime = bootRuntime({ stateFile, snapshotDir: snapshot.dir, checksOk: true, profileDir: profile })
   writeRestartVerdict(stateDir, buildRestartVerdict({
     result: RESTART_RESULTS.PENDING,
     startedAt: Date.now() - 1000,
@@ -178,11 +186,12 @@ test('③ a restart that came up leaves its snapshot UNPROVEN until the caller s
   const record = await verifyRestartBoot(runtime, { timeoutMs: 50 })
   assert.equal(record.result, RESTART_RESULTS.OK, 'the boot verified itself')
 
-  // THE CERTIFICATION IS WIRED TO THE CHECKS NOW (2026-11-01). Before, "the boot
-  // came up" was enough to promote — which is exactly how a rescued boot
-  // certified a broken copy. The CALLER now states what was checked: all four
-  // startup checks ran and passed, so the promotion is allowed, and the evidence
-  // says WHICH check backed it.
+  // THE CERTIFICATION IS WIRED TO THE CONTENT NOW (2026-11-01, phase 3). Before,
+  // "the boot came up" was enough to promote — which is exactly how a rescued boot
+  // certified a broken copy. The rule is: the snapshot's recorded fingerprint must
+  // EQUAL the fingerprint of the configuration running now, and all four startup
+  // checks must have run and passed. Here the profile was not touched between the
+  // snapshot and the boot, so the content identity holds and the copy is promoted.
   const certified = readBackupMeta(snapshot.dir)
   assert.equal(certified.kind, KIND_KNOWN_GOOD, 'the snapshot is the safe copy now')
   assert.equal(certified.certifiedBy, 'full-checks', 'and it says WHY it counts as safe')
@@ -207,7 +216,7 @@ test('④ a failed boot promotes nothing', async (t) => {
   fs.writeFileSync(path.join(later, 'manifest.json'), JSON.stringify({ at: 1, bytes: 1, files: [] }), 'utf8')
   fs.writeFileSync(path.join(later, 'meta.json'), JSON.stringify({ kind: KIND_SNAPSHOT }), 'utf8')
 
-  const runtime = bootRuntime({ stateFile, snapshotDir: later, checksOk: false })
+  const runtime = bootRuntime({ stateFile, snapshotDir: later, checksOk: false, profileDir: profile })
   writeRestartVerdict(stateDir, buildRestartVerdict({
     result: RESTART_RESULTS.PENDING,
     startedAt: Date.now() - 1000,
