@@ -78,7 +78,9 @@ import {
   CERTIFIED_BY,
   claimRollbackLock,
   clearRollbackReport,
+  CONFIG_DIR,
   CONFIG_FILES,
+  contentFingerprintOf,
   contentScopeOf,
   createBackup,
   DEFAULT_MAX_BACKUPS,
@@ -5768,14 +5770,21 @@ const titleOfSummary = (item) => {
             // 只要这两件事有任何一件发生，把重启前那份盖成 `command-probe` 安全份，
             // 就是 12-04-33 那次事故的翻版（坏配置被认证，随后被「还原」覆盖回去）。
             // 所以这里和 app 模式那条（verifyRestartBoot -> decideBootCertification）用**同一条判据**：
-            //   快照 meta 里的 contentFingerprint == 此刻磁盘上这份配置的指纹，两侧都存在且相等才盖章。
+            //   快照侧的指纹 == 此刻磁盘上这份配置的指纹，两侧都存在且相等才盖章。
+            //   快照侧「没有记录值」不再自动等于「没证据」：meta 里没有就**现算一次**再比
+            //   （`snapshotConfigFingerprint`，app 模式那条也用它，两条路径不许各写一套）。
+            //   没指纹 ≠ 内容不对 —— 老备份只是当初没拍照，补拍一张再比，内容对不上才拒绝。
             // 判据本身在 lib/restart-verdict.js 里（decideProbeCertification），两处共用同一个比对函数，
             // 不许在这里另写一套——两条路径的口径一旦分叉，先坏的那条没人会发现。
             //
             // WHERE THE TWO SIDES COME FROM (为什么是这两个值，不是别的)：
-            //   - 快照侧：`readBackupMeta(backup.dir).contentFingerprint`，即复制那份时 meta.json **当时记下**的指纹。
-            //     不能改用 `contentFingerprintOf(backup.dir)`（复算副本现在的内容）：那样一份事后被改过的副本
-            //     就能靠「自己现在的样子」给自己盖章（与 app 模式 verifyRestartBoot 里那段注释同一个理由）。
+            //   - 快照侧：`snapshotConfigFingerprint(backup.dir)` —— meta.json 里**当初记下**的指纹优先；
+            //     没有（老备份，那份 meta 比这个字段还老）就**现算**：读副本自己的 `config/` 算一张。
+            //     没指纹 ≠ 内容不对：当初没拍照，不等于内容可疑；文件还在就能补拍一张再比。
+            //     不给它补，等于「升级一次就把用户手里的安全份全收走」——这是本插件最不该做的事。
+            //     代价：早先刻意只读 meta，是为了防「事后被改过的副本自证」；现算让这层防护弱了一点
+            //     （要同时把副本和现役配置改成同一份内容才能骗过，而那时「这份内容能起来」本来就是真的）。
+            //     取舍写在这里的唯一出处：`snapshotConfigFingerprint` 的注释。
             //   - 现役侧：`profileConfigFingerprint(profileDir)`，读的是**这次运行所用的 profile 根目录**里的
             //     cordis.patch.yml / package.json / pnpm-lock.yaml。这个 `profileDir` 来自本函数的
             //     `snapshot.profileDir`，而它和 app 模式用的 `runtime.profileDir.dir`（getter 同样调用
@@ -5785,48 +5794,72 @@ const titleOfSummary = (item) => {
             //     就是新实例启动时读的那一份；之后若有人又写了配置，指纹就会不一致——那正是要拒绝的时候。
             // 拿不到任何一侧的可靠指纹时**一律拒绝**：宁可没有安全份，也不许盖错章。
             if (backup && typeof backup.dir === 'string' && backup.dir !== '') {
-              const snapshotFingerprint = readBackupMeta(backup.dir).contentFingerprint
-              const currentFingerprint = profileConfigFingerprint(profileDir)
-              const decision = decideProbeCertification({ snapshotFingerprint, currentFingerprint })
-              if (decision.certified !== true) {
-                // NOTHING is promoted and the meta is NOT touched. Same wording as
-                // the app-mode refusal (`... stays UNPROVEN: <reason>`), so an
-                // operator reading the log cannot tell the two paths apart by
-                // accident — and the two short fingerprints say WHICH differ.
-                log.warn('the snapshot of this restart stays UNPROVEN: ' + decision.reason, {
+              const side = snapshotConfigFingerprint(backup.dir)
+              if (side.source === FINGERPRINT_SOURCES.UNAVAILABLE) {
+                // 「现算失败」不是「内容不一致」：副本目录没了、config/ 读不出文件，说明这份副本
+                // **读都读不出来**，不是「内容对不上」。两句话让读日志的人去查完全不同的东西，
+                // 所以这里单独报，绝不复用 mismatch 的措辞。
+                log.warn('the snapshot of this restart stays UNPROVEN: ' + side.reason, {
                   dir: backup.dir,
                   mode: 'command',
-                  certifiedBy: decision.certifiedBy,
-                  fingerprintState: decision.fingerprintState,
-                  snapshotFingerprint: shortFingerprint(decision.snapshotFingerprint),
-                  currentFingerprint: shortFingerprint(decision.currentFingerprint),
+                  certifiedBy: CERTIFIED_BY.NONE,
+                  fingerprintState: FINGERPRINT_STATE_UNREADABLE,
+                  fingerprintSource: side.source,
+                  computeError: side.computeError,
                   // Said out loud: the probe DID answer, and that is not enough.
                   probeAnswered: true,
                 })
               } else {
-                const intervention = detectBootIntervention(stateDir, { sinceMs: restartStartedAt })
-                const promoted = markKnownGood(backup.dir, {
-                  reason: 'boot-ok',
-                  certifiedBy: CERTIFIED_BY.COMMAND_PROBE,
-                  // The content that was PROVEN is the fingerprint that was compared —
-                  // the one the snapshot recorded, now shown to be what this boot runs.
-                  contentFingerprint: decision.snapshotFingerprint,
-                  contentScope: contentScopeOf(backup.dir),
-                  intervention: intervention.intervention,
-                })
-                log.info('the snapshot of this restart is certified: the health probe answered and this boot runs exactly the snapshot content', {
-                  dir: backup.dir,
-                  mode: 'command',
-                  promoted: promoted.promoted,
-                  certifiedBy: decision.certifiedBy,
-                  fingerprintState: decision.fingerprintState,
-                  snapshotFingerprint: shortFingerprint(decision.snapshotFingerprint),
-                  currentFingerprint: shortFingerprint(decision.currentFingerprint),
-                  intervention: intervention.intervention,
-                  interventionReason: intervention.reason,
-                  // Recorded, not part of the decision — same as the app-mode path.
-                  interventionUsedAsEvidence: false,
-                })
+                const currentFingerprint = profileConfigFingerprint(profileDir)
+                const decision = decideProbeCertification({ snapshotFingerprint: side.fingerprint, currentFingerprint })
+                // 日志必须能分辨这一侧的指纹是「当初记的」还是「现在算的」，见 `fingerprintSourceNote`。
+                const sourceNote = fingerprintSourceNote(side.source)
+                if (decision.certified !== true) {
+                  // NOTHING is promoted and the meta is NOT touched — including in
+                  // the computed case: the value computed for THIS comparison is not
+                  // stored back into the copy's meta. Same wording as the app-mode
+                  // refusal (`... stays UNPROVEN: <reason>`), so an operator reading
+                  // the log cannot tell the two paths apart by accident — and the two
+                  // short fingerprints say WHICH differ.
+                  log.warn('the snapshot of this restart stays UNPROVEN: ' + decision.reason + sourceNote, {
+                    dir: backup.dir,
+                    mode: 'command',
+                    certifiedBy: decision.certifiedBy,
+                    fingerprintState: decision.fingerprintState,
+                    fingerprintSource: side.source,
+                    snapshotFingerprint: shortFingerprint(decision.snapshotFingerprint),
+                    currentFingerprint: shortFingerprint(decision.currentFingerprint),
+                    // Said out loud: the probe DID answer, and that is not enough.
+                    probeAnswered: true,
+                  })
+                } else {
+                  const intervention = detectBootIntervention(stateDir, { sinceMs: restartStartedAt })
+                  const promoted = markKnownGood(backup.dir, {
+                    reason: 'boot-ok',
+                    certifiedBy: CERTIFIED_BY.COMMAND_PROBE,
+                    // The content that was PROVEN is the fingerprint that was compared —
+                    // recorded in the meta, or computed from the copy when the meta had
+                    // none. Either way THIS is the value the comparison accepted, so it
+                    // is what the seal names.
+                    contentFingerprint: decision.snapshotFingerprint,
+                    contentScope: contentScopeOf(backup.dir),
+                    intervention: intervention.intervention,
+                  })
+                  log.info('the snapshot of this restart is certified: the health probe answered and this boot runs exactly the snapshot content' + sourceNote, {
+                    dir: backup.dir,
+                    mode: 'command',
+                    promoted: promoted.promoted,
+                    certifiedBy: decision.certifiedBy,
+                    fingerprintState: decision.fingerprintState,
+                    fingerprintSource: side.source,
+                    snapshotFingerprint: shortFingerprint(decision.snapshotFingerprint),
+                    currentFingerprint: shortFingerprint(decision.currentFingerprint),
+                    intervention: intervention.intervention,
+                    interventionReason: intervention.reason,
+                    // Recorded, not part of the decision — same as the app-mode path.
+                    interventionUsedAsEvidence: false,
+                  })
+                }
               }
             } else {
               // The probe answered but this restart took no snapshot: there is
@@ -7670,6 +7703,167 @@ export function profileConfigFingerprint(profileDir) {
   return 'sha256:' + hash.digest('hex')
 }
 
+/** The three answers to "where does the snapshot side of the comparison come from?". */
+export const FINGERPRINT_SOURCES = Object.freeze({
+  /** `meta.json` recorded one when the copy was taken — the original shape. */
+  RECORDED: 'recorded',
+  /** `meta.json` has none (the copy is older than the field), so it was computed NOW. */
+  COMPUTED: 'computed',
+  /** No recorded one AND none could be computed (the copy is gone / unreadable). */
+  UNAVAILABLE: 'unavailable',
+})
+
+/**
+ * The fingerprint state reported when the answer is `unavailable`.
+ *
+ * WHY A NAME OF ITS OWN instead of reusing `snapshot-missing`: the two mean
+ * different things to the reader. "The snapshot has no fingerprint" is a fact
+ * about an old copy; "the fingerprint could not be computed" is a fact about a
+ * copy we could not read. Folding them together would report a computation
+ * failure under the name of a content question — exactly what must not happen.
+ */
+export const FINGERPRINT_STATE_UNREADABLE = 'snapshot-unreadable'
+
+/**
+ * THE SNAPSHOT SIDE OF THE FINGERPRINT COMPARISON — recorded, computed, or nothing.
+ *
+ * THE RULE THE USER SETTLED (2026-11-01, 升级用户不许丢救援能力):
+ *
+ *   没指纹 ≠ 内容不对。A copy whose meta.json was written before fingerprints
+ *   existed is NOT suspicious — nobody took its picture, that is all. The
+ *   fingerprint is computed FROM the file contents, so as long as the copy is
+ *   still on disk it can be taken again, right now, and then compared. What the
+ *   comparison refuses is CONTENT that differs, never AGE.
+ *
+ * WHY COMPUTING IS THE SECOND CHOICE AND NOT THE FIRST: a recorded fingerprint is
+ * evidence from the moment of the copy; a computed one is the copy describing
+ * itself. So `meta.json` wins whenever it has an answer, and the computation only
+ * fills the gap an old copy leaves.
+ *
+ * WHAT COMPUTING GIVES UP (said out loud, not hidden): the earlier rule read the
+ * meta ONLY, so a copy edited after the fact could not certify itself — it would
+ * show the recorded value, which no longer matched anything. With a computed
+ * fallback that protection is weaker: an old copy (no recorded value) that was
+ * edited after the fact now gets a fingerprint of its EDITED content, and if that
+ * content also happens to be what the host is running, it certifies. Fooling it
+ * takes editing the copy AND the live profile to the same content — at which
+ * point "this content boots" is true anyway, which is the whole claim a
+ * certification makes. The trade is deliberate: it buys back "the upgrade does
+ * not take away every safe copy a user had".
+ *
+ * NOTHING IS WRITTEN HERE. The computed value is used for THIS decision only and
+ * is never stored back into the meta: the field in `meta.json` is "what was
+ * recorded when the copy was taken", and writing a value into it afterwards would
+ * turn "I computed this" into "this was witnessed", which is the difference
+ * between evidence and a copy vouching for itself.
+ *
+ * "COULD NOT COMPUTE" IS NOT "CONTENT DIFFERS": `contentFingerprintOf` always
+ * returns a digest (a copy with none of the three files hashes the "missing"
+ * markers), and that digest is worthless — it would equal the fingerprint of any
+ * other empty copy. So the copy is checked first: an unknown / missing /
+ * unreadable directory, or a `config/` in which NONE of the three files can be
+ * read, is reported as `unavailable` with a reason that says the copy could not
+ * be read. The caller must report it as a computation failure, never as a
+ * mismatch — the two send the reader hunting for different things.
+ *
+ * @param {string|null|undefined} backupDir the copy this restart came from
+ * @param {{ meta?: object|null }} [options] already-read meta (avoids a second read)
+ * @returns {{
+ *   fingerprint: string|null,
+ *   source: string,
+ *   computeError: string|null,
+ *   readableFiles: number,
+ *   reason: string|null,
+ * }}
+ */
+export function snapshotConfigFingerprint(backupDir, { meta = null } = {}) {
+  const dir = typeof backupDir === 'string' ? backupDir.trim() : ''
+  const recordedMeta = meta !== null && typeof meta === 'object'
+    ? meta
+    : (dir === '' ? null : readBackupMeta(dir))
+  const recorded = recordedMeta !== null && typeof recordedMeta.contentFingerprint === 'string'
+    ? recordedMeta.contentFingerprint.trim()
+    : ''
+  if (recorded !== '') {
+    // The original path: nothing is recomputed, nothing is second-guessed.
+    // (`readableFiles: 0` here is literal: in this branch the copy is not read.)
+    return {
+      fingerprint: recorded,
+      source: FINGERPRINT_SOURCES.RECORDED,
+      computeError: null,
+      readableFiles: 0,
+      reason: null,
+    }
+  }
+  const unavailable = (computeError) => ({
+    fingerprint: null,
+    source: FINGERPRINT_SOURCES.UNAVAILABLE,
+    computeError,
+    readableFiles: 0,
+    reason: 'the snapshot holds no recorded contentFingerprint and no fingerprint could be computed from it either ('
+      + computeError + '): this is a COMPUTATION failure — the copy could not be read, so its content was never '
+      + 'compared and nothing about it is disproven',
+  })
+  if (dir === '') {
+    return unavailable('the snapshot directory is not even named')
+  }
+  let stats = null
+  try {
+    stats = fs.statSync(dir)
+  } catch (error) {
+    return unavailable('the snapshot directory is missing or unreadable ('
+      + String(error && error.code ? error.code : error) + ')')
+  }
+  if (!stats.isDirectory()) {
+    return unavailable('the snapshot path is not a directory')
+  }
+  // One readable file is enough for a real answer; none at all is not "an empty
+  // copy", it is "this is not a copy" — see the docstring.
+  let readableFiles = 0
+  for (const name of CONFIG_FILES) {
+    try {
+      fs.readFileSync(path.join(dir, CONFIG_DIR, name), 'utf8')
+      readableFiles += 1
+    } catch {}
+  }
+  if (readableFiles === 0) {
+    return unavailable('none of the configuration files (' + CONFIG_FILES.join(', ') + ') could be read inside '
+      + path.join(dir, CONFIG_DIR))
+  }
+  return {
+    fingerprint: contentFingerprintOf(dir),
+    source: FINGERPRINT_SOURCES.COMPUTED,
+    computeError: null,
+    readableFiles,
+    reason: null,
+  }
+}
+
+/**
+ * HOW A FINGERPRINT WAS OBTAINED, said in the log line that carries the verdict.
+ *
+ * WHY IT MUST BE SAID: a computed value and a recorded one are the same kind of
+ * string, so without this sentence a later reader cannot tell "this copy was
+ * fingerprinted when it was taken" apart from "this fingerprint was taken during
+ * the certification, from a copy nobody photographed". The first says the copy has
+ * not been touched since; the second says what it holds NOW. Only one of those is
+ * true of any given copy, and the log must not leave the reader to guess which.
+ *
+ * The `recorded` case adds nothing: it is the normal shape, and every existing
+ * sentence already reads as if the value came from the meta.
+ *
+ * @param {unknown} source one of FINGERPRINT_SOURCES
+ * @returns {string} a sentence to append to the reason, or an empty string
+ */
+export function fingerprintSourceNote(source) {
+  if (source === FINGERPRINT_SOURCES.COMPUTED) {
+    return ' (the snapshot side was COMPUTED just now from the copy\'s own config/: its meta.json has no '
+      + 'contentFingerprint, so this fingerprint describes what the copy holds NOW, not what was recorded when '
+      + 'it was taken)'
+  }
+  return ''
+}
+
 /**
  * Finish the durable restart record.
  *
@@ -7682,11 +7876,18 @@ export function profileConfigFingerprint(profileDir) {
  *
  * CERTIFICATION IS PART OF THIS: when all four checks passed, the snapshot the
  * pending record points at is a candidate — and it is promoted only if its
- * recorded `contentFingerprint` EQUALS the fingerprint of the configuration this
- * boot is running (`profileConfigFingerprint`). A difference means the disk was
- * written to between the two boots (restore / hand edit / another writer), so this
- * boot proved other content and the snapshot stays unproven. A missing fingerprint
- * on either side refuses too: no proof beats a guessed one.
+ * `contentFingerprint` EQUALS the fingerprint of the configuration this boot is
+ * running (`profileConfigFingerprint`). A difference means the disk was written to
+ * between the two boots (restore / hand edit / another writer), so this boot proved
+ * other content and the snapshot stays unproven.
+ *
+ * A copy older than the fingerprint field is NOT refused for being old: its
+ * fingerprint is COMPUTED from the copy's own `config/` (`snapshotConfigFingerprint`)
+ * and then compared exactly like a recorded one. 没指纹 ≠ 内容不对 — 老备份只是当初
+ * 没拍照，补拍一张再比；不补，升级一次就把用户手里的安全份全收走了。 What still
+ * refuses is CONTENT that differs, and a reference that cannot even be computed
+ * (missing / unreadable copy), which is reported as a computation failure — never
+ * as a mismatch. The computed value is NOT written back into the meta.
  *
  * @param {object} runtime
  * @param {{ timeoutMs?: number, now?: number, sleep?: Function }} [options]
@@ -7738,62 +7939,85 @@ export async function verifyRestartBoot(runtime, options = {}) {
         ? pending.snapshot.dir
         : ''
       if (snapshotDir !== '') {
-        // THE TWO FINGERPRINTS, both read HERE, from the two places that really
+        // THE TWO FINGERPRINTS, both obtained HERE, from the two places that really
         // hold them:
-        //   - the snapshot side is what its meta.json recorded when the copy was
-        //     taken (NOT the copy's content right now: a copy edited after the
-        //     fact must not be able to certify itself);
+        //   - the snapshot side: what its meta.json RECORDED when the copy was
+        //     taken — and, for a copy older than that field, one COMPUTED from the
+        //     copy's own `config/` right now (`snapshotConfigFingerprint`).
+        //     没指纹 ≠ 内容不对：升级上来的老备份不是可疑，只是当初没拍照；文件还在，
+        //     就能补拍一张再比。不给它补，等于升级一次就把用户的安全份全收走。
+        //     代价（现算放弃了「事后被改过的副本不能自证」这层防护）写在
+        //     `snapshotConfigFingerprint` 的注释里，那里是唯一的出处。
         //   - the current side is the configuration on disk in this very boot.
-        const snapshotFingerprint = readBackupMeta(snapshotDir).contentFingerprint
-        const liveProfileDir = runtime.profileDir && typeof runtime.profileDir.dir === 'string'
-          ? runtime.profileDir.dir
-          : ''
-        const currentFingerprint = profileConfigFingerprint(liveProfileDir)
-        const decision = decideBootCertification(checks, { snapshotFingerprint, currentFingerprint })
-        if (decision.certified !== true) {
-          // NOTHING is promoted and the meta is NOT touched. The reason names
-          // WHAT was different (two short fingerprints, or which check did not
-          // pass), because "it stayed unproven" alone would throw away the only
-          // useful half of the news.
-          log.warn('the snapshot of this restart stays UNPROVEN: ' + decision.reason, {
+        const side = snapshotConfigFingerprint(snapshotDir)
+        if (side.source === FINGERPRINT_SOURCES.UNAVAILABLE) {
+          // 「算不出来」不是「内容不一致」，这句话必须说准：报成不一致，读日志的人
+          // 会去查「谁改过这次配置」；真正的事实是这份副本读不出来了（目录没了、
+          // config/ 读不出文件）。两件事让人去查的地方完全不同。
+          log.warn('the snapshot of this restart stays UNPROVEN: ' + side.reason, {
             dir: snapshotDir,
-            fingerprintState: decision.fingerprintState,
-            // SHORT VALUES ONLY: the point is "which one differs from which",
-            // and twelve characters say that without flooding the log.
-            snapshotFingerprint: shortFingerprint(decision.snapshotFingerprint),
-            currentFingerprint: shortFingerprint(decision.currentFingerprint),
-            failed: decision.failed,
-            missing: decision.missing,
-            extraFailed: decision.extraFailed,
+            fingerprintState: FINGERPRINT_STATE_UNREADABLE,
+            fingerprintSource: side.source,
+            computeError: side.computeError,
           })
         } else {
-          // 为什么 `intervention` 继续写、但**不再参与判据**（真机证据，2026-11-01）：
-          // 兜底那份 `2026-11-01T12-04-33-777Z` 的 meta 里 `intervention=false`，可那次
-          // 宿主其实是先被还原过才起来的 —— 说明「谁介入过」这件事**检测不准**（没检测到
-          // 不等于没发生）。而「这次启动跑的配置 == 快照里那份」是当场能算的硬事实，所以
-          // 判据换成指纹比对；intervention 只留作事后排查的线索，写而不判。
-          // 也正因如此：指纹一致 + 四检全过才会走到这里，restore 改过盘就一定不一致。
-          const intervention = detectBootIntervention(stateDir, { sinceMs: pending.startedAt })
-          const promoted = markKnownGood(snapshotDir, {
-            reason: 'boot-ok',
-            certifiedBy: CERTIFIED_BY.FULL_CHECKS,
-            // The content that was PROVEN is the fingerprint that was compared —
-            // the one the snapshot recorded, now shown to be what this boot ran.
-            contentFingerprint: decision.snapshotFingerprint,
-            contentScope: contentScopeOf(snapshotDir),
-            intervention: intervention.intervention,
-          })
-          log.info('the snapshot of this restart is certified: the four startup checks passed and this boot runs exactly the snapshot content', {
-            dir: snapshotDir,
-            promoted: promoted.promoted,
-            certifiedBy: decision.certifiedBy,
-            contentFingerprint: shortFingerprint(decision.snapshotFingerprint),
-            intervention: intervention.intervention,
-            interventionReason: intervention.reason,
-            // Said out loud so nobody re-reads this line as "the intervention was
-            // checked": it is recorded, it is not part of the decision any more.
-            interventionUsedAsEvidence: false,
-          })
+          const liveProfileDir = runtime.profileDir && typeof runtime.profileDir.dir === 'string'
+            ? runtime.profileDir.dir
+            : ''
+          const currentFingerprint = profileConfigFingerprint(liveProfileDir)
+          const decision = decideBootCertification(checks, { snapshotFingerprint: side.fingerprint, currentFingerprint })
+          // Said in the reason itself, so the log line names how the snapshot side
+          // was obtained: `recorded` (taken when the copy was made) or `computed`
+          // (taken just now, from a copy that never had one).
+          const sourceNote = fingerprintSourceNote(side.source)
+          if (decision.certified !== true) {
+            // NOTHING is promoted and the meta is NOT touched — including in the
+            // computed case: the value computed for THIS comparison is not stored
+            // back into the copy's meta (see `snapshotConfigFingerprint`).
+            log.warn('the snapshot of this restart stays UNPROVEN: ' + decision.reason + sourceNote, {
+              dir: snapshotDir,
+              fingerprintState: decision.fingerprintState,
+              fingerprintSource: side.source,
+              // SHORT VALUES ONLY: the point is "which one differs from which",
+              // and twelve characters say that without flooding the log.
+              snapshotFingerprint: shortFingerprint(decision.snapshotFingerprint),
+              currentFingerprint: shortFingerprint(decision.currentFingerprint),
+              failed: decision.failed,
+              missing: decision.missing,
+              extraFailed: decision.extraFailed,
+            })
+          } else {
+            // 为什么 `intervention` 继续写、但**不再参与判据**（真机证据，2026-11-01）：
+            // 兜底那份 `2026-11-01T12-04-33-777Z` 的 meta 里 `intervention=false`，可那次
+            // 宿主其实是先被还原过才起来的 —— 说明「谁介入过」这件事**检测不准**（没检测到
+            // 不等于没发生）。而「这次启动跑的配置 == 快照里那份」是当场能算的硬事实，所以
+            // 判据换成指纹比对；intervention 只留作事后排查的线索，写而不判。
+            // 也正因如此：指纹一致 + 四检全过才会走到这里，restore 改过盘就一定不一致。
+            const intervention = detectBootIntervention(stateDir, { sinceMs: pending.startedAt })
+            const promoted = markKnownGood(snapshotDir, {
+              reason: 'boot-ok',
+              certifiedBy: CERTIFIED_BY.FULL_CHECKS,
+              // The content that was PROVEN is the fingerprint that was compared —
+              // recorded in the meta, or computed from the copy when the meta had
+              // none. Either way THIS is the value the comparison accepted, so it
+              // is what the seal names.
+              contentFingerprint: decision.snapshotFingerprint,
+              contentScope: contentScopeOf(snapshotDir),
+              intervention: intervention.intervention,
+            })
+            log.info('the snapshot of this restart is certified: the four startup checks passed and this boot runs exactly the snapshot content' + sourceNote, {
+              dir: snapshotDir,
+              promoted: promoted.promoted,
+              certifiedBy: decision.certifiedBy,
+              fingerprintSource: side.source,
+              contentFingerprint: shortFingerprint(decision.snapshotFingerprint),
+              intervention: intervention.intervention,
+              interventionReason: intervention.reason,
+              // Said out loud so nobody re-reads this line as "the intervention was
+              // checked": it is recorded, it is not part of the decision any more.
+              interventionUsedAsEvidence: false,
+            })
+          }
         }
       }
     } else {

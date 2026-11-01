@@ -41,6 +41,7 @@ import { requestRestart } from '../lib/checkpoint.js'
 import {
   backupStamp,
   claimRollbackLock,
+  CONFIG_DIR,
   contentFingerprintOf,
   KIND_KNOWN_GOOD,
   KIND_SNAPSHOT,
@@ -604,12 +605,16 @@ test('a probe that answered on a CHANGED configuration certifies NOTHING', async
   )
 })
 
-test('a snapshot taken before fingerprints existed is not certified by a probe', async (t) => {
+test('a snapshot taken before fingerprints existed IS certified when its content is what this boot runs', async (t) => {
   const { state, fake, knownGoodDir } = await runHostedRestart(t, {
     label: 'probe-no-fingerprint',
     knownGood: { patch: 'rows:\n  - id: known-good\n' },
     // An OLD copy: its meta.json has no `contentFingerprint` at all (it was taken
-    // before fingerprints existed). Nothing can be compared, so nothing is proven.
+    // before fingerprints existed).
+    //
+    // 没指纹 ≠ 内容不对（2026-11-01，用户拍板）：这份副本不是可疑，只是当初没给它拍照。
+    // 指纹是拿文件内容算出来的，文件还在，就能当场补拍一张再比 —— 内容正好等于此刻跑着的
+    // 那份配置，所以它证明了自己，认证。不给它补，等于「升级一次就把用户手里的安全份全收走」。
     onCommand: ({ state: where }) => {
       const snapshot = snapshotOfThisRestart(where)
       const metaPath = path.join(snapshot.dir, META_NAME)
@@ -622,17 +627,97 @@ test('a snapshot taken before fingerprints existed is not certified by a probe',
 
   const snapshot = snapshotOfThisRestart(state, knownGoodDir)
   const meta = readBackupMeta(snapshot.dir)
-  assert.equal(meta.kind, KIND_SNAPSHOT, 'the copy stays unproven')
-  assert.equal(meta.certifiedBy, 'none', 'no proof beats a guessed one')
+  assert.equal(meta.kind, KIND_KNOWN_GOOD, 'the computed fingerprint matched the running content, so the copy IS proven')
+  assert.equal(meta.certifiedBy, 'command-probe', 'and the source says what proved it')
+  assert.equal(
+    meta.contentFingerprint,
+    contentFingerprintOf(snapshot.dir),
+    'the sealed value is the content that was compared',
+  )
+
+  const certified = fake.logs.find((entry) => entry.level === 'info'
+    && entry.text.includes('is certified: the health probe answered'))
+  assert.ok(certified, 'the promotion is reported')
+  const detail = logDetail(certified)
+  // THE LOG HAS TO NAME WHERE THE FINGERPRINT CAME FROM: `computed` (taken just
+  // now from the copy) is not `recorded` (taken when the copy was made), and a
+  // reader who cannot tell them apart would believe this copy always had one.
+  assert.equal(detail.fingerprintSource, 'computed', 'the report says the snapshot side was COMPUTED')
+  assert.match(certified.text, /COMPUTED just now/, 'and the sentence spells the consequence out')
+  assert.equal(
+    detail.snapshotFingerprint,
+    detail.currentFingerprint,
+    'the computed fingerprint really was compared with the running configuration',
+  )
+})
+
+test('an OLD snapshot whose content does NOT match is not certified — and computing it writes nothing back', async (t) => {
+  const { state, fake, knownGoodDir } = await runHostedRestart(t, {
+    label: 'probe-old-mismatch',
+    knownGood: { patch: 'rows:\n  - id: known-good\n' },
+    onCommand: ({ profile: where, state: stateDirPath }) => {
+      // An old copy (no recorded fingerprint) whose content is NOT what the host
+      // came up on: the configuration was written to between the two boots.
+      const snapshot = snapshotOfThisRestart(stateDirPath)
+      const metaPath = path.join(snapshot.dir, META_NAME)
+      const raw = JSON.parse(fs.readFileSync(metaPath, 'utf8'))
+      delete raw.contentFingerprint
+      fs.writeFileSync(metaPath, JSON.stringify(raw), 'utf8')
+      fs.writeFileSync(path.join(where, 'cordis.patch.yml'), 'rows:\n  - id: edited-after-the-snapshot\n', 'utf8')
+    },
+    probeOutcome: { ok: true, reason: 'the new instance answered its health route' },
+  })
+
+  const snapshot = snapshotOfThisRestart(state, knownGoodDir)
+  const meta = readBackupMeta(snapshot.dir)
+  assert.equal(meta.kind, KIND_SNAPSHOT, 'a computed fingerprint that does not match proves nothing')
+  assert.equal(meta.certifiedBy, 'none')
+  // 现算只用于这一次判定，不回写 meta：这份副本以前没有指纹，判完也不该凭空多出一个。
   assert.equal(meta.contentFingerprint, null, 'the meta was NOT given a fingerprint it never had')
-  assert.equal(latestKnownGood(path.join(state.dir, 'backups')).dir, knownGoodDir, 'nothing new was certified')
 
   const refusal = fake.logs.find((entry) => entry.level === 'warn' && entry.text.includes('stays UNPROVEN'))
   assert.ok(refusal, 'the refusal is reported')
   const detail = logDetail(refusal)
-  assert.equal(detail.fingerprintState, 'snapshot-missing')
-  assert.match(refusal.text, /the snapshot has no contentFingerprint/)
-  assert.match(refusal.text, /taken before fingerprints existed/)
+  assert.equal(detail.fingerprintState, 'mismatch')
+  assert.equal(detail.fingerprintSource, 'computed', 'and the report says the compared value was computed just now')
+  assert.match(refusal.text, /changed between the two boots/)
+})
+
+test('a snapshot whose fingerprint cannot be COMPUTED is a computation failure, not a content difference', async (t) => {
+  const { state, fake, knownGoodDir } = await runHostedRestart(t, {
+    label: 'probe-old-unreadable',
+    knownGood: { patch: 'rows:\n  - id: known-good\n' },
+    onCommand: ({ state: stateDirPath }) => {
+      // An old copy (no recorded fingerprint) whose content cannot be read at all:
+      // `config/` is gone. This is NOT "the content differs" — nothing could be
+      // compared, and the two send the reader looking for different things.
+      const snapshot = snapshotOfThisRestart(stateDirPath)
+      const metaPath = path.join(snapshot.dir, META_NAME)
+      const raw = JSON.parse(fs.readFileSync(metaPath, 'utf8'))
+      delete raw.contentFingerprint
+      fs.writeFileSync(metaPath, JSON.stringify(raw), 'utf8')
+      fs.rmSync(path.join(snapshot.dir, CONFIG_DIR), { recursive: true, force: true })
+    },
+    probeOutcome: { ok: true, reason: 'the new instance answered its health route' },
+  })
+
+  const snapshot = snapshotOfThisRestart(state, knownGoodDir)
+  const meta = readBackupMeta(snapshot.dir)
+  assert.equal(meta.kind, KIND_SNAPSHOT, 'nothing is certified when nothing could be computed')
+  assert.equal(meta.certifiedBy, 'none')
+
+  const refusal = fake.logs.find((entry) => entry.level === 'warn' && entry.text.includes('stays UNPROVEN'))
+  assert.ok(refusal, 'the refusal is reported')
+  const detail = logDetail(refusal)
+  assert.equal(detail.fingerprintState, 'snapshot-unreadable', 'its own state, so it is not read as "content differs"')
+  assert.equal(detail.fingerprintSource, 'unavailable')
+  assert.match(refusal.text, /COMPUTATION failure/, 'the log says the copy could not be read')
+  assert.match(refusal.text, /could not be read/)
+  assert.doesNotMatch(
+    refusal.text,
+    /changed between the two boots/,
+    'and it does NOT claim the configuration was edited — that would be a different (false) diagnosis',
+  )
 })
 
 test('a restart command that fails is reported and rolls the snapshot back', async (t) => {

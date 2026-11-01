@@ -35,12 +35,17 @@ import test from 'node:test';
 import {
   createRuntime,
   detectBootIntervention,
+  fingerprintSourceNote,
+  FINGERPRINT_SOURCES,
+  FINGERPRINT_STATE_UNREADABLE,
   normalizeConfig,
   profileConfigFingerprint,
+  snapshotConfigFingerprint,
   verifyRestartBoot,
 } from '../index.js';
 import {
   backupsRoot,
+  CONFIG_DIR,
   contentFingerprintOf,
   createBackup,
   KIND_KNOWN_GOOD,
@@ -476,13 +481,17 @@ function fixture(t) {
  */
 function bootRuntime({ stateFile, profileDir = null }) {
   const warnings = [];
+  // The PROMOTION is reported with `info` and the refusals with `warn`; a test that
+  // wants to read how the snapshot side was fingerprinted needs both lines.
+  const infos = [];
   return {
     log: {
-      info: () => {},
+      info: (message, detail) => infos.push({ message, detail }),
       warn: (message, detail) => warnings.push({ message, detail }),
       error: () => {},
     },
     warnings,
+    infos,
     stateFile,
     profileDir: { dir: typeof profileDir === 'string' ? profileDir : null, source: 'test' },
     bootId: 'boot-wiring',
@@ -699,6 +708,188 @@ test('a boot whose recovery check never reported certifies nothing', async (t) =
   assert.equal(fs.readFileSync(path.join(snapshot.dir, META_NAME), 'utf8'), before, 'meta.json is byte-for-byte unchanged');
   assert.equal(readBackupMeta(snapshot.dir).kind, KIND_SNAPSHOT, 'the copy stays unproven');
   assert.equal(readBackupMeta(snapshot.dir).certifiedBy, 'none');
+});
+
+/* ------------------------------------------------------------------ *
+ * An OLD copy (no recorded fingerprint): compute one NOW, then compare.
+ * ------------------------------------------------------------------ */
+
+/**
+ * Turn a fresh snapshot into an OLD one: a meta.json written before fingerprints
+ * existed. Returns the file text so a test can prove it was not touched.
+ */
+function stripRecordedFingerprint(snapshotDir) {
+  const metaPath = path.join(snapshotDir, META_NAME);
+  const raw = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+  delete raw.contentFingerprint;
+  fs.writeFileSync(metaPath, JSON.stringify(raw), 'utf8');
+  return fs.readFileSync(metaPath, 'utf8');
+}
+
+test('the snapshot side is RECORDED when the meta has one — it is never recomputed', async (t) => {
+  const values = fixture(t);
+  const snapshot = await pendingRestart(values);
+  // A value that no longer matches the copy's content: an edit after the fact.
+  const recorded = 'sha256:' + 'f'.repeat(64);
+  const metaPath = path.join(snapshot.dir, META_NAME);
+  const raw = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+  fs.writeFileSync(metaPath, JSON.stringify({ ...raw, contentFingerprint: recorded }), 'utf8');
+
+  const side = snapshotConfigFingerprint(snapshot.dir);
+  assert.equal(side.source, FINGERPRINT_SOURCES.RECORDED, 'a recorded value wins');
+  assert.equal(side.fingerprint, recorded, 'and it is used as it stands, not recomputed');
+  // The copy's own content is DIFFERENT from the recorded value: computing the
+  // fallback here would quietly turn "this copy was edited" into "this copy is
+  // fine", which is the protection the recorded value still provides.
+  assert.notEqual(side.fingerprint, contentFingerprintOf(snapshot.dir));
+});
+
+test('a copy without a recorded fingerprint gets one COMPUTED from its own content', async (t) => {
+  const values = fixture(t);
+  const snapshot = await pendingRestart(values);
+  stripRecordedFingerprint(snapshot.dir);
+
+  const side = snapshotConfigFingerprint(snapshot.dir);
+  assert.equal(side.source, FINGERPRINT_SOURCES.COMPUTED, 'the meta had none, so one was computed now');
+  assert.equal(side.computeError, null);
+  assert.equal(side.readableFiles, 2, 'the two configuration files this fixture has were read');
+  // ARE THE TWO SIDES STILL THE SAME KIND OF VALUE? That is the whole question the
+  // comparison asks, so the computed value is checked against BOTH readers.
+  assert.equal(side.fingerprint, contentFingerprintOf(snapshot.dir));
+  assert.equal(side.fingerprint, profileConfigFingerprint(values.profile), 'and it equals the running configuration');
+});
+
+test('computing for the comparison writes NOTHING back into the meta', async (t) => {
+  const values = fixture(t);
+  const snapshot = await pendingRestart(values);
+  const before = stripRecordedFingerprint(snapshot.dir);
+
+  const side = snapshotConfigFingerprint(snapshot.dir);
+  assert.equal(side.source, FINGERPRINT_SOURCES.COMPUTED);
+
+  // meta.json 里那个字段是「复制这份时记下的事实」。现算值是「我现在算出来的」，
+  // 写回去就变成了「我自己给自己发的证据」——所以判完之后它必须还是原来的样子。
+  assert.equal(
+    fs.readFileSync(path.join(snapshot.dir, META_NAME), 'utf8'),
+    before,
+    'meta.json is byte-for-byte unchanged by the computation',
+  );
+  assert.equal(readBackupMeta(snapshot.dir).contentFingerprint, null, 'no fingerprint appeared out of nowhere');
+});
+
+test('"could not compute" is its own answer, never an empty-copy digest', async (t) => {
+  const values = fixture(t);
+
+  // Nothing at all to point at.
+  const noDir = snapshotConfigFingerprint('');
+  assert.equal(noDir.source, FINGERPRINT_SOURCES.UNAVAILABLE);
+  assert.equal(noDir.fingerprint, null, 'no digest is invented');
+
+  // The copy is gone.
+  const gone = snapshotConfigFingerprint(path.join(values.base, 'no-such-copy'));
+  assert.equal(gone.source, FINGERPRINT_SOURCES.UNAVAILABLE);
+  assert.equal(gone.fingerprint, null);
+  assert.match(gone.reason, /COMPUTATION failure/);
+  assert.match(gone.reason, /missing or unreadable/);
+  // 算不出来 ≠ 内容不一致：这句话里不许出现「配置被改过」，否则读日志的人会去查错方向。
+  assert.doesNotMatch(gone.reason, /changed between the two boots/);
+
+  // The copy is there but holds no readable configuration: `contentFingerprintOf`
+  // would happily return the digest of "everything missing", which equals the
+  // fingerprint of any other empty copy — worth nothing, and worse than nothing
+  // because it looks like an answer.
+  const empty = path.join(values.base, 'empty-copy');
+  fs.mkdirSync(empty, { recursive: true });
+  const emptySide = snapshotConfigFingerprint(empty);
+  assert.equal(emptySide.source, FINGERPRINT_SOURCES.UNAVAILABLE);
+  assert.equal(emptySide.fingerprint, null, 'an empty copy is NOT fingerprinted');
+  assert.match(emptySide.reason, /none of the configuration files/);
+});
+
+test('the fingerprint source is said in words, so a computed value is never read as recorded', () => {
+  assert.equal(fingerprintSourceNote(FINGERPRINT_SOURCES.RECORDED), '', 'the normal case needs no caveat');
+  const note = fingerprintSourceNote(FINGERPRINT_SOURCES.COMPUTED);
+  assert.match(note, /COMPUTED just now/);
+  assert.match(note, /not what was recorded/, 'the sentence says what the reader must NOT assume');
+  assert.equal(fingerprintSourceNote(FINGERPRINT_SOURCES.UNAVAILABLE), '', 'the unavailable case carries its own sentence');
+  assert.equal(fingerprintSourceNote('nonsense'), '', 'an unknown source adds nothing rather than something wrong');
+});
+
+test('a boot whose snapshot is an OLD copy certifies it when the content is what this boot runs', async (t) => {
+  const values = fixture(t);
+  const snapshot = await pendingRestart(values);
+  // 升级场景本身：这次重启的快照是旧版本插件拍的，meta 里根本没有指纹字段。
+  stripRecordedFingerprint(snapshot.dir);
+
+  const runtime = bootRuntime({ stateFile: values.stateFile, profileDir: values.profile });
+  const record = await verifyRestartBoot(runtime, { timeoutMs: 50 });
+  assert.equal(record.result, RESTART_RESULTS.OK);
+
+  const meta = readBackupMeta(snapshot.dir);
+  assert.equal(meta.kind, KIND_KNOWN_GOOD, '没指纹 ≠ 内容不对：补算出来的指纹对上了，这份副本就是被证明的');
+  assert.equal(meta.certifiedBy, 'full-checks', '四条启动检查都过了，来源照实写');
+
+  const certified = runtime.infos.find((entry) => /is certified/.test(String(entry.message)));
+  assert.ok(certified, 'the promotion is reported');
+  assert.match(String(certified.message), /COMPUTED just now/, 'the log says the fingerprint was computed, not recorded');
+  assert.equal(certified.detail.fingerprintSource, FINGERPRINT_SOURCES.COMPUTED, 'and names the source');
+  // The value the seal names is the value the comparison accepted (this copy has
+  // never been edited, so it is also what the copy holds).
+  assert.equal(certified.detail.contentFingerprint, shortFingerprint(contentFingerprintOf(snapshot.dir)));
+});
+
+test('a boot whose OLD snapshot does NOT match the running content certifies nothing, and its meta is untouched', async (t) => {
+  const values = fixture(t);
+  const snapshot = await pendingRestart(values);
+  const before = stripRecordedFingerprint(snapshot.dir);
+
+  // The configuration moved between the two boots (restore / hand edit / another
+  // writer). The copy still has no recorded fingerprint, so this refusal can only
+  // come from the COMPUTED one — which is the point: a computed value has to match
+  // exactly like a recorded one, or an old copy would certify anything.
+  fs.writeFileSync(path.join(values.profile, 'cordis.patch.yml'), 'rows:\n  - id: oops\n', 'utf8');
+
+  const runtime = bootRuntime({ stateFile: values.stateFile, profileDir: values.profile });
+  const record = await verifyRestartBoot(runtime, { timeoutMs: 50 });
+  assert.equal(record.result, RESTART_RESULTS.OK, 'the boot itself was fine; only the certification refused');
+
+  assert.equal(fs.readFileSync(path.join(snapshot.dir, META_NAME), 'utf8'), before, 'meta.json is byte-for-byte unchanged');
+  assert.equal(readBackupMeta(snapshot.dir).kind, KIND_SNAPSHOT);
+  assert.equal(readBackupMeta(snapshot.dir).certifiedBy, 'none');
+  // 现算值只用于这一次判定：判失败了，它更没有理由被写进 meta。
+  assert.equal(readBackupMeta(snapshot.dir).contentFingerprint, null, 'the computed value was NOT written back');
+
+  const refusal = runtime.warnings.find((entry) => /stays UNPROVEN/.test(String(entry.message)));
+  assert.ok(refusal, 'the refusal is reported');
+  assert.equal(refusal.detail.fingerprintState, FINGERPRINT_STATES.MISMATCH);
+  assert.equal(refusal.detail.fingerprintSource, FINGERPRINT_SOURCES.COMPUTED, 'the report says where the value came from');
+  assert.match(String(refusal.message), /changed between the two boots/);
+  assert.match(String(refusal.message), /COMPUTED just now/, 'and it does not let the reader think the copy had one all along');
+});
+
+test('a boot whose OLD snapshot cannot be fingerprinted says "computation failed", not "content differs"', async (t) => {
+  const values = fixture(t);
+  const snapshot = await pendingRestart(values);
+  const before = stripRecordedFingerprint(snapshot.dir);
+  // `config/` is gone: the copy holds nothing that could be fingerprinted.
+  fs.rmSync(path.join(snapshot.dir, CONFIG_DIR), { recursive: true, force: true });
+
+  const runtime = bootRuntime({ stateFile: values.stateFile, profileDir: values.profile });
+  await verifyRestartBoot(runtime, { timeoutMs: 50 });
+
+  assert.equal(fs.readFileSync(path.join(snapshot.dir, META_NAME), 'utf8'), before, 'meta.json is byte-for-byte unchanged');
+  assert.equal(readBackupMeta(snapshot.dir).certifiedBy, 'none');
+
+  const refusal = runtime.warnings.find((entry) => /stays UNPROVEN/.test(String(entry.message)));
+  assert.ok(refusal, 'the refusal is reported');
+  assert.equal(refusal.detail.fingerprintState, FINGERPRINT_STATE_UNREADABLE, 'its own state');
+  assert.equal(refusal.detail.fingerprintSource, FINGERPRINT_SOURCES.UNAVAILABLE);
+  assert.match(String(refusal.message), /COMPUTATION failure/);
+  assert.doesNotMatch(
+    String(refusal.message),
+    /changed between the two boots/,
+    'a copy that cannot be read is not the same news as a configuration that was edited',
+  );
 });
 
 /* ------------------------------------------------------------------ *
