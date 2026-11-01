@@ -554,25 +554,35 @@ if (pendingState.state === 'corrupt') {
 
 const pending = pendingState.pending;
 if (!pending) {
-  // Nothing to watch: the plugin decided on its own, or another watchdog is
-  // already on it. The scheduling item still goes: a task that fires once and
-  // then stays in the task scheduler is garbage.
-  try {
-    schedule.removeScheduleItem({ tier: 'scheduled-task', taskName: TASK_NAME });
-    schedule.removeScheduleItem({ tier: 'systemd-run', unitId: UNIT_ID });
-  } catch {
-    // It was never there.
-  }
+  // ORDER (2026-11-01): the report goes FIRST, the cleanup second. The cleanup
+  // below can `systemctl --user stop dsh-autorestart-watchdog.service` - the
+  // service this very process runs in - and systemd answers that with SIGTERM:
+  // anything written after it never reaches the disk. Same rule as the `finally`
+  // of runWatchdogFlow (lib/watchdog.js).
+  //
   // The empty exit is written down: on 2026-10-30 this path deleted the task
   // and left not one line behind, so nobody could tell it had ever run.
-  reportAndWarn(stateDir, {
+  const wrote = reportAndWarn(stateDir, {
     result: 'skipped',
     stage: 'config',
     error: 'no pending marker: there was nothing to watch',
     reason: 'no pending marker',
   });
   console.log('dsh-autorestart watchdog: no pending marker - nothing to watch');
-  process.exit(0);
+  // The scheduling item still goes: a task that fires once and then stays in the
+  // task scheduler is garbage. The systemd tier is cleaned WITHOUT stopping its
+  // service (`includeService: false`): this process RUNS in that service, so a
+  // `systemctl stop` would kill the process doing the cleaning - the one-shot
+  // service disappears by itself once the process exits.
+  try {
+    schedule.removeScheduleItem({ tier: 'scheduled-task', taskName: TASK_NAME });
+    schedule.removeScheduleItem({ tier: 'systemd-run', unitId: UNIT_ID, includeService: false });
+  } catch {
+    // It was never there.
+  }
+  // A run whose report could not be written must not exit 0: no report means
+  // nobody can tell what happened.
+  process.exit(wrote ? 0 : 1);
 }
 
 const lockFile = path.join(stateDir, watchdog.LOCK_NAME);
@@ -616,19 +626,27 @@ const report = await watchdog.runWatchdogFlow({
     runRelaunch: () => startAgain(pending.relaunchCommand),
     acquireLock: () => watchdog.acquireLock(lockFile),
     releaseLock: () => watchdog.releaseLock(lockFile),
+    // SELF-CLEANUP MUST NOT KILL ITSELF (2026-11-01). `includeService: false`
+    // makes the systemd tier stop the TIMER only: this CLI runs inside
+    // `dsh-autorestart-watchdog.service`, so `systemctl --user stop` of that
+    // unit hands this process a SIGTERM. The report is already on the disk by
+    // then (the flow writes it before any cleanup), but a process that kills
+    // itself mid-cleanup is still a bug, so both halves are fixed here.
     removeSchedule: () => {
       schedule.removeScheduleItem({
         tier: pending.tier,
         taskName: pending.taskName,
         unitId: pending.unitId,
         pidPath: pending.pidPath,
+        includeService: false,
       });
     },
   },
 });
 
-// The report itself is written by the flow (from its finally), so it exists
-// whatever the result was. This is only the console summary.
+// The report itself is written by the flow (from its finally, BEFORE any cleanup
+// that could stop this process), so it exists whatever the result was. This is
+// only the console summary.
 console.log(
   'dsh-autorestart watchdog: ' + report.result
   + ' (tier ' + report.tier + ', attempt ' + report.attempts + '/' + report.maxAttempts + ')',
@@ -637,4 +655,9 @@ if (report.cookieClear) {
   console.log('  cookie cleanup: ' + (report.cookieClear.ok === true ? 'ran' : 'FAILED: ' + report.cookieClear.error));
 }
 if (report.error) console.log('  ' + report.error);
-process.exit(report.result === 'failed' ? 1 : 0);
+// A report that could not be written is a failed run, whatever the rescue did:
+// the next reader would see a rescue nobody can prove.
+if (report.reportWriteError) {
+  console.error('dsh-autorestart watchdog: the report could not be written: ' + report.reportWriteError);
+}
+process.exit(report.result === 'failed' || report.reportWriteError ? 1 : 0);
