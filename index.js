@@ -144,6 +144,7 @@ import {
   DEFAULT_MAX_ATTEMPTS,
   readPending,
   readReport,
+  selectRestoreTarget,
   writePending,
   writeReport,
 } from './lib/watchdog.js'
@@ -4161,8 +4162,19 @@ const titleOfSummary = (item) => {
    * behaviour cannot drift apart. When no tier is available NOTHING is
    * registered: there is no watchdog, and the report says so.
    *
+   * WHERE IT MAY RESTORE FROM is decided BEFORE this call (`selectRestoreTarget`
+   * over the certified copies) and handed over as `restoreTargetDir`. When that
+   * selection found nothing, `restoreBlocked` is true together with the reason
+   * and the refused copies — the watchdog is still armed in that case, because a
+   * run that reports "there is no trusted restore point, handle it manually" is
+   * worth more than a run that never happens.
+   *
    * @param {{
+   *   restoreTargetDir?: string,
    *   snapshotDir?: string,
+   *   restoreBlocked?: boolean,
+   *   restoreBlockedReason?: string,
+   *   restoreCandidates?: Array<object>|null,
    *   profileDir?: string|null,
    *   relaunchCommand?: object|null,
    *   healthUrl?: string,
@@ -4172,7 +4184,11 @@ const titleOfSummary = (item) => {
    * @returns {{ ok: boolean, tier: string, reason: string, error: string|null }}
    */
   const armWatchdog = ({
+    restoreTargetDir = '',
     snapshotDir = '',
+    restoreBlocked = false,
+    restoreBlockedReason = '',
+    restoreCandidates = null,
     profileDir = null,
     relaunchCommand = null,
     healthUrl = '',
@@ -4180,11 +4196,12 @@ const titleOfSummary = (item) => {
     expectedBootId = null,
   } = {}) => {
     const stateDir = stateDirOf()
+    const target = typeof restoreTargetDir === 'string' && restoreTargetDir !== '' ? restoreTargetDir : snapshotDir
     if (watchdogAllowed(stateDir, config) !== true) {
       return { ok: false, tier: TIERS.NONE, reason: 'the watchdog is switched off', error: null }
     }
-    if (profileDir === null || snapshotDir === '') {
-      return { ok: false, tier: TIERS.NONE, reason: 'there is no snapshot to watch', error: null }
+    if (profileDir === null) {
+      return { ok: false, tier: TIERS.NONE, reason: 'there is no profile directory to restore into', error: null }
     }
     const info = watchdogInfo()
     if (info.tier === TIERS.NONE) {
@@ -4220,7 +4237,10 @@ const titleOfSummary = (item) => {
       taskName,
       unitId,
       pidPath,
-      snapshotDir,
+      restoreTargetDir: target,
+      restoreBlocked: restoreBlocked === true || target === '',
+      restoreBlockedReason,
+      restoreCandidates,
       profileDir,
       relaunchCommand,
       healthUrl,
@@ -5021,12 +5041,46 @@ const titleOfSummary = (item) => {
       // restored but nothing would be running any more.
       // The watchdog restores a state a boot has already proven, NOT the
       // snapshot of this restart (which may be the broken state itself).
-      const knownGoodForWatchdog = backup && backup.ok === true && profileDir !== null
-        ? latestKnownGood(backupsDirFor(stateDirOf()))
-        : null
-      const watchdogArm = knownGoodForWatchdog && typeof knownGoodForWatchdog.dir === 'string' && profileDir !== null
+      // WHICH COPY MAY THE WATCHDOG PUT BACK? (2026-11-01, strict mode)
+      //
+      // NOT "the newest known-good copy" any more: a copy is only a candidate
+      // when it was CERTIFIED (four checks / health probe / seed / manual
+      // rollback) AND nothing on record says that boot had to be rescued. The
+      // decision is made by ONE function (`selectRestoreTarget`), so the arming
+      // side, the watchdog and the report cannot disagree about it.
+      //
+      // When nothing qualifies, NO fallback copy is invented: the selection's
+      // `strict` answer is passed on, the watchdog is still armed, and its report
+      // says "no trusted restore point — handle it manually" with the list of
+      // copies that were refused. A watchdog that quietly stays home is the
+      // silence this whole change exists to remove.
+      const restoreChoice = backup && backup.ok === true && profileDir !== null
+        ? selectRestoreTarget({ candidates: listBackupIdentities(backupsDirFor(stateDirOf())) })
+        : { target: null, targetName: null, strict: true, reason: 'this restart took no snapshot, so there is nothing to restore', excluded: [], notes: [] }
+      if (restoreChoice.strict === true) {
+        log.warn('the watchdog has no trusted restore point: it will not restore anything', {
+          reason: restoreChoice.reason,
+          excluded: restoreChoice.excluded.length,
+          notes: restoreChoice.notes,
+        })
+      } else {
+        log.info('the watchdog may restore this copy:', {
+          dir: restoreChoice.target,
+          reason: restoreChoice.reason,
+          skipped: restoreChoice.excluded.length,
+        })
+      }
+      const watchdogArm = profileDir !== null
         ? armWatchdogFn({
-          snapshotDir: knownGoodForWatchdog.dir,
+          restoreTargetDir: restoreChoice.target === null ? '' : restoreChoice.target,
+          restoreBlocked: restoreChoice.strict === true,
+          restoreBlockedReason: restoreChoice.strict === true
+            ? restoreChoice.reason
+              + (restoreChoice.excluded.length === 0
+                ? ''
+                : ' — refused: ' + restoreChoice.excluded.map((entry) => (entry.name || entry.dir || 'a copy') + ' (' + entry.exclusion + ')').join(', '))
+            : '',
+          restoreCandidates: restoreChoice.excluded,
           profileDir,
           relaunchCommand: useCustomCommand && typeof config.restartCommand === 'string' && config.restartCommand.trim() !== ''
             ? {
@@ -5038,7 +5092,7 @@ const titleOfSummary = (item) => {
           portFile: accessFilePath(stateDir),
           expectedBootId: bootId,
         })
-        : { ok: false, tier: TIERS.NONE, reason: 'there is no snapshot to watch', error: null }
+        : { ok: false, tier: TIERS.NONE, reason: 'there is no profile directory to restore into', error: null }
 
       // THE DURABLE RESTART RECORD. The instance that is being replaced
       // writes the "pending" half BEFORE it runs the restart command: the

@@ -440,6 +440,8 @@
     'settings.rescue.rollbackUnknown': '自动回滚：还不知道（这台机器的能力还没检查过）',
     'settings.rescue.watchdogTier': '看门狗的触发方式：{tier}',
     'settings.rescue.watchdogLast': '上一次看门狗的结果：{result}',
+    'settings.rescue.watchdogStrict': "上一次守夜人没有动手：没有可信任的还原点（没有一份备份既被验证过、又没被系统介入过）。请手动处理。",
+    'settings.rescue.watchdogRestoredFrom': "上一次守夜人还原的这一份：{dir}",
     'settings.rescue.tierScheduledTask': 'Windows 计划任务',
     'settings.rescue.tierSystemdRun': 'systemd 定时器',
     'settings.rescue.tierDetachedProcess': '自建后台进程',
@@ -882,6 +884,8 @@
     'settings.rescue.rollbackUnknown': 'Automatic rollback: not known yet (this machine has not been checked)',
     'settings.rescue.watchdogTier': 'How the watchdog is triggered: {tier}',
     'settings.rescue.watchdogLast': 'The last watchdog run: {result}',
+    'settings.rescue.watchdogStrict': "The last watchdog run did NOT act: there is no trusted restore point (no backup was both certified and free of a system intervention). Please handle it by hand.",
+    'settings.rescue.watchdogRestoredFrom': "The copy the last watchdog run restored: {dir}",
     'settings.rescue.tierScheduledTask': 'a Windows scheduled task',
     'settings.rescue.tierSystemdRun': 'a systemd timer',
     'settings.rescue.tierDetachedProcess': 'a detached background process',
@@ -6139,6 +6143,18 @@
         const watchdogLast = watchdog.report && typeof watchdog.report === 'object' && typeof watchdog.report.result === 'string'
           ? watchdog.report.result
           : ''
+        // DID THE WATCHDOG ACT, OR DID IT STAND DOWN FOR WANT OF A TRUSTED COPY?
+        // (2026-11-01) `failed` alone is not enough for the user: the strict mode
+        // deliberately does nothing when no copy qualifies, and that has to be
+        // visible here — including WHICH copies were refused — otherwise "it did
+        // not rescue me" and "it had nothing to rescue me with" look the same.
+        const watchdogStrict = Boolean(
+          watchdog.report && typeof watchdog.report === 'object' && watchdog.report.strictMode === true,
+        )
+        const watchdogRestoredFrom = watchdog.report && typeof watchdog.report === 'object'
+          && typeof watchdog.report.restoredFrom === 'string' && watchdog.report.restoredFrom !== ''
+          ? watchdog.report.restoredFrom
+          : ''
         useEffect(() => {
           if (!schedulerNotice) return
           // The user has read it: the Host remembers that and stops asking.
@@ -7327,6 +7343,18 @@
                 'span',
                 { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-rescue': 'watchdog-last' },
                 t('settings.rescue.watchdogLast', { result: watchdogLast }),
+              ),
+              // The strict-mode answer, in the words the user asked for: nothing
+              // was touched because there is nothing trustworthy to put back.
+              watchdogStrict ? h(
+                'span',
+                { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-rescue': 'watchdog-strict' },
+                t('settings.rescue.watchdogStrict'),
+              ) : null,
+              watchdogRestoredFrom === '' ? null : h(
+                'span',
+                { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-rescue': 'watchdog-restored-from' },
+                t('settings.rescue.watchdogRestoredFrom', { dir: watchdogRestoredFrom }),
               ),
             ),
             // The notice is shown ONCE: the Host remembers that the user has

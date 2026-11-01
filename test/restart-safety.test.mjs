@@ -148,10 +148,12 @@ function seedKnownGood(state, options = {}) {
     'utf8',
   )
   // A COPY ONLY COUNTS AS SAFE WITH EVIDENCE (2026-11-01): the promotion has to
-  // name what was checked. The fixture states it explicitly — the same thing a
-  // real boot does once the call site hands its check result over.
+  // name what was checked, AND — since the watchdog only restores certified
+  // copies whose boot needed no help — the fixture records `intervention: false`.
+  // A copy whose intervention is `null` ("nobody recorded it") is deliberately
+  // NOT restorable, so a fixture that wants a restorable copy has to say so.
   assert.equal(
-    markKnownGood(dir, { reason: 'test', version, certifiedBy: 'manual-rollback' }).promoted,
+    markKnownGood(dir, { reason: 'test', version, certifiedBy: 'manual-rollback', intervention: false }).promoted,
     true,
     'the test copy is marked known-good',
   );
@@ -351,7 +353,7 @@ test('when the watchdog v2 is armed, the old watcher is NOT started', async (t) 
   })
   assert.equal(watchdogArms.length, 1, 'the new watchdog was armed once')
   // v2 rolls back the PROVEN state, not the snapshot this restart just took.
-  assert.equal(watchdogArms[0].snapshotDir, knownGoodDir, 'v2 watches the known-good copy')
+  assert.equal(watchdogArms[0].restoreTargetDir, knownGoodDir, 'v2 is told exactly which copy it may restore')
   assert.equal(watchers.length, 0, 'the old watcher is NOT started next to v2')
   assert.equal(commands.length, 1, 'the restart command still ran exactly once')
   assert.equal(probes.length, 1, 'the new instance is confirmed once')
@@ -833,8 +835,22 @@ test('a rollback without a known-good copy restores NOTHING and says no-known-go
     probeOutcome: { ok: false, reason: 'the new instance never answered' },
   })
   assert.equal(knownGoodDir, null, 'the fixture really has no known-good copy')
-  assert.equal(watchers.length, 0, 'nothing was armed to restore a copy that does not exist')
-  assert.equal(watchdogArms.length, 0, 'and the v2 watchdog was not armed either')
+  // WHAT CHANGED, AND WHY IT IS NOT A WEAKENING (2026-11-01, strict mode): the
+  // watchdog USED to stay home entirely when no copy existed, which left the user
+  // with a silent failure — nothing was armed, so nothing was ever written down
+  // that said "there is no trusted restore point". It is armed now, WITH an empty
+  // target and the blocked flag, so the run happens and the report says why. What
+  // must still hold — and is asserted below — is that it restores NOTHING.
+  assert.equal(watchdogArms.length, 1, 'the watchdog is armed so it can REPORT that nothing may be restored')
+  assert.equal(watchdogArms[0].restoreTargetDir, '', 'but it is given no copy at all')
+  assert.equal(watchdogArms[0].restoreBlocked, true, 'and it is told, in so many words, that it is blocked')
+  assert.match(String(watchdogArms[0].restoreBlockedReason), /no backup qualifies/, 'including the reason')
+  assert.match(
+    String(watchdogArms[0].restoreBlockedReason),
+    /not-certified/,
+    'and which copies were refused, with why (this restart took one uncertified snapshot)',
+  )
+  assert.equal(watchers.length, 0, 'the old watcher is not started')
 
   const report = JSON.parse(fs.readFileSync(path.join(state.dir, 'last-rollback.json'), 'utf8'))
   assert.equal(report.ok, false, 'the report says the restart failed')
@@ -856,20 +872,24 @@ test('a rollback without a known-good copy restores NOTHING and says no-known-go
   )
 })
 
-test('without a known-good copy the watchdog v2 is NOT armed and reports no-known-good', async (t) => {
+test('without a known-good copy the watchdog v2 is armed but told it may restore NOTHING', async (t) => {
   const { state, fake, watchers, watchdogArms } = await runHostedRestart(t, {
     label: 'no-known-good-v2',
     knownGood: null,
-    // The injected v2 WOULD say yes: the plugin must not even ask it, because a
-    // watchdog with nothing proven to restore would restore the broken state.
+    // The injected v2 WOULD say yes. It is armed on purpose — a run that reports
+    // "no trusted restore point, handle it manually" is what the user asked for —
+    // but it is armed with NO target and a blocked flag, so it cannot put the
+    // broken state back.
     watchdogArm: { ok: true, tier: 'scheduled-task', reason: '' },
     probeOutcome: { ok: false, reason: 'the new instance never answered' },
   })
-  assert.equal(watchdogArms.length, 0, 'v2 is not armed: there is nothing proven to restore')
-  assert.equal(watchers.length, 0, 'the old watcher is not armed either')
+  assert.equal(watchdogArms.length, 1, 'v2 is armed so its report can say that nothing may be restored')
+  assert.equal(watchdogArms[0].restoreTargetDir, '', 'with no copy to restore')
+  assert.equal(watchdogArms[0].restoreBlocked, true, 'and the strict-mode flag set')
+  assert.equal(watchers.length, 0, 'the old watcher is not armed')
   assert.ok(
-    fake.logs.some((entry) => entry.level === 'warn' && entry.text.includes('no known-good backup')),
-    'the plugin says that it did not arm a watcher',
+    fake.logs.some((entry) => entry.level === 'warn' && entry.text.includes('no trusted restore point')),
+    'the plugin says out loud that the watchdog will not restore anything, and the report will repeat it',
   )
   const report = JSON.parse(fs.readFileSync(path.join(state.dir, 'last-rollback.json'), 'utf8'))
   assert.match(String(report.reason), /^no-known-good: /, 'and the report says no-known-good')

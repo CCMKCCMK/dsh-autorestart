@@ -340,7 +340,9 @@
       "tierScheduledTask": "a Windows scheduled task",
       "tierSystemdRun": "a systemd timer",
       "tierDetachedProcess": "a detached background process",
-      "tierNone": "(this machine has no way to run it)"
+      "tierNone": "(this machine has no way to run it)",
+      "watchdogStrict": "The last watchdog run did NOT act: there is no trusted restore point (no backup was both certified and free of a system intervention). Please handle it by hand.",
+      "watchdogRestoredFrom": "The copy the last watchdog run restored: {dir}"
     },
     "error": "Could not save the settings: {message}",
     "saveNotice": {

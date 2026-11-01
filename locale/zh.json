@@ -340,7 +340,9 @@
       "tierScheduledTask": "Windows 计划任务",
       "tierSystemdRun": "systemd 定时器",
       "tierDetachedProcess": "自建后台进程",
-      "tierNone": "（这台机器没有可用机制）"
+      "tierNone": "（这台机器没有可用机制）",
+      "watchdogStrict": "上一次守夜人没有动手：没有可信任的还原点（没有一份备份既被验证过、又没被系统介入过）。请手动处理。",
+      "watchdogRestoredFrom": "上一次守夜人还原的这一份：{dir}"
     },
     "error": "没能保存设置：{message}",
     "saveNotice": {

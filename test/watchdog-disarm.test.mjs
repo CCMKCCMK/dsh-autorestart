@@ -28,6 +28,9 @@ import test from 'node:test';
 
 import { apply, PLUGIN_VERSION_FALLBACK } from '../index.js';
 import { buildDiagnostics } from '../lib/diagnostics.js';
+
+/** The copy a real arming would hand to the watchdog. */
+const TARGET_DIR = '/tmp/dsh-ar-restore-target'
 import {
   DEFAULT_DISARM_ATTEMPTS,
   disarmOnce,
@@ -74,7 +77,7 @@ test.after(() => {
 
 /** The pending marker an armed watchdog leaves behind. */
 function armedPending(dir, overrides = {}) {
-  const pending = buildPending({
+  const pending = buildPending({ restoreTargetDir: TARGET_DIR,
     tier: 'scheduled-task',
     tierReason: 'a one-off Windows scheduled task',
     taskName: 'dsh-autorestart-watchdog',
@@ -347,7 +350,7 @@ test('a failed disarm shows up in the diagnostics text', () => {
  */
 async function flow(options) {
   const dir = options.dir;
-  const pending = buildPending({
+  const pending = buildPending({ restoreTargetDir: TARGET_DIR,
     tier: 'scheduled-task',
     taskName: 'dsh-autorestart-watchdog',
     timeoutMs: 0,

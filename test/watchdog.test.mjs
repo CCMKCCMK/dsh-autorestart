@@ -42,6 +42,9 @@ import {
 // exercises the code that runs in production.
 import { writeRestartPending } from '../index.js';
 
+/** The copy a real arming would hand to the watchdog. */
+const TARGET_DIR = '/tmp/dsh-ar-restore-target'
+
 /** Every directory this file created, so a FAILING test cannot leak one. */
 const createdDirs = [];
 
@@ -100,7 +103,7 @@ function deps(options = {}) {
 test('a host that comes up means: no restore at all', async () => {
   const dir = tempDir('not-needed');
   const d = deps({ ready: true });
-  const pending = buildPending({ tier: 'systemd-run', tierReason: 'because', timeoutMs: 5000 });
+  const pending = buildPending({ restoreTargetDir: TARGET_DIR, tier: 'systemd-run', tierReason: 'because', timeoutMs: 5000 });
   const report = await runWatchdogFlow({ pending, stateDir: dir, deps: d });
   assert.equal(report.result, 'not-needed');
   assert.equal(d.state.restores, 0);
@@ -116,7 +119,7 @@ test('a host that comes up late is asked again, and not restored', async () => {
   // The ready marker appears only DURING the second look (after the first
   // wait ran out): a slow host is not a dead host.
   d.readReady = () => d.clock.now >= 6000;
-  const pending = buildPending({ timeoutMs: 5000, recheckMs: 1000 });
+  const pending = buildPending({ restoreTargetDir: TARGET_DIR, timeoutMs: 5000, recheckMs: 1000 });
   const report = await runWatchdogFlow({ pending, stateDir: dir, deps: d });
   assert.equal(report.result, 'not-needed');
   assert.equal(report.rechecked, true, 'it asked again');
@@ -130,7 +133,7 @@ test('a host that never comes up is restored and started again', async () => {
   let readyAfter = false;
   d.runRelaunch = () => { d.state.relaunches += 1; readyAfter = true; return { ok: true }; };
   d.readReady = () => readyAfter;
-  const pending = buildPending({ timeoutMs: 2000, recheckMs: 1000, readyTimeoutMs: 5000 });
+  const pending = buildPending({ restoreTargetDir: TARGET_DIR, timeoutMs: 2000, recheckMs: 1000, readyTimeoutMs: 5000 });
   const report = await runWatchdogFlow({ pending, stateDir: dir, deps: d });
   assert.equal(report.result, 'recovered');
   assert.equal(report.restored, true);
@@ -144,7 +147,7 @@ test('a host that never comes up is restored and started again', async () => {
 test('a host that stays down is restored ONCE and started at most maxAttempts times', async () => {
   const dir = tempDir('failed');
   const d = deps({ alive: false });
-  const pending = buildPending({ timeoutMs: 2000, recheckMs: 1000, readyTimeoutMs: 3000 });
+  const pending = buildPending({ restoreTargetDir: TARGET_DIR, timeoutMs: 2000, recheckMs: 1000, readyTimeoutMs: 3000 });
   const report = await runWatchdogFlow({ pending, stateDir: dir, deps: d });
   assert.equal(report.result, 'failed');
   assert.equal(d.state.restores, 1, 'exactly one restore');
@@ -168,7 +171,7 @@ test('an OLD pending marker (no maxAttempts) still tries more than once', async 
   const dir = tempDir('old-marker');
   const d = deps({ alive: false });
   // A marker written by an older version has no maxAttempts field at all.
-  const pending = buildPending({ timeoutMs: 1000, recheckMs: 1000, readyTimeoutMs: 1000 });
+  const pending = buildPending({ restoreTargetDir: TARGET_DIR, timeoutMs: 1000, recheckMs: 1000, readyTimeoutMs: 1000 });
   delete pending.maxAttempts;
   const report = await runWatchdogFlow({ pending, stateDir: dir, deps: d });
   assert.equal(report.maxAttempts, DEFAULT_MAX_ATTEMPTS, 'an old marker is read as the default, never as one');
@@ -200,7 +203,7 @@ test('the stale cookies are cleared BEFORE the host is started again', async () 
   };
   d.runRestore = () => { order.push('restore'); d.state.restores += 1; return { ok: true }; };
   d.runRelaunch = () => { order.push('relaunch'); d.state.relaunches += 1; return { ok: true }; };
-  const pending = buildPending({ timeoutMs: 1000, recheckMs: 1000, readyTimeoutMs: 1000, maxAttempts: 1 });
+  const pending = buildPending({ restoreTargetDir: TARGET_DIR, timeoutMs: 1000, recheckMs: 1000, readyTimeoutMs: 1000, maxAttempts: 1 });
   const report = await runWatchdogFlow({ pending, stateDir: dir, deps: d });
   assert.deepEqual(order, ['restore', 'clear', 'relaunch'], 'restore, then the cleanup, then the start');
   assert.deepEqual(report.cookieClear, { ok: true, removed: 7, error: null }, 'what the cleanup did is in the report');
@@ -213,7 +216,7 @@ test('a cookie cleanup that throws does NOT block the start (and is reported)', 
   d.clearCookies = async () => {
     throw new Error('EBUSY: the cookie jar is locked');
   };
-  const pending = buildPending({ timeoutMs: 1000, recheckMs: 1000, readyTimeoutMs: 1000, maxAttempts: 1 });
+  const pending = buildPending({ restoreTargetDir: TARGET_DIR, timeoutMs: 1000, recheckMs: 1000, readyTimeoutMs: 1000, maxAttempts: 1 });
   const report = await runWatchdogFlow({ pending, stateDir: dir, deps: d });
   assert.equal(d.state.relaunches, 1, 'the host is started even when the cleanup failed');
   assert.equal(d.state.restores, 1);
@@ -239,7 +242,7 @@ test('every attempt asks again: a host that came up is not started a second time
     d.clock.now += ms;
     if (launches > 0 && ms >= DEFAULT_BACKOFF_MS[0]) markerAppeared = true;
   };
-  const pending = buildPending({ timeoutMs: 1000, recheckMs: 1000, readyTimeoutMs: 1000, maxAttempts: 3 });
+  const pending = buildPending({ restoreTargetDir: TARGET_DIR, timeoutMs: 1000, recheckMs: 1000, readyTimeoutMs: 1000, maxAttempts: 3 });
   const report = await runWatchdogFlow({ pending, stateDir: dir, deps: d });
   // Attempt 1 started the host; the marker appeared before attempt 2 could.
   assert.equal(report.result, 'not-needed');
@@ -256,7 +259,7 @@ test('a live instance makes the later attempts stand down instead of starting', 
   d.runRelaunch = () => { launches += 1; d.state.relaunches += 1; return { ok: true }; };
   // After the first start something IS alive: no second start.
   d.probeAlive = async () => launches > 0;
-  const pending = buildPending({ timeoutMs: 1000, recheckMs: 1000, readyTimeoutMs: 1000, maxAttempts: 3 });
+  const pending = buildPending({ restoreTargetDir: TARGET_DIR, timeoutMs: 1000, recheckMs: 1000, readyTimeoutMs: 1000, maxAttempts: 3 });
   const report = await runWatchdogFlow({ pending, stateDir: dir, deps: d });
   assert.equal(report.result, 'abandoned');
   assert.equal(launches, 1, 'no second instance next to a live one');
@@ -268,7 +271,7 @@ test('a start that cannot be issued is marked as such (stage relaunch)', async (
   const dir = tempDir('relaunch-failed');
   const d = deps({ alive: false });
   d.runRelaunch = () => ({ ok: false, error: 'the executable is gone' });
-  const pending = buildPending({ timeoutMs: 1000, recheckMs: 1000, readyTimeoutMs: 1000, maxAttempts: 3 });
+  const pending = buildPending({ restoreTargetDir: TARGET_DIR, timeoutMs: 1000, recheckMs: 1000, readyTimeoutMs: 1000, maxAttempts: 3 });
   const report = await runWatchdogFlow({ pending, stateDir: dir, deps: d });
   assert.equal(report.result, 'failed');
   assert.equal(report.stage, 'relaunch', 'the report tells "could not start" from "could not rescue"');
@@ -282,7 +285,7 @@ test('an exception inside the flow STILL leaves a report on the disk', async () 
   const d = deps({ alive: false });
   d.writeReport = (report) => writeReport(dir, report);
   d.readReady = () => { throw new Error('EIO: the state directory is gone'); };
-  const pending = buildPending({ timeoutMs: 0, recheckMs: 0, readyTimeoutMs: 0 });
+  const pending = buildPending({ restoreTargetDir: TARGET_DIR, timeoutMs: 0, recheckMs: 0, readyTimeoutMs: 0 });
   const report = await runWatchdogFlow({ pending, stateDir: dir, deps: d });
   assert.equal(report.result, 'failed');
   assert.match(String(report.error), /EIO/);
@@ -297,7 +300,7 @@ test('an exception inside the flow STILL leaves a report on the disk', async () 
 test('a live instance is never rolled back under', async () => {
   const dir = tempDir('alive');
   const d = deps({ alive: true });
-  const pending = buildPending({ timeoutMs: 2000, recheckMs: 1000 });
+  const pending = buildPending({ restoreTargetDir: TARGET_DIR, timeoutMs: 2000, recheckMs: 1000 });
   const report = await runWatchdogFlow({ pending, stateDir: dir, deps: d });
   assert.equal(report.result, 'abandoned');
   assert.equal(d.state.restores, 0, 'no double start');
@@ -308,7 +311,7 @@ test('a live instance is never rolled back under', async () => {
 test('a rollback that is already running wins: the watchdog stands down', async () => {
   const dir = tempDir('locked');
   const d = deps({ alive: false, locked: true });
-  const pending = buildPending({ timeoutMs: 2000, recheckMs: 1000 });
+  const pending = buildPending({ restoreTargetDir: TARGET_DIR, timeoutMs: 2000, recheckMs: 1000 });
   const report = await runWatchdogFlow({ pending, stateDir: dir, deps: d });
   assert.equal(report.result, 'abandoned');
   assert.equal(d.state.restores, 0);
@@ -319,7 +322,7 @@ test('a rollback that is already running wins: the watchdog stands down', async 
 test('a plugin that decided on its own makes the watchdog stand down', async () => {
   const dir = tempDir('decided');
   const d = deps({ withdrawn: true });
-  const pending = buildPending({ timeoutMs: 2000, recheckMs: 1000 });
+  const pending = buildPending({ restoreTargetDir: TARGET_DIR, timeoutMs: 2000, recheckMs: 1000 });
   const report = await runWatchdogFlow({ pending, stateDir: dir, deps: d });
   assert.equal(report.result, 'decided');
   assert.equal(d.state.restores, 0);
@@ -328,10 +331,10 @@ test('a plugin that decided on its own makes the watchdog stand down', async () 
 
 test('the scheduling item and the pending marker go, the report stays', async () => {
   const dir = tempDir('cleanup');
-  writePending(dir, buildPending({ tier: 'scheduled-task' }));
+  writePending(dir, buildPending({ restoreTargetDir: TARGET_DIR, tier: 'scheduled-task' }));
   const d = deps({ ready: true });
   d.writeReport = (report) => writeReport(dir, report);
-  const report = await runWatchdogFlow({ pending: buildPending({}), stateDir: dir, deps: d });
+  const report = await runWatchdogFlow({ pending: buildPending({ restoreTargetDir: TARGET_DIR,}), stateDir: dir, deps: d });
   assert.equal(d.state.removed, 1, 'the scheduling item is removed');
   assert.equal(readPending(dir), null, 'the pending marker is gone');
   assert.ok(fs.existsSync(reportPath(dir)), 'the report is kept');
@@ -340,7 +343,7 @@ test('the scheduling item and the pending marker go, the report stays', async ()
 
 test('the markers live where they belong', () => {
   const dir = tempDir('markers');
-  writePending(dir, buildPending({ tier: 'detached-process' }));
+  writePending(dir, buildPending({ restoreTargetDir: TARGET_DIR, tier: 'detached-process' }));
   assert.equal(readPending(dir).tier, 'detached-process');
   writeReady(dir, { bootId: 'b1', port: 1234 });
   assert.equal(readReady(dir).port, 1234);
@@ -376,7 +379,7 @@ test('readPendingState: a BOM-prefixed pending marker IS a pending marker', () =
   const dir = tempDir('bom-pending');
   fs.writeFileSync(
     path.join(dir, 'watchdog-pending.json'),
-    '\uFEFF' + JSON.stringify(buildPending({ tier: 'scheduled-task', taskName: 'dsh-autorestart-watchdog' })),
+    '\uFEFF' + JSON.stringify(buildPending({ restoreTargetDir: TARGET_DIR, tier: 'scheduled-task', taskName: 'dsh-autorestart-watchdog' })),
     'utf8',
   );
   const read = readPendingState(dir);
@@ -566,7 +569,7 @@ function staleReadyDeps(overrides = {}) {
 
 test('the ready marker of the PREVIOUS boot does not count as "the host is up"', async () => {
   const dir = tempDir('stale-previous-boot');
-  const pending = buildPending({ timeoutMs: 2000, recheckMs: 1000, readyTimeoutMs: 1000, maxAttempts: 1, now: PENDING_AT });
+  const pending = buildPending({ restoreTargetDir: TARGET_DIR, timeoutMs: 2000, recheckMs: 1000, readyTimeoutMs: 1000, maxAttempts: 1, now: PENDING_AT });
   writePending(dir, pending);
   // Exactly what the machine really had on disk during the incident.
   writeReady(dir, { at: PREVIOUS_READY_AT, bootId: PREVIOUS_BOOT_ID, port: 5601 });
@@ -586,7 +589,7 @@ test('the ready marker of the PREVIOUS boot does not count as "the host is up"',
 
 test('a refused ready marker is OBSERVABLE in the report (the 2026-11-01 run said nothing)', async () => {
   const dir = tempDir('stale-observable');
-  const pending = buildPending({ timeoutMs: 2000, recheckMs: 1000, readyTimeoutMs: 1000, maxAttempts: 1, now: PENDING_AT });
+  const pending = buildPending({ restoreTargetDir: TARGET_DIR, timeoutMs: 2000, recheckMs: 1000, readyTimeoutMs: 1000, maxAttempts: 1, now: PENDING_AT });
   writePending(dir, pending);
   writeReady(dir, { at: PREVIOUS_READY_AT, bootId: PREVIOUS_BOOT_ID, port: 5601 });
 
@@ -604,7 +607,7 @@ test('a refused ready marker is OBSERVABLE in the report (the 2026-11-01 run sai
 
 test('a marker that belongs to this restart is NOT called stale', async () => {
   const dir = tempDir('stale-current');
-  const pending = buildPending({ timeoutMs: 2000, recheckMs: 1000, readyTimeoutMs: 1000, maxAttempts: 1, now: PENDING_AT });
+  const pending = buildPending({ restoreTargetDir: TARGET_DIR, timeoutMs: 2000, recheckMs: 1000, readyTimeoutMs: 1000, maxAttempts: 1, now: PENDING_AT });
   writePending(dir, pending);
   writeReady(dir, { at: PENDING_AT + 5000, bootId: 'the-new-boot', port: 5601 });
 
@@ -625,7 +628,7 @@ test('the marker written AFTER the relaunch is accepted: the rescue reports "rec
   // timeoutMs/readyTimeoutMs 0: the flow looks at the disk exactly once per
   // step, so the marker written by the relaunch is the ONLY thing that can make
   // the last look count.
-  const pending = buildPending({ timeoutMs: 0, recheckMs: 0, readyTimeoutMs: 0, maxAttempts: 1, now: PENDING_AT });
+  const pending = buildPending({ restoreTargetDir: TARGET_DIR, timeoutMs: 0, recheckMs: 0, readyTimeoutMs: 0, maxAttempts: 1, now: PENDING_AT });
   writePending(dir, pending);
   writeReady(dir, { at: PREVIOUS_READY_AT, bootId: PREVIOUS_BOOT_ID, port: 5601 });
 
@@ -672,7 +675,7 @@ test("arming writes this restart's marker and removes the earlier ready marker",
   writeReady(dir, { at: PREVIOUS_READY_AT, bootId: PREVIOUS_BOOT_ID, port: 5601 });
   assert.ok(fs.existsSync(readyPath(dir)), 'the stale marker is there before the arm');
 
-  const pending = buildPending({ tier: 'scheduled-task', taskName: 'dsh-autorestart-watchdog', now: PENDING_AT });
+  const pending = buildPending({ restoreTargetDir: TARGET_DIR, tier: 'scheduled-task', taskName: 'dsh-autorestart-watchdog', now: PENDING_AT });
   writeRestartPending(dir, pending);
 
   assert.equal(fs.existsSync(readyPath(dir)), false, 'the ready marker of the earlier boot is GONE');
@@ -686,9 +689,9 @@ test("arming writes this restart's marker and removes the earlier ready marker",
 test('arming twice in a row is harmless (no marker is left behind the second time either)', () => {
   const dir = tempDir('stale-arm-twice');
   writeReady(dir, { at: PREVIOUS_READY_AT, bootId: PREVIOUS_BOOT_ID, port: 5601 });
-  const first = buildPending({ tier: 'scheduled-task', now: PENDING_AT });
+  const first = buildPending({ restoreTargetDir: TARGET_DIR, tier: 'scheduled-task', now: PENDING_AT });
   writeRestartPending(dir, first);
-  const second = buildPending({ tier: 'scheduled-task', now: PENDING_AT + 60000 });
+  const second = buildPending({ restoreTargetDir: TARGET_DIR, tier: 'scheduled-task', now: PENDING_AT + 60000 });
   writeRestartPending(dir, second);
   assert.equal(fs.existsSync(readyPath(dir)), false);
   assert.equal(readPending(dir).at, second.at, 'the newest marker is the one on the disk');

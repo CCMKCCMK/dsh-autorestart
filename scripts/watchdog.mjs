@@ -578,6 +578,12 @@ if (!pending) {
 const lockFile = path.join(stateDir, watchdog.LOCK_NAME);
 stage = 'flow';
 
+// WHAT MAY BE PUT BACK, read from the marker through the SAME normalizer the
+// flow uses, so the CLI and the flow cannot disagree about which copy is the
+// target (2026-11-01: the field used to be called `snapshotDir` and was in fact
+// the certified copy, not a snapshot).
+const restoreTarget = watchdog.restoreTargetInfoOf(pending);
+
 const report = await watchdog.runWatchdogFlow({
   pending,
   stateDir,
@@ -590,9 +596,23 @@ const report = await watchdog.runWatchdogFlow({
     // BEFORE the host is started again: the stale handshake cookies go. A
     // host that is started with them dies again with 431.
     clearCookies: () => clearStaleCookies(),
-    runRestore: () => (pending.restoreCommand
-      ? runCommand(pending.restoreCommand)
-      : watchdog.restoreFromSnapshot({ snapshotDir: pending.snapshotDir, profileDir: pending.profileDir })),
+    // STRICT MODE (2026-11-01): with no trusted restore point this refuses
+    // instead of restoring something. The flow already stops before calling it;
+    // this is the second lock on the same door, because restoring an unknown
+    // copy is the one mistake this whole feature must not make.
+    runRestore: () => {
+      if (restoreTarget.blocked === true || restoreTarget.dir === '') {
+        return {
+          ok: false,
+          error: 'no trusted restore point: ' + (restoreTarget.reason || 'nothing to restore'),
+          copied: [],
+          links: [],
+        };
+      }
+      return pending.restoreCommand
+        ? runCommand(pending.restoreCommand)
+        : watchdog.restoreFromSnapshot({ restoreTargetDir: restoreTarget.dir, profileDir: pending.profileDir });
+    },
     runRelaunch: () => startAgain(pending.relaunchCommand),
     acquireLock: () => watchdog.acquireLock(lockFile),
     releaseLock: () => watchdog.releaseLock(lockFile),
