@@ -15,10 +15,12 @@ import {
   createBackup,
   decideLinkRestore,
   enabledBundlesOf,
+  KIND_KNOWN_GOOD,
   LINK_ACTIONS,
   LINKS_DIR,
   listBackups,
   MANIFEST_NAME,
+  markKnownGood,
   PLUGINS_DIR,
   pruneBackups,
   readManifest,
@@ -26,6 +28,7 @@ import {
   ROLLBACK_REPORT_NAME,
   restoreBackup,
   clearRollbackReport,
+  writeBackupMeta,
 } from '../lib/backup.js';
 
 /** A profile-looking tree and an empty backups directory. */
@@ -79,9 +82,23 @@ test('includePlugins=false keeps the backup to the configuration files', async (
 test('only the newest maxBackups snapshots are kept', async (t) => {
   const { profile, backups } = fixture(t);
   const stamps = [3_000, 4_000, 5_000, 6_000];
-  for (const now of stamps) {
+  const made = [];
+  for (const [index, now] of stamps.entries()) {
+    // PRUNING NEEDS ONE CERTIFIED COPY TO EXIST (2026-11-01, strict mode): with no
+    // evidence anywhere the history is left untouched on purpose. The fixture
+    // therefore lays down a certified seed before the limit is first exceeded —
+    // otherwise this test would only be measuring "nothing is ever deleted",
+    // which is a different (and separately tested) rule.
+    if (index === 2) {
+      assert.equal(
+        markKnownGood(made[0].dir, { reason: 'seed', certifiedBy: 'seed' }).promoted,
+        true,
+        'the oldest copy is the seed the pruning relies on',
+      );
+    }
     const backup = await createBackup({ slimBackup: false, profileDir: profile, backupsDir: backups, includePlugins: false, maxBackups: 2, now });
     assert.equal(backup.ok, true);
+    made.push(backup);
   }
 
   const left = listBackups(backups).map((entry) => entry.name);
@@ -108,9 +125,16 @@ test('pruneBackups removes only what exceeds the limit', (t) => {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({ at: 1_000 + index, atLocal: name, bytes: 0, files: [], includePlugins: false }), 'utf8');
   }
+  // The oldest copy is also the certified one here: pruning only runs at all when
+  // some copy carries evidence (2026-11-01), and the "oldest" floor keeps it, so
+  // the victim below is the middle copy rather than the first one.
+  assert.equal(
+    writeBackupMeta(path.join(backups, '2026-01-01T00-00-00-000Z'), { kind: KIND_KNOWN_GOOD, at: 1_000, certifiedBy: 'seed' }),
+    true,
+  );
   // Only what exceeds the limit is removed — but the OLDEST is permanently kept,
   // so the one victim is the middle copy rather than the first one.
-  const removed = pruneBackups(backups, 2);
+  const removed = pruneBackups(backups, 2).removed;
   assert.deepEqual(removed, ['2026-01-02T00-00-00-000Z']);
   assert.deepEqual(listBackups(backups).map((entry) => entry.name), [
     '2026-01-03T00-00-00-000Z',

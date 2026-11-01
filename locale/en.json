@@ -211,6 +211,31 @@
         "snapshot": "This restart's snapshot",
         "unknown": "Old backup (unverified)"
       },
+      "certifiedLabel": "Certified by",
+      "certified": {
+        "full-checks": "all four startup checks passed",
+        "command-probe": "the health probe in command mode answered",
+        "seed": "first-install seed (not proven yet)",
+        "manual-rollback": "confirmed after a manual rollback",
+        "none": "not certified"
+      },
+      "certifiedAtTime": "checked {time}",
+      "certifiedAtMissing": "(not recorded)",
+      "scopeLabel": "What it holds",
+      "scope": {
+        "config-only": "configuration only",
+        "config+plugins": "configuration and installed plugins",
+        "config+links": "configuration and linked plugins",
+        "slim": "slim copy (configuration and by-hand plugins)"
+      },
+      "scopeMissing": "(not recorded)",
+      "interventionLabel": "Was this boot rescued by the system",
+      "intervention": {
+        "true": "yes, the watchdog restored a copy",
+        "false": "no, nothing had to step in",
+        "unknown": "not recorded"
+      },
+      "evidenceHint": "\"Certified by\" says WHY a copy counts as safe: all four startup checks passed, the health probe answered in command mode, it is the first-install seed, or a human confirmed a manual rollback. \"Not certified\" means there is no evidence at all — such a copy is never treated as a safe one. When a boot had to be rescued by the watchdog, the evidence records that too, so a later selector can refuse that copy.",
       "version": "version {v}",
       "identityHint": "A backup has one of two identities: ① “known good” — the copy a boot has proven; when something breaks, only a known-good copy is rolled back, and the first install creates one automatically. ② “this restart's snapshot” — taken right before every restart and not proven yet; old backups (unverified) and that snapshot are never rolled back automatically. At most {n} copies are kept together (the oldest goes first; a known-good copy is never deleted). A manual rollback asks for confirmation first, then restarts automatically.",
       "rollback": "Roll back to this copy",

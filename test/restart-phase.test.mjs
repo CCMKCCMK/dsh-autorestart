@@ -384,7 +384,14 @@ test('a copy that is followed by a refused restart goes back to waiting', async 
     JSON.stringify({ at: Date.now() - 60 * 60 * 1000, bytes: 12, files: ['cordis.patch.yml'], includePlugins: false }),
     'utf8',
   );
-  assert.equal(markKnownGood(knownGoodDir, { reason: 'test' }), true, 'the test copy is marked known-good');
+  // THE COPY HAS TO CARRY EVIDENCE NOW (2026-11-01): a promotion names WHAT was
+  // checked. The fixture therefore certifies the copy by hand — the same thing a
+  // real boot does once the call site passes its check result in.
+  assert.equal(
+    markKnownGood(knownGoodDir, { reason: 'test', certifiedBy: 'manual-rollback' }).promoted,
+    true,
+    'the test copy is marked known-good',
+  );
   const stageWhenArming = [];
   let copyFinished = 0;
   const runtime = createRuntime(ctx, config, {

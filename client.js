@@ -386,6 +386,29 @@
     'settings.backup.kind.snapshot': '本次快照',
     'settings.backup.kind.unknown': '旧备份（未验证）',
     'settings.backup.version': '版本 {v}',
+    // WHY THIS COPY COUNTS AS SAFE (2026-11-01, strict mode). The label alone
+    // ("safe copy") was the thing that lied in the incident: it never said WHO
+    // checked WHAT. Every row therefore names its evidence, and a copy nobody
+    // checked says "未认证" in so many words.
+    'settings.backup.certifiedLabel': '认证依据',
+    'settings.backup.certified.full-checks': '四项启动自检全过',
+    'settings.backup.certified.command-probe': '命令模式探活通过',
+    'settings.backup.certified.seed': '首装种子（还没验证过）',
+    'settings.backup.certified.manual-rollback': '人工回滚后确认',
+    'settings.backup.certified.none': '未认证',
+    'settings.backup.certifiedAtTime': '认证于 {time}',
+    'settings.backup.certifiedAtMissing': '（没有记录）',
+    'settings.backup.scopeLabel': '内容范围',
+    'settings.backup.scope.config-only': '只含配置',
+    'settings.backup.scope.config+plugins': '配置 + 已装插件',
+    'settings.backup.scope.config+links': '配置 + 链接插件',
+    'settings.backup.scope.slim': '精简份（配置 + 手装插件）',
+    'settings.backup.scopeMissing': '（没有记录）',
+    'settings.backup.interventionLabel': '这次启动有没有被系统介入',
+    'settings.backup.intervention.true': '有（守夜人还原过）',
+    'settings.backup.intervention.false': '没有',
+    'settings.backup.intervention.unknown': '没有记录',
+    'settings.backup.evidenceHint': '「认证依据」说的是这一份凭什么算安全：四项启动自检全过、命令模式探活通过、首装种子、还是人工回滚后确认。「未认证」就是没有任何证据——它不会被当成安全份。一旦这次启动被守夜人还原过，认证证据里会记下「有介入」，下一阶段的选择器可以据此不用它。',
     'settings.backup.identityHint': '备份有两种身份：①「安全份」——启动成功后验证过的那一份，出问题只会回滚安全份；第一次安装时会自动生成一份。②「本次快照」——每次重启前刚拍的，还没验证过；旧备份（未验证）和它都不会被自动回滚。两类合计最多保留 {n} 份，超出删最旧的那份（安全份不会被删）。手动回退会先二次确认，然后会自动重启。',
     // THE MANUAL ROLLBACK (user decision, 2026-10-30): the user may know better
     // than "the newest proven copy", so ANY copy can be restored — but only
@@ -806,6 +829,29 @@
     'settings.backup.kind.snapshot': "This restart's snapshot",
     'settings.backup.kind.unknown': 'Old backup (unverified)',
     'settings.backup.version': 'version {v}',
+    // WHY THIS COPY COUNTS AS SAFE (2026-11-01, strict mode). The label alone
+    // ("known good") was the thing that lied in the incident: it never said WHO
+    // checked WHAT. Every row therefore names its evidence, and a copy nobody
+    // checked says "not certified" in so many words.
+    'settings.backup.certifiedLabel': 'Certified by',
+    'settings.backup.certified.full-checks': 'all four startup checks passed',
+    'settings.backup.certified.command-probe': 'the health probe in command mode answered',
+    'settings.backup.certified.seed': 'first-install seed (not proven yet)',
+    'settings.backup.certified.manual-rollback': 'confirmed after a manual rollback',
+    'settings.backup.certified.none': 'not certified',
+    'settings.backup.certifiedAtTime': 'checked {time}',
+    'settings.backup.certifiedAtMissing': '(not recorded)',
+    'settings.backup.scopeLabel': 'What it holds',
+    'settings.backup.scope.config-only': 'configuration only',
+    'settings.backup.scope.config+plugins': 'configuration and installed plugins',
+    'settings.backup.scope.config+links': 'configuration and linked plugins',
+    'settings.backup.scope.slim': 'slim copy (configuration and by-hand plugins)',
+    'settings.backup.scopeMissing': '(not recorded)',
+    'settings.backup.interventionLabel': 'Was this boot rescued by the system',
+    'settings.backup.intervention.true': 'yes, the watchdog restored a copy',
+    'settings.backup.intervention.false': 'no, nothing had to step in',
+    'settings.backup.intervention.unknown': 'not recorded',
+    'settings.backup.evidenceHint': '"Certified by" says WHY a copy counts as safe: all four startup checks passed, the health probe answered in command mode, it is the first-install seed, or a human confirmed a manual rollback. "Not certified" means there is no evidence at all — such a copy is never treated as a safe one. When a boot had to be rescued by the watchdog, the evidence records that too, so a later selector can refuse that copy.',
     'settings.backup.identityHint': 'A backup has one of two identities: ① “known good” — the copy a boot has proven; when something breaks, only a known-good copy is rolled back, and the first install creates one automatically. ② “this restart\'s snapshot” — taken right before every restart and not proven yet; old backups (unverified) and that snapshot are never rolled back automatically. At most {n} copies are kept together (the oldest goes first; a known-good copy is never deleted). A manual rollback asks for confirmation first, then restarts automatically.',
     // THE MANUAL ROLLBACK (user decision, 2026-10-30): any copy can be restored
     // — but only after a card that says which one, what it replaces, and that
@@ -2244,6 +2290,47 @@
   function backupKindKey(kind) {
     if (kind === 'known-good') return 'known-good'
     if (kind === 'snapshot') return 'snapshot'
+    return 'unknown'
+  }
+
+  /**
+   * WHICH dictionary entry says why this copy counts as safe.
+   *
+   * The five sources come from the Host (`certifiedBy`), and an unknown value
+   * falls back to `none`: an unfamiliar answer must never be shown as a proof.
+   * An old copy carries no evidence at all and lands on `none` as well — that is
+   * exactly what the interface has to say about it.
+   *
+   * @param {unknown} certifiedBy
+   * @returns {string} the suffix of `settings.backup.certified.*`
+   */
+  function backupCertifiedKey(certifiedBy) {
+    if (certifiedBy === 'full-checks') return 'full-checks'
+    if (certifiedBy === 'command-probe') return 'command-probe'
+    if (certifiedBy === 'seed') return 'seed'
+    if (certifiedBy === 'manual-rollback') return 'manual-rollback'
+    return 'none'
+  }
+
+  /** Which dictionary entry describes what a copy holds. */
+  function backupScopeKey(contentScope) {
+    if (contentScope === 'config-only') return 'config-only'
+    if (contentScope === 'config+plugins') return 'config+plugins'
+    if (contentScope === 'config+links') return 'config+links'
+    if (contentScope === 'slim') return 'slim'
+    return ''
+  }
+
+  /**
+   * Whether this boot was rescued by the system, in three answers.
+   *
+   * `null` is NOT "no": the Host says `null` when nobody recorded anything, and
+   * the two must not be merged — "it did not happen" and "we do not know" lead a
+   * reader to different conclusions.
+   */
+  function backupInterventionKey(intervention) {
+    if (intervention === true) return 'true'
+    if (intervention === false) return 'false'
     return 'unknown'
   }
 
@@ -6502,6 +6589,13 @@
                 { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-backup': 'identity-hint' },
                 fill(t('settings.backup.identityHint'), { n: backupsInfo.max }),
               ),
+              // WHAT "certified by" MEANS (2026-11-01): the rows below are
+              // useless without the rule behind them — evidence, not a label.
+              h(
+                'span',
+                { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-backup': 'evidence-hint' },
+                t('settings.backup.evidenceHint'),
+              ),
               backupItems.length === 0
                 ? h(
                     'span',
@@ -6544,6 +6638,90 @@
                       },
                       fill(t('settings.backup.version'), { v: backupVersionOf(item) }),
                     ),
+                ),
+                // WHY THIS COPY COUNTS AS SAFE (2026-11-01, strict mode). The
+                // identity above says "safe copy"; this row says WHAT backed
+                // that, and "not certified" is said out loud instead of being
+                // left to the reader. An old copy has no evidence, and the row
+                // shows exactly that — never a blank that could be read as OK.
+                h(
+                  'div',
+                  { className: 'dsh-autorestart-settings__backup-row' },
+                  h(
+                    'span',
+                    { className: 'dsh-autorestart-settings__backup-label' },
+                    t('settings.backup.certifiedLabel'),
+                  ),
+                  h(
+                    'span',
+                    {
+                      className: 'dsh-autorestart-settings__backup-badge',
+                      'data-dsh-autorestart-backup': 'certified',
+                    },
+                    t('settings.backup.certified.' + backupCertifiedKey(item && item.certifiedBy)),
+                  ),
+                  formatBackupTime(item && item.certifiedAt) === ''
+                    ? h(
+                      'span',
+                      {
+                        className: 'dsh-autorestart-settings__backup-note',
+                        'data-dsh-autorestart-backup': 'certified-at',
+                      },
+                      t('settings.backup.certifiedAtMissing'),
+                    )
+                    : h(
+                      'span',
+                      {
+                        className: 'dsh-autorestart-settings__backup-note',
+                        'data-dsh-autorestart-backup': 'certified-at',
+                      },
+                      fill(t('settings.backup.certifiedAtTime'), { time: formatBackupTime(item && item.certifiedAt) }),
+                    ),
+                ),
+                // WHAT the certification is ABOUT: a configuration-only copy
+                // that booted says nothing about the plugin tree, so the scope
+                // is part of the evidence. An old copy has none, and the row
+                // says so instead of disappearing (a missing row reads as "no
+                // problem", which is the reading this whole layer exists to
+                // stop).
+                h(
+                  'div',
+                  { className: 'dsh-autorestart-settings__backup-row' },
+                  h(
+                    'span',
+                    { className: 'dsh-autorestart-settings__backup-label' },
+                    t('settings.backup.scopeLabel'),
+                  ),
+                  h(
+                    'span',
+                    {
+                      className: 'dsh-autorestart-settings__backup-value',
+                      'data-dsh-autorestart-backup': 'scope',
+                    },
+                    backupScopeKey(item && item.contentScope) === ''
+                      ? t('settings.backup.scopeMissing')
+                      : t('settings.backup.scope.' + backupScopeKey(item && item.contentScope)),
+                  ),
+                ),
+                // WAS THIS BOOT RESCUED? Three answers, because "not recorded"
+                // is not "no" — the next step refuses rescued copies, and that
+                // decision needs the difference.
+                h(
+                  'div',
+                  { className: 'dsh-autorestart-settings__backup-row' },
+                  h(
+                    'span',
+                    { className: 'dsh-autorestart-settings__backup-label' },
+                    t('settings.backup.interventionLabel'),
+                  ),
+                  h(
+                    'span',
+                    {
+                      className: 'dsh-autorestart-settings__backup-value',
+                      'data-dsh-autorestart-backup': 'intervention',
+                    },
+                    t('settings.backup.intervention.' + backupInterventionKey(item && item.intervention)),
+                  ),
                 ),
                 // WHEN it was taken. No timezone offset: what is shown is
                 // already the local clock of the machine that took the copy.

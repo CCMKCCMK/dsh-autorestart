@@ -147,7 +147,14 @@ function seedKnownGood(state, options = {}) {
     }),
     'utf8',
   )
-  assert.equal(markKnownGood(dir, { reason: 'test', version }), true, 'the test copy is marked known-good')
+  // A COPY ONLY COUNTS AS SAFE WITH EVIDENCE (2026-11-01): the promotion has to
+  // name what was checked. The fixture states it explicitly — the same thing a
+  // real boot does once the call site hands its check result over.
+  assert.equal(
+    markKnownGood(dir, { reason: 'test', version, certifiedBy: 'manual-rollback' }).promoted,
+    true,
+    'the test copy is marked known-good',
+  );
   return dir
 }
 
@@ -449,12 +456,22 @@ test('the hosted branch does NOT roll back when the new instance answers', async
   )
   assert.equal(runtime.lastRollback, null)
 
-  // THE PROMOTION (user decision, 2026-10-30): a boot that really came up proves
-  // the snapshot taken before it, so THAT copy becomes the next known-good one.
+  // THE PROMOTION IS WIRED TO THE PROBE NOW (2026-11-01) — and the source says
+  // exactly what was proven. On this path the four startup checks do NOT run (the
+  // old instance survived its own command and only sees "the new instance
+  // answers"), so the certification must NOT borrow the name of a check that
+  // never ran: it is `command-probe`, and nothing else.
   const newestKnownGood = latestKnownGood(path.join(state.dir, 'backups'))
-  assert.ok(newestKnownGood, 'a restart that came up leaves a known-good copy')
+  assert.ok(newestKnownGood, 'a restart whose probe answered leaves a certified copy')
   assert.equal(newestKnownGood.kind, KIND_KNOWN_GOOD)
-  assert.notEqual(newestKnownGood.dir, knownGoodDir, 'the snapshot of THIS restart is the new known-good')
+  assert.notEqual(newestKnownGood.dir, knownGoodDir, 'the snapshot of THIS restart is the new safe copy')
+  assert.equal(newestKnownGood.certifiedBy, 'command-probe', 'certified by the health probe, not by the four checks')
+  assert.ok(Number.isFinite(Date.parse(newestKnownGood.certifiedAt)), 'with the moment it was confirmed')
+  // A DEFINITE "NO": this restart armed a watchdog, whose report on disk says
+  // `restored: false` — a recorder spoke, and it said nothing had to step in. That
+  // is the `false` case; "not recorded" would be `null` and must not be written as
+  // `false` (the unit tests in backup-identity.test.mjs pin both).
+  assert.equal(newestKnownGood.intervention, false, 'the recorded answer is: nothing had to step in')
 
   // The profile is left exactly as the restart command left it.
   assert.equal(fs.readFileSync(path.join(profile, 'cordis.patch.yml'), 'utf8'), 'rows:\n  - id: demo\n')

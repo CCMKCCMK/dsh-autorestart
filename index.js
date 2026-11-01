@@ -75,8 +75,11 @@ import {
 } from './lib/lifecycle.js'
 import {
   backupsRoot,
+  CERTIFIED_BY,
   claimRollbackLock,
   clearRollbackReport,
+  contentFingerprintOf,
+  contentScopeOf,
   createBackup,
   DEFAULT_MAX_BACKUPS,
   enabledBundlesOf,
@@ -180,6 +183,7 @@ import {
 import {
   buildRestartVerdict,
   buildSnapshotRecord,
+  decideBootCertification,
   evaluateRestartChecks,
   readRestartVerdict,
   RESTART_RESULTS,
@@ -3854,6 +3858,18 @@ const titleOfSummary = (item) => {
       // identity the copy itself carries.
       kind: item.kind,
       version: item.version,
+      // WHY THIS COPY COUNTS AS SAFE (2026-11-01): the evidence travels inside
+      // the copy (`meta.json`), and the settings page cannot read that file — so
+      // the facts are resolved HERE and handed over with the numbers. An old copy
+      // that has none of these fields arrives as `'none'` / `null` — not as an
+      // error, and above all not as "safe": the interface shows "not certified".
+      certifiedBy: item.certifiedBy,
+      certifiedAt: item.certifiedAt,
+      contentScope: item.contentScope,
+      // true / false / null — `null` means "not recorded", and the interface has
+      // to show exactly that instead of guessing.
+      intervention: item.intervention,
+      certified: item.certified === true,
     }))
     return {
       dir,
@@ -5031,6 +5047,10 @@ const titleOfSummary = (item) => {
       // it rewrites the record as `ok` / `failed` after it has checked itself
       // (see `verifyRestartBoot`). If the new instance never comes up, the
       // record stays `pending` — which is exactly what has to be visible.
+      // ONE clock for the whole attempt: the moment this restart STARTED is what
+      // separates "a restore that belongs to this attempt" from an older one, so
+      // it is read once here and reused at the promotion site below.
+      const restartStartedAt = Date.now()
       recordRestartVerdict({
         result: RESTART_RESULTS.PENDING,
         mode: useCustomCommand ? 'command' : 'app',
@@ -5038,7 +5058,7 @@ const titleOfSummary = (item) => {
         requestedAt: state.restart && Number.isFinite(state.restart.requestedAt)
           ? state.restart.requestedAt
           : null,
-        startedAt: Date.now(),
+        startedAt: restartStartedAt,
         previousBootId: bootId,
         bootId: null,
         reason: state.restart && typeof state.restart.reason === 'string' ? state.restart.reason : null,
@@ -5173,12 +5193,28 @@ const titleOfSummary = (item) => {
           })
           if (confirmed && confirmed.ok === true) {
             log.warn('the new instance answered its health route:', confirmed)
-            // THE SNAPSHOT HAS PROVEN ITSELF: this restart came up, so the copy
-            // taken before it is the one a failed boot may be rolled back to
-            // (user decision, 2026-10-30).
+            // THE SNAPSHOT MAY BE CERTIFIED — by the HEALTH PROBE, which is what
+            // this path actually proved (2026-11-01). The four startup checks do
+            // not run here: this instance is the OLD one, which survived its own
+            // restart command, so the proof it has is "the new instance answers".
+            // The certifying source therefore says exactly that (`command-probe`)
+            // instead of borrowing the name of a check that never ran.
             if (backup && typeof backup.dir === 'string' && backup.dir !== '') {
-              const promoted = markKnownGood(backup.dir, { reason: 'boot-ok' })
-              log.info('the snapshot of this restart is now known-good', { dir: backup.dir, promoted })
+              const intervention = detectBootIntervention(stateDir, { sinceMs: restartStartedAt })
+              const promoted = markKnownGood(backup.dir, {
+                reason: 'boot-ok',
+                certifiedBy: CERTIFIED_BY.COMMAND_PROBE,
+                contentFingerprint: contentFingerprintOf(backup.dir),
+                contentScope: contentScopeOf(backup.dir),
+                intervention: intervention.intervention,
+              })
+              log.info('the snapshot of this restart is certified by the health probe', {
+                dir: backup.dir,
+                promoted: promoted.promoted,
+                certifiedBy: CERTIFIED_BY.COMMAND_PROBE,
+                intervention: intervention.intervention,
+                interventionReason: intervention.reason,
+              })
             }
             writeRestartOutcome({ decided: true, ok: true, reason: 'the new instance answered' })
             recordRestartVerdict({
@@ -6732,6 +6768,129 @@ export function collectBootChecks(runtime) {
 }
 
 /**
+ * THE TWO RECORDS THAT SAY "THIS BOOT NEEDED HELP".
+ *
+ * WHY THIS EXISTS (2026-11-01, strict mode): a copy may be certified even when
+ * the boot it came from was rescued — the evidence is kept, and the SELECTOR
+ * decides later whether such a copy is good enough. But "kept" only works if
+ * somebody writes the fact down, and the fact lives in the reports the two
+ * restorers already leave behind:
+ *
+ *   - `last-rollback.json`, written by the detached watcher and by the plugin
+ *     itself when it restores the profile (`rolledBack`);
+ *   - `last-watchdog-report.json`, written by the watchdog v2 (`restored`).
+ *
+ * NEITHER FILE IS TOUCHED HERE. Changing the restore decision is a later step;
+ * this only reads what the restorers already said.
+ *
+ * THREE ANSWERS, ON PURPOSE:
+ *   true   a restore is on record and it happened during THIS restart;
+ *   false  the recorders were read and none of them reports a restore — a real
+ *          "no", not a shrug;
+ *   null   nothing on disk can answer (no recorder has written yet, a report
+ *          cannot be read, or this boot cannot say when it started). `null` is
+ *          NEVER rounded down to `false`: "we do not know" is a different fact
+ *          from "it did not happen", and the selector has to be able to tell
+ *          them apart.
+ *
+ * @param {string} stateDir
+ * @param {{ sinceMs?: number|null }} [options] the start of the restart that produced this boot
+ * @returns {{ intervention: boolean|null, reason: string, sources: Array<object> }}
+ */
+export function detectBootIntervention(stateDir, { sinceMs = null } = {}) {
+  const dir = typeof stateDir === 'string' ? stateDir.trim() : ''
+  if (dir === '') return { intervention: null, reason: 'there is no state directory to read', sources: [] }
+  // ONLY A REAL NUMBER COUNTS. `Number(null)` is 0, so a loose check would quietly
+  // turn "this boot cannot say when it started" into "everything counts", and a
+  // restore from last week would be reported as an intervention in this boot.
+  const since = typeof sinceMs === 'number' && Number.isFinite(sinceMs) ? sinceMs : null
+  const candidates = [
+    {
+      name: 'rollback-report',
+      file: path.join(dir, ROLLBACK_REPORT_NAME),
+      restored: (record) => record.rolledBack === true,
+    },
+    {
+      name: 'watchdog-report',
+      file: path.join(dir, 'last-watchdog-report.json'),
+      restored: (record) => record.restored === true,
+    },
+  ]
+  const sources = []
+  for (const candidate of candidates) {
+    let exists = false
+    try {
+      exists = fs.existsSync(candidate.file) === true
+    } catch {
+      exists = false
+    }
+    if (exists !== true) {
+      sources.push({ name: candidate.name, state: 'missing', at: null, restored: false })
+      continue
+    }
+    let record = null
+    try {
+      let text = fs.readFileSync(candidate.file, 'utf8')
+      // Windows PowerShell writes UTF-8 with a BOM; JSON.parse rejects it.
+      if (text.charCodeAt(0) === 0xfeff) text = text.slice(1)
+      const parsed = JSON.parse(text)
+      record = parsed && typeof parsed === 'object' ? parsed : null
+    } catch {
+      record = null
+    }
+    if (record === null) {
+      // A report that exists but cannot be read is NOT "nothing happened".
+      return {
+        intervention: null,
+        reason: 'the ' + candidate.name + ' exists but cannot be read',
+        sources,
+      }
+    }
+    const at = (() => {
+      if (typeof record.at === 'string' && record.at.trim() !== '') {
+        const parsed = Date.parse(record.at)
+        return Number.isFinite(parsed) ? parsed : null
+      }
+      if (Number.isFinite(record.at)) return Number(record.at)
+      return null
+    })()
+    sources.push({ name: candidate.name, state: 'read', at, restored: candidate.restored(record) === true })
+  }
+  const read = sources.filter((source) => source.state === 'read')
+  if (read.length === 0) {
+    // Neither recorder has written anything: nobody can say whether this boot
+    // needed help, and silence must not be read as "no".
+    return { intervention: null, reason: 'no restorer has recorded anything yet', sources }
+  }
+  const restorations = read.filter((source) => source.restored === true)
+  if (restorations.length === 0) {
+    return { intervention: false, reason: 'no restore was recorded for this boot', sources }
+  }
+  if (since === null) {
+    return {
+      intervention: null,
+      reason: 'a restore is on record, but this boot does not know when its restart started',
+      sources,
+    }
+  }
+  // A restore from an EARLIER cycle is history, not an intervention in this one:
+  // the reports are never deleted, so the time is what separates the two.
+  const relevant = restorations.filter((source) => source.at === null || source.at >= since)
+  if (relevant.length === 0) {
+    return {
+      intervention: false,
+      reason: 'the recorded restore is older than this restart',
+      sources,
+    }
+  }
+  return {
+    intervention: true,
+    reason: 'this boot was restored by ' + relevant.map((source) => source.name).join(', '),
+    sources,
+  }
+}
+
+/**
  * Finish the durable restart record.
  *
  * The instance that replaced the old one reads the `pending` record, runs the
@@ -6781,15 +6940,47 @@ export async function verifyRestartBoot(runtime, options = {}) {
   if (record !== null) {
     if (evaluated.ok) {
       log.warn('the new instance verified itself:', { durationMs: record.durationMs, checks })
-      // THIS SNAPSHOT HAS NOW PROVEN IT BOOTS: the restart it belongs to came
-      // up, so it is the copy a failed boot may be rolled back to (user
-      // decision, 2026-10-30). A FAILED boot never promotes anything.
+      // THIS SNAPSHOT HAS NOW PROVEN IT BOOTS — but "it boots" is the verdict of
+      // THIS restart, and certification is a DIFFERENT question (2026-11-01):
+      // only a boot whose four startup checks all RAN and passed may call the
+      // copy it came from safe. `decideBootCertification` answers that one, and
+      // it refuses a list that is merely non-empty: a boot that skipped the
+      // checks proves nothing about the configuration.
       const snapshotDir = pending && pending.snapshot && typeof pending.snapshot.dir === 'string'
         ? pending.snapshot.dir
         : ''
       if (snapshotDir !== '') {
-        const promoted = markKnownGood(snapshotDir, { reason: 'boot-ok' })
-        log.info('the snapshot of this restart is now known-good', { dir: snapshotDir, promoted })
+        const decision = decideBootCertification(checks)
+        if (decision.certified !== true) {
+          // NOTHING is promoted and the meta is NOT touched. The reason names
+          // which of the four did not pass, because "it stayed unproven" alone
+          // would throw away the only useful half of the news.
+          log.warn('the snapshot of this restart stays UNPROVEN: ' + decision.reason, {
+            dir: snapshotDir,
+            failed: decision.failed,
+            missing: decision.missing,
+            extraFailed: decision.extraFailed,
+          })
+        } else {
+          // THE INTERVENTION IS PART OF THE EVIDENCE. A boot that had to be
+          // rescued can still be certified — the copy is kept WITH the fact that
+          // the system had to help, so a later selector can refuse it.
+          const intervention = detectBootIntervention(stateDir, { sinceMs: pending.startedAt })
+          const promoted = markKnownGood(snapshotDir, {
+            reason: 'boot-ok',
+            certifiedBy: CERTIFIED_BY.FULL_CHECKS,
+            contentFingerprint: contentFingerprintOf(snapshotDir),
+            contentScope: contentScopeOf(snapshotDir),
+            intervention: intervention.intervention,
+          })
+          log.info('the snapshot of this restart is certified by the four startup checks', {
+            dir: snapshotDir,
+            promoted: promoted.promoted,
+            certifiedBy: decision.certifiedBy,
+            intervention: intervention.intervention,
+            interventionReason: intervention.reason,
+          })
+        }
       }
     } else {
       log.error('the new instance did NOT come up cleanly:', {

@@ -7,8 +7,11 @@
  *   1. the FIRST boot of a NEW host process seeds one known-good copy, so a
  *      fresh installation has something to roll back to. A plugin RELOAD is not
  *      an installation and seeds nothing;
- *   2. a restart that came up promotes THE SNAPSHOT IT TOOK to known-good — the
- *      content proved it boots. A failed boot promotes nothing;
+ *   2. a restart that came up CAN promote THE SNAPSHOT IT TOOK to known-good —
+ *      the content proved it boots — but ONLY once the caller states which check
+ *      backed it (2026-11-01). "The reboot came up" alone no longer certifies
+ *      anything, because it cannot tell whether the reboot recovered on its own
+ *      or was rescued by a human. A failed boot promotes nothing, as before;
  *   3. the default number of kept copies is 3 (lib/backup.js's constant).
  *
  * A failure is never silent: `state.firstInstallBackup` says `'no-known-good'`
@@ -28,6 +31,7 @@ import {
   KIND_KNOWN_GOOD,
   KIND_SNAPSHOT,
   latestKnownGood,
+  markKnownGood,
   readBackupMeta,
 } from '../lib/backup.js';
 import { buildRestartVerdict, writeRestartVerdict, RESTART_RESULTS } from '../lib/restart-verdict.js';
@@ -150,7 +154,7 @@ function bootRuntime({ stateFile, snapshotDir, checksOk }) {
   };
 }
 
-test('③ a restart that came up promotes its snapshot to known-good', async (t) => {
+test('③ a restart that came up leaves its snapshot UNPROVEN until the caller states what was checked', async (t) => {
   const { profile, stateDir, stateFile, backups } = fixture(t);
   // The copy a restart really takes: a plain, UNPROVEN snapshot (not the seed).
   const snapshot = await createBackup({ slimBackup: false,
@@ -173,8 +177,21 @@ test('③ a restart that came up promotes its snapshot to known-good', async (t)
 
   const record = await verifyRestartBoot(runtime, { timeoutMs: 50 })
   assert.equal(record.result, RESTART_RESULTS.OK, 'the boot verified itself')
-  assert.equal(readBackupMeta(snapshot.dir).kind, KIND_KNOWN_GOOD, 'the snapshot is the safe copy now')
-  assert.equal(readBackupMeta(snapshot.dir).reason, 'boot-ok')
+
+  // THE CERTIFICATION IS WIRED TO THE CHECKS NOW (2026-11-01). Before, "the boot
+  // came up" was enough to promote — which is exactly how a rescued boot
+  // certified a broken copy. The CALLER now states what was checked: all four
+  // startup checks ran and passed, so the promotion is allowed, and the evidence
+  // says WHICH check backed it.
+  const certified = readBackupMeta(snapshot.dir)
+  assert.equal(certified.kind, KIND_KNOWN_GOOD, 'the snapshot is the safe copy now')
+  assert.equal(certified.certifiedBy, 'full-checks', 'and it says WHY it counts as safe')
+  assert.ok(Number.isFinite(Date.parse(certified.certifiedAt)), 'with the moment it was checked')
+  assert.equal(certified.contentScope, 'config-only', 'and the content the check applies to')
+  // No restorer report is on disk in this fixture, so nobody can say whether this
+  // boot needed help: `null` ("not recorded") — never a made-up `false`.
+  assert.equal(certified.intervention, null, 'an unrecorded intervention stays unknown')
+  assert.equal(certified.reason, 'boot-ok')
   assert.equal(latestKnownGood(backups).dir, snapshot.dir)
 });
 

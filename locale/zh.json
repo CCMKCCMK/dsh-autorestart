@@ -211,6 +211,31 @@
         "snapshot": "本次快照",
         "unknown": "旧备份（未验证）"
       },
+      "certifiedLabel": "认证依据",
+      "certified": {
+        "full-checks": "四项启动自检全过",
+        "command-probe": "命令模式探活通过",
+        "seed": "首装种子（还没验证过）",
+        "manual-rollback": "人工回滚后确认",
+        "none": "未认证"
+      },
+      "certifiedAtTime": "认证于 {time}",
+      "certifiedAtMissing": "（没有记录）",
+      "scopeLabel": "内容范围",
+      "scope": {
+        "config-only": "只含配置",
+        "config+plugins": "配置 + 已装插件",
+        "config+links": "配置 + 链接插件",
+        "slim": "精简份（配置 + 手装插件）"
+      },
+      "scopeMissing": "（没有记录）",
+      "interventionLabel": "这次启动有没有被系统介入",
+      "intervention": {
+        "true": "有（守夜人还原过）",
+        "false": "没有",
+        "unknown": "没有记录"
+      },
+      "evidenceHint": "「认证依据」说的是这一份凭什么算安全：四项启动自检全过、命令模式探活通过、首装种子、还是人工回滚后确认。「未认证」就是没有任何证据——它不会被当成安全份。一旦这次启动被守夜人还原过，认证证据里会记下「有介入」，下一阶段的选择器可以据此不用它。",
       "version": "版本 {v}",
       "identityHint": "备份有两种身份：①「安全份」——启动成功后验证过的那一份，出问题只会回滚安全份；第一次安装时会自动生成一份。②「本次快照」——每次重启前刚拍的，还没验证过；旧备份（未验证）和它都不会被自动回滚。两类合计最多保留 {n} 份，超出删最旧的那份（安全份不会被删）。手动回退会先二次确认，然后会自动重启。",
       "rollback": "回退到这一份",
