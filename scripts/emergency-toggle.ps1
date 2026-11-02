@@ -154,33 +154,65 @@ function Get-ArrayRange {
   throw 'the bundles array is not closed'
 }
 
-# Every item of the array: the name, the indentation, the comma, the position
-# in the text.
-function Get-Items {
+# The names of the bundles array, IN ORDER, whatever the layout is.
+#
+# Only the body of the array is scanned: Get-ArrayRange has already located it,
+# so a name can never be picked up from another part of the file. A
+# pretty-printed file (one item per line) and a MINIFIED one (["a","b"]) are
+# read the same way: the old line-based reader returned ZERO items for a
+# minified array, so "disable" answered "not in the bundles" and changed
+# nothing.
+function Get-BundleNames {
   param([string] $Text, [int] $Open, [int] $Close)
   $body = $Text.Substring($Open + 1, $Close - $Open - 1)
-  $items = @()
-  $pattern = '(?m)^(?<indent>[ \t]*)"(?<name>[^"]*)"(?<comma>,?)[ \t]*\r?$'
-  foreach ($match in [regex]::Matches($body, $pattern)) {
-    $lineStart = $Open + 1 + $match.Index
-    $lineEnd = $lineStart + $match.Length
-    # The line ending of that line (\r\n or \n) belongs to the line.
-    if ($lineEnd -lt $Text.Length -and $Text[$lineEnd] -eq "`n") { $lineEnd++ }
-    $nameGroup = $match.Groups['name']
-    $commaGroup = $match.Groups['comma']
-    $items += [pscustomobject]@{
-      Name       = $nameGroup.Value
-      Indent     = $match.Groups['indent'].Value
-      HasComma   = ($commaGroup.Value -eq ',')
-      CommaIndex = $commaGroup.Index
-      # The position right after the closing quote of the name (where the
-      # comma goes).
-      ContentEnd = $nameGroup.Index + $nameGroup.Length + 1
-      LineStart  = $lineStart
-      LineEnd    = $lineEnd
-    }
+  $names = @()
+  foreach ($match in [regex]::Matches($body, '"(?<name>(?:[^"\\]|\\.)*)"')) {
+    $names += $match.Groups['name'].Value
   }
-  return $items
+  return $names
+}
+
+# How the array is laid out today, so the rewritten array looks like the old one.
+function Get-BundlesLayout {
+  param([string] $Text, [int] $Open, [int] $Close)
+  $body = $Text.Substring($Open + 1, $Close - $Open - 1)
+  $multiLine = $body.Contains("`n")
+  $indent = ''
+  $closeIndent = ''
+  if ($multiLine) {
+    $firstItem = [regex]::Match($body, '(?m)^(?<indent>[ \t]*)"')
+    if ($firstItem.Success) { $indent = $firstItem.Groups['indent'].Value }
+    else { $indent = (Get-LineIndent $Text $Close) + '  ' }
+    $closeIndent = Get-LineIndent $Text $Close
+  }
+  return [pscustomobject]@{
+    MultiLine   = $multiLine
+    Indent      = $indent
+    CloseIndent = $closeIndent
+    Eol         = (Get-LineEnding $Text)
+  }
+}
+
+# The body of a bundles array for these names (the brackets stay where they are).
+#
+# THIS is what makes the comma impossible to get wrong: it is written BETWEEN
+# two items by the serializer, never by hand at a guessed offset. A one-item
+# array gets no comma at all, and no comma can land inside a name.
+#
+# A compact array stays compact (["a","b"]); a pretty-printed one stays one item
+# per line with the indentation the file already used.
+function Format-BundlesBody {
+  param([string[]] $Names, [object] $Layout)
+  $quoted = @()
+  foreach ($name in $Names) {
+    $escaped = $name -replace '\\', '\\'
+    $escaped = $escaped -replace '"', '\"'
+    $quoted += '"' + $escaped + '"'
+  }
+  if (-not $Layout.MultiLine) { return ($quoted -join ',') }
+  if ($quoted.Count -eq 0) { return ($Layout.Eol + $Layout.CloseIndent) }
+  $body = $Layout.Eol + $Layout.Indent + ($quoted -join (',' + $Layout.Eol + $Layout.Indent))
+  return ($body + $Layout.Eol + $Layout.CloseIndent)
 }
 
 # The indentation of a line (so a new line can look the same).
@@ -254,27 +286,18 @@ if ($Action -eq 'enable' -and -not $hasBundles) {
 
 $new = $raw
 $range = Get-ArrayRange $raw
-$items = Get-Items $raw $range[0] $range[1]
-$eol = Get-LineEnding $raw
+$names = @(Get-BundleNames $raw $range[0] $range[1])
+$layout = Get-BundlesLayout $raw $range[0] $range[1]
 
 if ($Action -eq 'disable') {
   if (-not $present) {
     Say ((T 'emergency.alreadyDisabled' 'already disabled: {0} was not in the bundles anyway (no file was changed).') -f $PackageName) 'Yellow'
     exit 0
   }
-  $target = $items | Where-Object { $_.Name -eq $PackageName } | Select-Object -First 1
-  if ($null -eq $target) { Fail ((T 'emergency.notInBundles' '{0} cannot be found in the bundles') -f $PackageName) }
-  $shift = 0
-  if (-not $target.HasComma) {
-    # It is the last item of the array: the comma of the item before it has to
-    # go, otherwise the JSON is invalid.
-    $previous = $items | Where-Object { $_.LineEnd -le $target.LineStart } | Select-Object -Last 1
-    if ($null -ne $previous -and $previous.HasComma) {
-      $new = $new.Remove($previous.CommaIndex, 1)
-      $shift = -1
-    }
-  }
-  $new = $new.Remove($target.LineStart + $shift, $target.LineEnd - $target.LineStart)
+  $kept = @()
+  foreach ($name in $names) { if ($name -ne $PackageName) { $kept += $name } }
+  $body = Format-BundlesBody $kept $layout
+  $new = $raw.Substring(0, $range[0] + 1) + $body + $raw.Substring($range[1])
   $summary = (T 'emergency.summaryRemove' 'take {0} out of the bundles') -f $PackageName
 } else {
   # enable
@@ -282,37 +305,20 @@ if ($Action -eq 'disable') {
     Say ((T 'emergency.alreadyEnabled' 'already enabled: {0} was in the bundles anyway (no file was changed).') -f $PackageName) 'Yellow'
     exit 0
   }
-  $anchor = $items | Where-Object { $_.Name -eq $AnchorName } | Select-Object -First 1
-  $line = ''
-  $insertAt = 0
-  if ($null -ne $anchor) {
-    if ($anchor.HasComma) {
-      $insertAt = $anchor.LineEnd
-      $line = $anchor.Indent + '"' + $PackageName + '",'
-    } else {
-      # The anchor is the last item: give it a comma first, then insert the new
-      # item (the new one has no comma).
-      $new = $new.Insert($anchor.ContentEnd, ',')
-      $insertAt = $anchor.LineEnd + 1
-      $line = $anchor.Indent + '"' + $PackageName + '"'
-    }
-  } else {
-    $last = $items | Select-Object -Last 1
-    if ($null -ne $last) {
-      if ($last.HasComma) {
-        $insertAt = $last.LineEnd
-      } else {
-        $new = $new.Insert($last.ContentEnd, ',')
-        $insertAt = $last.LineEnd + 1
-      }
-      $line = $last.Indent + '"' + $PackageName + '"'
-    } else {
-      # The array is empty.
-      $insertAt = $range[1]
-      $line = (Get-LineIndent $raw $range[1]) + '  "' + $PackageName + '"'
+  # Put it back right after the anchor when the anchor is there, otherwise at
+  # the end: the position does not matter, the JSON does.
+  $kept = @()
+  $inserted = $false
+  foreach ($name in $names) {
+    $kept += $name
+    if (-not $inserted -and $name -eq $AnchorName) {
+      $kept += $PackageName
+      $inserted = $true
     }
   }
-  $new = $new.Insert($insertAt, $line + $eol)
+  if (-not $inserted) { $kept += $PackageName }
+  $body = Format-BundlesBody $kept $layout
+  $new = $raw.Substring(0, $range[0] + 1) + $body + $raw.Substring($range[1])
   $summary = (T 'emergency.summaryAdd' 'put {0} back into the bundles') -f $PackageName
 }
 
