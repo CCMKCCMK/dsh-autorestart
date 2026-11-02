@@ -4611,11 +4611,26 @@ const titleOfSummary = (item) => {
       // `[]` = it holds no plugin files at all, which is the honest answer for a
       // config-only or slim copy.
       plugins: manifestPluginsOf(item.dir),
+      // WHAT IS AND IS NOT INSIDE THIS COPY (user decision, 2026-11-02):
+      // `localized` = plugins that were edited here and are therefore complete
+      // in the copy; `thirdParty` = plugins installed as published, named but
+      // not copied, because a reinstall brings back exactly those versions.
+      localized: manifestPluginsOf(item.dir) === null
+        ? null
+        : manifestPluginsOf(item.dir).filter((entry) => entry.source === 'localized').length,
+      thirdParty: (() => {
+        const manifest = readManifest(item.dir)
+        return manifest !== null && Array.isArray(manifest.thirdParty) ? manifest.thirdParty.length : null
+      })(),
     }))
     return {
       dir,
       max: config.maxBackups,
       count: items.length,
+      // The same two counts for the NEWEST copy: that is the one a user rolls
+      // back to, and the one the settings page talks about.
+      localized: items.length > 0 ? items[0].localized : 0,
+      thirdParty: items.length > 0 ? items[0].thirdParty : 0,
       items,
     }
   }

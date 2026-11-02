@@ -264,3 +264,94 @@ test('built-in, third-party and hand-written plugins are told apart', () => {
   ], { profileDir, backupDir: '' })
   assert.deepEqual(described.map((entry) => entry.install), ['link', 'npm', 'builtin'])
 })
+
+// ---------------------------------------------------------------------------
+// LOCAL PLUGINS vs THIRD-PARTY AS PUBLISHED (user decision, 2026-11-02).
+//
+// Two — and only two — reliable signals make a plugin "local", i.e. something
+// that cannot be fetched again and therefore has to be in the copy:
+//   1. the entry is a symbolic link (hand-written, install === 'link');
+//   2. the entry is a real npm directory that CONTAINS .git (it was cloned or
+//      re-inited and then edited here).
+// Everything else is "as published": named in the manifest, never copied.
+// ---------------------------------------------------------------------------
+
+function makeInstalledPlugin(profileDir, name, version, { git = false } = {}) {
+  const dir = path.join(profileDir, PLUGINS_DIR, name)
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name, version }), 'utf8')
+  fs.writeFileSync(path.join(dir, 'index.js'), 'export const ' + 'plugin = 1' + '\n', 'utf8')
+  if (git === true) {
+    fs.mkdirSync(path.join(dir, '.git', 'refs'), { recursive: true })
+    fs.writeFileSync(path.join(dir, '.git', 'HEAD'), 'ref: refs/heads/main' + '\n', 'utf8')
+  }
+  return dir
+}
+
+test('a link, a localized npm plugin and a published npm plugin are told apart', async (t) => {
+  const root = tempRoot(t)
+  const profileDir = makeProfile(root) // contains the link 'dsh-linked'
+  const localizedDir = makeInstalledPlugin(profileDir, 'dsh-mine', '1.4.0', { git: true })
+  const publishedDir = makeInstalledPlugin(profileDir, 'dsh-published', '2.0.0', { git: false })
+  assert.ok(fs.existsSync(path.join(localizedDir, '.git')), 'the fixture really has a .git')
+  assert.equal(fs.existsSync(path.join(publishedDir, '.git')), false)
+
+  const backupsDir = path.join(root, 'backups')
+  const result = await createBackup({ profileDir, backupsDir })
+  assert.equal(result.ok, true, result.error || 'the backup failed')
+
+  // The RAW manifest, not the normishing getter: `source` is the field this
+  // change introduced, and the getter keeps only name / version / install.
+  const rawManifest = JSON.parse(fs.readFileSync(path.join(result.dir, MANIFEST_NAME), 'utf8'))
+  const plugins = rawManifest.plugins
+  assert.ok(Array.isArray(plugins), 'the copy records its own plugin list')
+  const byName = new Map(plugins.map((entry) => [entry.name, entry]))
+
+  // 1) the hand-written link, marked as such
+  assert.equal(byName.get('dsh-linked').source, 'link', 'a link is copied as a link')
+  // 2) the localized npm plugin: in the copy, marked localized, own version
+  assert.equal(byName.get('dsh-mine').source, 'localized', 'an npm plugin with .git is local')
+  assert.equal(byName.get('dsh-mine').version, '1.4.0', 'the version of the COPY, not of the live install')
+  assert.equal(
+    fs.existsSync(path.join(result.dir, PLUGINS_DIR, 'dsh-mine', 'index.js')),
+    true,
+    'its files are really inside the copy',
+  )
+  // the history is never copied: it is rebuildable
+  assert.equal(
+    fs.existsSync(path.join(result.dir, PLUGINS_DIR, 'dsh-mine', '.git')),
+    false,
+    '.git is skipped (BACKUP_SKIP_NAMES)',
+  )
+  // 3) the published plugin: named, not copied
+  assert.equal(byName.has('dsh-published'), false, 'a third-party plugin is not in the plugin list')
+  assert.deepEqual(
+    JSON.parse(fs.readFileSync(path.join(result.dir, MANIFEST_NAME), 'utf8')).thirdParty,
+    [{ name: 'dsh-published', version: '2.0.0' }],
+    'it is named with its version instead',
+  )
+  assert.equal(
+    fs.existsSync(path.join(result.dir, PLUGINS_DIR, 'dsh-published')),
+    false,
+    'and its files are NOT in the copy',
+  )
+
+  // The counts travel with the answer, so the page does not have to re-read the manifest.
+  assert.equal(result.localized, 1, 'one localized plugin was copied')
+  assert.equal(result.thirdParty, 1, 'one published plugin was only named')
+})
+
+test('without .git an npm plugin is published-as-is even when its files differ', async (t) => {
+  const root = tempRoot(t)
+  const profileDir = makeProfile(root)
+  makeInstalledPlugin(profileDir, 'dsh-upgraded', '3.1.0')
+  const result = await createBackup({ profileDir, backupsDir: path.join(root, 'backups') })
+  assert.equal(result.ok, true, result.error || '')
+  assert.equal(result.localized, 0, 'a file difference is not evidence of a local edit')
+  assert.equal(result.thirdParty, 1)
+  assert.equal(
+    fs.existsSync(path.join(result.dir, PLUGINS_DIR, 'dsh-upgraded')),
+    false,
+    'so it is not copied',
+  )
+})
