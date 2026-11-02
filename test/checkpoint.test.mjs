@@ -482,3 +482,60 @@ test('a reason that is not a string is dropped, and that IS a repair', (t) => {
   assert.equal(record.reason, null, 'an unreadable reason is not passed on as if it were one');
   assert.equal(read.repaired, true);
 });
+
+// ---------------------------------------------------------------------------
+// ② THE BOOT-TIME REPORTS SURVIVE A RESTART (2026-11-02).
+//
+// The Host writes watcherHygiene (the sweep of leftover watcher scripts) and
+// restartGate (why the restart was or was not allowed) at boot. The whitelist
+// used to refuse both, so the next boot threw the answers away: the record
+// existed but could not be read. Unknown fields are STILL dropped.
+// ---------------------------------------------------------------------------
+
+test('watcherHygiene and restartGate are read back after a restart, without a repair', () => {
+  const raw = {
+    version: STATE_VERSION,
+    updatedAt: 1_700_000_000_000,
+    watcherHygiene: {
+      skipped: false,
+      reason: null,
+      removed: ['restart-watch-1.ps1', 'restart-watch-2.ps1'],
+      kept: [],
+      scanned: 4,
+      error: null,
+    },
+    restartGate: {
+      allow: false,
+      reason: 'conversation-active',
+      blockedBy: [{ sessionId: 'session-a', reason: 'goal-active' }],
+      quietForMs: 1200,
+    },
+  }
+  const { state, repaired } = normalizeState(raw, 1_700_000_000_000)
+
+  assert.equal(repaired, false, 'a well-formed record is not "repaired"')
+  assert.deepEqual(state.watcherHygiene.removed, ['restart-watch-1.ps1', 'restart-watch-2.ps1'],
+    'the sweep names the files it removed')
+  assert.equal(state.watcherHygiene.scanned, 4)
+  assert.equal(state.restartGate.allow, false)
+  assert.equal(state.restartGate.reason, 'conversation-active')
+  assert.deepEqual(state.restartGate.blockedBy, [{ sessionId: 'session-a', reason: 'goal-active' }])
+
+  // ROUND TRIP: what is read back is written back unchanged, so the NEXT boot
+  // reads the same answers again (that is the whole point of the whitelist).
+  const again = normalizeState(state, 1_700_000_000_000)
+  assert.equal(again.repaired, false, 'the second pass is still clean')
+  assert.deepEqual(again.state.watcherHygiene, state.watcherHygiene)
+  assert.deepEqual(again.state.restartGate, state.restartGate)
+
+  // An UNKNOWN field is still dropped, and the drop is reported.
+  const withJunk = normalizeState({ ...raw, somethingElse: 1 }, 1_700_000_000_000)
+  assert.equal(withJunk.repaired, true, 'an unknown top-level key is still refused')
+  assert.equal('somethingElse' in withJunk.state, false, 'and it does not reach the state')
+
+  // A field that says nothing is dropped instead of half-kept.
+  const broken = normalizeState({ version: STATE_VERSION, restartGate: { reason: 'quiet' } }, 1)
+  assert.equal(broken.state.restartGate, undefined, 'a gate without allow is not a gate')
+  assert.equal(broken.repaired, true, 'and dropping it is reported')
+})
+
