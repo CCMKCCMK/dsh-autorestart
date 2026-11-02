@@ -954,6 +954,84 @@ test('the backup list speaks English too', async () => {
   assert.equal(/[+-]\d{2}:\d{2}/.test(text), false, 'no offset in English either')
 })
 
+/**
+ * MANY COPIES ON DISK (user report, 2026-11-02: that machine had more than
+ * fifteen of them). Under the old tiering the page opened with fifteen
+ * sentences and pushed the one card that mattered off screen. Since 2026-11-02
+ * every copy is one row, so the question this fixture answers is the opposite
+ * one — and the one that can actually bite a user: is the tail still rendered,
+ * or does the list quietly stop after a dozen?
+ */
+function manyUnverified(count) {
+  const items = [
+    {
+      name: '2026-11-02T00-00-00-000Z',
+      dir: 'C:\\Users\\fg\\.dsh\\storages\\dsh-autorestart\\backups\\2026-11-02T00-00-00-000Z',
+      at: 1793558400000,
+      atLocal: '2026-11-02T08:00:00+08:00',
+      bytes: 204800,
+      configFiles: 3,
+      includePlugins: true,
+      version: '0.8.6',
+      kind: 'known-good',
+      certifiedBy: 'full-checks',
+      certificationEvidence: 'fingerprint-match',
+    },
+  ]
+  for (let index = 0; index < count; index += 1) {
+    items.push({
+      name: '2026-11-01T' + String(index).padStart(2, '0') + '-00-00-000Z',
+      dir: 'C:\\Users\\fg\\.dsh\\storages\\dsh-autorestart\\backups\\2026-11-01T' + String(index).padStart(2, '0'),
+      at: 1793472000000 - index * 3600000,
+      atLocal: '2026-11-01T' + String(index).padStart(2, '0') + ':00:00+08:00',
+      bytes: 1024,
+      configFiles: 3,
+      includePlugins: false,
+      kind: 'unverified',
+      certifiedBy: 'none',
+      certificationEvidence: 'none',
+    })
+  }
+  return { dir: 'C:\\Users\\fg\\.dsh\\storages\\dsh-autorestart\\backups', max: 20, count: items.length, items }
+}
+
+test('seventeen copies are seventeen rows — the tail is never dropped', async () => {
+  const mounted = mountSettings({
+    info: {
+      instance: { isDesktopApp: true, platform: 'win32' },
+      supervisor: { mode: 'app', installed: false, startup: { mode: 'desktop' } },
+      backups: manyUnverified(16),
+    },
+  })
+  const panel = await mounted.settled('dsh-autorestart')
+  const items = marked(panel, 'data-dsh-autorestart-backup').filter(
+    (node) => node.props['data-dsh-autorestart-backup'] === 'item',
+  )
+  // One proven copy + sixteen unverified ones. The unverified ones used to be
+  // collapsed into a grey count line; now every one of them is a row you can
+  // roll back to, so the number of rows IS the number of copies.
+  assert.equal(items.length, 17, 'every copy on disk is a row — nothing is folded away or dropped')
+  const times = backupValues(panel, 'time')
+  assert.equal(times.length, 17, 'and every row names its own time')
+  assert.equal(times[0], '2026-11-02 08:00', 'the newest copy comes first')
+  assert.equal(times[16], '2026-11-01 15:00', 'the oldest copy is last — the tail is rendered, not truncated')
+  assert.equal(
+    backupValues(panel, 'rollback').length,
+    17,
+    'and every one of them carries its own way back',
+  )
+  assert.equal(
+    backupValues(panel, 'newest-hint').length,
+    1,
+    'the sentence still appears exactly once, on the newest copy',
+  )
+  assert.deepEqual(
+    backupValues(panel, 'count'),
+    ['当前 17 份，可用于回退的 1 份'],
+    'and the count line stays honest about how many of them could save the user automatically',
+  )
+})
+
 test('without a backup the page says so', async () => {
   const mounted = mountSettings({
     info: {
@@ -1502,6 +1580,22 @@ test('a copy carrying the old safe stamp is drawn like every other copy', async 
     assert.equal(textOf(item).includes('安全份'), false, `copy ${index + 1} is not labelled 安全份`)
     assert.equal(textOf(item).includes('已验证'), false, `copy ${index + 1} is not labelled 已验证`)
   }
+  // THE WORD ITSELF MUST NEVER COME BACK AS A LABEL (user report, 2026-11-02).
+  // Counting is the point here: every mention of 安全份 left in the panel has to
+  // sit inside a paragraph that EXPLAINS the rule, so a badge, a row or a count
+  // line that said it again would break the equality below — and that is exactly
+  // the failure this test exists to catch.
+  const occurrences = (text, needle) => String(text).split(needle).length - 1
+  const hintMarkers = new Set(['identity-hint', 'evidence-hint'])
+  const explained = marked(panel, 'data-dsh-autorestart-backup')
+    .filter((node) => hintMarkers.has(node.props['data-dsh-autorestart-backup']))
+    .reduce((sum, node) => sum + occurrences(textOf(node), '安全份'), 0)
+  assert.ok(explained > 0, 'the paragraphs do explain what a 安全份 is')
+  assert.equal(
+    occurrences(textOf(panel), '安全份'),
+    explained,
+    'every mention of 安全份 lives in an explaining paragraph — no row, no badge, no line',
+  )
   assert.equal(
     textOf(panel).includes('9.9.9-version-marker'),
     false,
