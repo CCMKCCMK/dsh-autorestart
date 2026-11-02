@@ -238,6 +238,7 @@ import {
   readProcessChain,
   runCommandNow,
   scheduleDetachedRestart,
+  sweepLegacyWatcherScripts,
   writeTextFileAtomic,
 } from './lib/restart.js'
 import { compareSemver } from './lib/semver.js'
@@ -5583,6 +5584,24 @@ const titleOfSummary = (item) => {
       return { ok: false, method: 'none', error: 'the profile directory is unknown', scriptPath: null, verified: 'nothing', pid: null }
     }
     const stateDir = stateDirOf()
+    // THE V1 WATCHER IS POWERSHELL (2026-11-02): on a machine that is not
+    // Windows the file could never run, so it is not written at all. Older
+    // builds wrote it anyway and left it behind — a real WSL machine had seven
+    // of them. Reporting "no automatic rollback" is honest; leaving an
+    // executable-looking script nobody can run is not.
+    if (env.platform !== 'win32') {
+      log.warn(
+        'the rollback watcher is a PowerShell script: this platform cannot run it, so nothing is written (there is NO automatic rollback for this restart)',
+      )
+      return {
+        ok: false,
+        method: 'none',
+        error: 'the v1 rollback watcher is a PowerShell script and this platform has no PowerShell',
+        scriptPath: null,
+        verified: 'nothing',
+        pid: null,
+      }
+    }
     const scriptPath = path.join(stateDir, 'restart-' + state.generation + '-watch.ps1')
     const script = buildWatchScript({
       // The fallback health URL (the port of the OLD instance). It is only
@@ -8751,6 +8770,10 @@ export function buildLifecycleTools(runtime, config) {
           // because this schema is strict, and an undeclared key would refuse
           // the whole tool.
           restartGate: { oneOf: [{ type: 'object' }, { type: 'null' }] },
+          // The boot sweep of the rollback watcher scripts the old builds left
+          // on a non-Windows machine: what was removed, what was kept, and why
+          // the sweep was skipped (Windows, no directory yet).
+          watcherHygiene: { oneOf: [{ type: 'object' }, { type: 'null' }] },
           quietResetBy: { type: 'string' },
           quietResetAt: { type: 'number' },
           quietResetSessionId: { oneOf: [{ type: 'string' }, { type: 'null' }] },
@@ -8836,6 +8859,9 @@ export function buildLifecycleTools(runtime, config) {
         // to "the restart never fires, and nothing says why".
         restartGate: runtime.restartGateInfo(),
         ...runtime.quietResetInfo(),
+        // THE OLD ROLLBACK SCRIPT SWEEP (2026-11-02): what this boot removed
+        // from the state directory, what it kept, and why it was skipped.
+        watcherHygiene: runtime.watcherHygiene ?? null,
         // The RESTART reserve (the extra wait after the last conversation
         // finished) and the quiet window the gate really uses.
         graceMs: runtime.graceMs(),
@@ -11668,6 +11694,11 @@ function registerHealthRoute(ctx, runtime, config, sleep) {
             // cause is one field away.
             restartGate: runtime.restartGateInfo(),
             ...runtime.quietResetInfo(),
+            // THE OLD ROLLBACK SCRIPT SWEEP (2026-11-02): what the boot removed
+            // (`removed` names), what it left alone (`kept`), and whether the
+            // platform made it a no-op (`skipped` + `reason`). Without it the
+            // answer to "are there leftovers?" would be a guess again.
+            watcherHygiene: runtime.watcherHygiene ?? null,
             // The RESTART reserve and the quiet window the gate really uses.
             graceMs: config.restartGraceMs,
             effectiveSettleMs: runtime.effectiveSettleMs(),
@@ -12269,6 +12300,39 @@ export function apply(ctx, rawConfig, options = {}) {
   void seedFirstInstallBackup(runtime, config).catch((error) => {
     log.warn('the first-install safe copy failed:', String(error))
   })
+
+  // THE FILES THE OLD BUILDS LEFT BEHIND (2026-11-02). Every build before this
+  // one wrote `restart-<n>-watch.ps1` on EVERY platform, and on Linux/WSL the
+  // script could never run — it stayed on disk instead. A real WSL machine had
+  // seven of them, which is why "leftover files = 0" was failing.
+  //
+  // The sweep is conservative on purpose (name + content + age, and never on
+  // Windows), and it is reported rather than silent: a rescue path that deletes
+  // files quietly is a worse bug than a leftover.
+  let watcherHygiene = null
+  try {
+    watcherHygiene = sweepLegacyWatcherScripts(path.dirname(String(runtime.stateFile ?? '')), {
+      platform: runtime.env.platform,
+    })
+  } catch (error) {
+    watcherHygiene = {
+      skipped: false,
+      reason: null,
+      removed: [],
+      kept: [],
+      scanned: 0,
+      error: error && error.message ? String(error.message) : String(error),
+    }
+  }
+  runtime.watcherHygiene = watcherHygiene
+  if (Array.isArray(watcherHygiene.removed) && watcherHygiene.removed.length > 0) {
+    log.warn('removed rollback watcher scripts this platform cannot run', {
+      count: watcherHygiene.removed.length,
+      names: watcherHygiene.removed,
+    })
+  } else if (watcherHygiene.error !== null) {
+    log.warn('could not sweep the old rollback watcher scripts:', watcherHygiene.error)
+  }
 
   trackAgents(ctx, runtime, config)
 

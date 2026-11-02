@@ -16,8 +16,10 @@ import {
   buildWatchScript,
   buildWmiRestartCommand,
   detectEnvironment,
+  looksLikeWatchScript,
   runCommandNow,
   scheduleDetachedRestart,
+  sweepLegacyWatcherScripts,
 } from '../lib/restart.js';
 
 const APP_EXE = 'C:\\Program Files\\DeepSeek Harness\\DeepSeek Harness.exe';
@@ -497,4 +499,97 @@ test('a planned restart refuses a watcher path without its text', () => {
   assert.equal(planned.watchScriptPath, watchScriptPath);
   assert.ok(String(planned.script).includes(watchScriptPath));
   assert.equal(fs.existsSync(path.dirname(scriptPath)), false, 'a dry run still writes nothing');
+});
+
+/* ------------------------------------------------------------------ *
+ * THE FILES THE OLD BUILDS LEFT BEHIND (2026-11-02).
+ *
+ * Every build before this one wrote `restart-<n>-watch.ps1` on EVERY platform.
+ * The script is PowerShell, so on Linux/WSL it could never run — it just stayed
+ * on disk. A real WSL machine had seven of them (restart-4/5/6/7/8/9/16), which
+ * is why "leftover files = 0" was failing before a release.
+ *
+ * The sweep is deliberately narrow: name + content + age, and never on Windows.
+ * ------------------------------------------------------------------ */
+
+/** A body that looks like the watcher `buildWatchScript` writes. */
+const WATCH_SCRIPT_BODY = [
+  'param(',
+  '  [string] $PortFile = ""',
+  ')',
+  '$ErrorActionPreference = "Stop"',
+  'Start-Sleep -Seconds 4',
+  '# dsh-autorestart: put the known-good copy back',
+].join('\n');
+
+/** Make a state directory with the given files (name → body). */
+function sweepFixture(files) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-watch-sweep-'));
+  for (const [name, body] of Object.entries(files)) {
+    fs.writeFileSync(path.join(dir, name), body, 'utf8');
+  }
+  // Backdate everything: a file written a moment ago is protected on purpose.
+  const old = new Date(Date.now() - 10 * 60 * 1000);
+  for (const name of Object.keys(files)) fs.utimesSync(path.join(dir, name), old, old);
+  return dir;
+}
+
+test('the non-Windows sweep removes ONLY the watcher scripts the plugin left behind', (t) => {
+  const dir = sweepFixture({
+    'restart-4-watch.ps1': WATCH_SCRIPT_BODY,
+    'restart-16-watch.ps1': WATCH_SCRIPT_BODY,
+    // Same name, but NOT our script (a user's own file): kept.
+    'restart-99-watch.ps1': 'Write-Host "my own script"\n',
+    // Our script's name is not this one: kept.
+    'last-watchdog-report.json': '{"result":"armed"}',
+    'state.json': '{}',
+  });
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const result = sweepLegacyWatcherScripts(dir, { platform: 'linux' });
+
+  assert.deepEqual(result.removed.sort(), ['restart-16-watch.ps1', 'restart-4-watch.ps1']);
+  assert.deepEqual(result.kept.sort(), ['restart-99-watch.ps1']);
+  assert.equal(result.scanned, 3, 'only the three matching names were even looked at');
+  assert.equal(result.skipped, false);
+  assert.equal(result.error, null);
+  // The files are really gone, the others really are not.
+  assert.equal(fs.existsSync(path.join(dir, 'restart-4-watch.ps1')), false);
+  assert.equal(fs.existsSync(path.join(dir, 'restart-16-watch.ps1')), false);
+  assert.equal(fs.existsSync(path.join(dir, 'restart-99-watch.ps1')), true);
+  assert.equal(fs.existsSync(path.join(dir, 'last-watchdog-report.json')), true);
+});
+
+test('a watcher script written a moment ago is left alone (a process may be starting)', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-watch-fresh-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, 'restart-17-watch.ps1'), WATCH_SCRIPT_BODY, 'utf8');
+
+  const result = sweepLegacyWatcherScripts(dir, { platform: 'linux' });
+  assert.deepEqual(result.removed, [], 'nothing is removed in the first minute');
+  assert.deepEqual(result.kept, ['restart-17-watch.ps1']);
+  assert.equal(fs.existsSync(path.join(dir, 'restart-17-watch.ps1')), true);
+});
+
+test('the sweep does nothing at all on Windows', (t) => {
+  const dir = sweepFixture({ 'restart-4-watch.ps1': WATCH_SCRIPT_BODY });
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const result = sweepLegacyWatcherScripts(dir, { platform: 'win32' });
+  assert.equal(result.skipped, true);
+  assert.match(result.reason, /Windows/);
+  assert.deepEqual(result.removed, []);
+  assert.equal(fs.existsSync(path.join(dir, 'restart-4-watch.ps1')), true, 'on Windows the file stays');
+});
+
+test('a missing state directory is not an error, and looksLikeWatchScript is strict', () => {
+  const missing = sweepLegacyWatcherScripts(path.join(os.tmpdir(), 'dsh-does-not-exist-' + Date.now()), {
+    platform: 'linux',
+  });
+  assert.equal(missing.skipped, true);
+  assert.equal(missing.error, null, 'a directory that does not exist yet is not a failure');
+
+  assert.equal(looksLikeWatchScript(WATCH_SCRIPT_BODY), true);
+  assert.equal(looksLikeWatchScript('Write-Host "hi"'), false, 'no param()/Start-Sleep/marker: not ours');
+  assert.equal(looksLikeWatchScript(''), false);
 });
