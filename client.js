@@ -461,6 +461,10 @@
     // after a card that says which one, what it replaces, and that a restart
     // follows.
     'settings.backup.rollback': '回退到这一份',
+    // THE ONE SENTENCE THE PAGE MAY SAY ABOUT A COPY (user decision,
+    // 2026-11-02): only the newest copy gets it, because only that one is the
+    // state from before THIS restart. Verbatim — do not reword.
+    'settings.backup.newestHint': '这是这次重启前的状态。如果问题是这次重启引起的，回到这份就能恢复；如果重启前就已经坏了，这份也修不好。',
     'settings.backup.rollbackConfirmTitle': '确定回退到这一份？',
     'settings.backup.rollbackConfirmBody': '会把 {time} 的那份备份还原到现在——**当前状态会被它覆盖**（覆盖前会先自动存一份当前快照，所以这次回退还能再退回来）。',
     'settings.backup.rollbackConfirmRestart': '还原完成后会自动重启一次；重启期间这个页面会断开，回来后接着用。',
@@ -958,6 +962,7 @@
     // — but only after a card that says which one, what it replaces, and that
     // a restart follows.
     'settings.backup.rollback': 'Roll back to this copy',
+    'settings.backup.newestHint': 'This is the state from before this restart. If this restart caused the problem, going back to this copy fixes it; if it was already broken before the restart, this copy cannot fix it either.',
     'settings.backup.rollbackConfirmTitle': 'Roll back to this copy?',
     'settings.backup.rollbackConfirmBody': 'The backup from {time} will be restored over the current state — **what you have now is replaced** (a snapshot of it is taken first, so this rollback can be undone).',
     'settings.backup.rollbackConfirmRestart': 'A restart follows automatically; this page disconnects during it and works again afterwards.',
@@ -7452,6 +7457,7 @@
                   {
                     className: 'dsh-autorestart-settings__select',
                     'data-dsh-autorestart-backup': 'limit-select',
+                    'data-dsh-autorestart-setting': 'maxBackups',
                     value: String(limitValue === null ? backupsInfo.max : limitValue),
                     disabled: limitBusy,
                     onChange: (event) => {
@@ -7535,224 +7541,42 @@
                     t('settings.backup.empty'),
                   )
                 : null,
-              // A FULL CARD ONLY FOR THE ONE COPY THAT WOULD BE USED (user
-              // decision, 2026-11-02). Everything else is demoted to one small
-              // line below, because a page that draws three equal cards makes
-              // the user choose — and the whole point of this block is that the
-              // choice is not theirs to make.
-              backupItems.filter((item) => isSafeBackup(item)).map((item, index) => h(
+              // ONE ROW PER COPY, AND ONLY THE NEWEST ONE GETS A SENTENCE
+              // (user decision, 2026-11-02, frontend b).
+              //
+              // The page used to split the list into "the safe copy" and
+              // "everything else". That split was a promise the plugin cannot
+              // keep: a hosted instance never certifies anything, so the safe
+              // tier was empty forever and every real copy sat in the demoted
+              // row. So there is no tier any more — no "安全份", no "已验证",
+              // nothing read from `certifiedBy`.
+              //
+              // What is left is honest: newest first, ONE row per copy with its
+              // time and a rollback button, and the one sentence that is
+              // actually true — printed on the newest copy only, because that is
+              // the one taken before THIS restart.
+              backupItems.map((item, index) => h(
                 'div',
                 {
                   className: 'dsh-autorestart-settings__backup',
                   'data-dsh-autorestart-backup': 'item',
+                  'data-backup-index': String(index),
                   key: 'backup-' + index,
                 },
-                // WHAT THIS COPY IS — read first, because the identity decides
-                // whether this copy may be restored at all.
-                h(
-                  'div',
-                  { className: 'dsh-autorestart-settings__backup-identity' },
-                  h(
-                    'span',
-                    { className: 'dsh-autorestart-settings__backup-label' },
-                    t('settings.backup.kindLabel'),
-                  ),
-                  h(
-                    'span',
-                    {
-                      className: 'dsh-autorestart-settings__backup-badge',
-                      'data-dsh-autorestart-backup': 'kind',
-                    },
-                    backupKindText(t, item),
-                  ),
-                  // THE PLUGIN VERSION IS GONE ON PURPOSE (user report,
-                  // 2026-11-02): "版本 0.8.7" on a card the user is about to
-                  // restore from reads like a downgrade notice, and it says
-                  // nothing about whether the copy is safe. `settings.backup.version`
-                  // stays in the dictionaries (nothing else uses it) so an older
-                  // build never shows a key, but no card prints it any more.
-                ),
-                // THE TECHNICAL ROWS ARE FOLDED (user decision, 2026-11-02) — but
-                // NEVER when this boot was rescued: an intervention is the one
-                // thing that must not be hidden, so that copy opens itself and
-                // says so on the summary.
-                (() => {
-                  const itemIntervened = Boolean(item && item.intervention === true)
-                  const listOpen = backupListDetailsOpen || itemIntervened
-                  return h(
-                    'details',
-                    {
-                      className: 'dsh-autorestart-settings__details',
-                      'data-dsh-autorestart-backup': 'list-details',
-                      ...(listOpen ? { open: true } : {}),
-                      onToggle: (event) => {
-                        setBackupListDetailsOpen(Boolean(event && event.target ? event.target.open : false))
-                      },
-                    },
-                    h(
-                      'summary',
-                      { className: 'dsh-autorestart-settings__summary', 'data-dsh-autorestart-backup': 'list-summary' },
-                      itemIntervened
-                        ? t('settings.backup.details') + ' · ' + t('settings.backup.intervention.true')
-                        : t('settings.backup.details'),
-                    ),
-                    listOpen ? h(
-                      'div',
-                      { className: 'dsh-autorestart-settings__backup-detail' },
                 h(
                   'div',
                   { className: 'dsh-autorestart-settings__backup-row' },
-                  h(
-                    'span',
-                    { className: 'dsh-autorestart-settings__backup-label' },
-                    t('settings.backup.certifiedLabel'),
-                  ),
-                  h(
-                    'span',
-                    {
-                      className: 'dsh-autorestart-settings__backup-badge',
-                      'data-dsh-autorestart-backup': 'certified',
-                    },
-                    t('settings.backup.certified.' + backupCertifiedKey(item && item.certifiedBy)),
-                  ),
-                  formatBackupTime(item && item.certifiedAt) === ''
-                    ? h(
-                      'span',
-                      {
-                        className: 'dsh-autorestart-settings__backup-note',
-                        'data-dsh-autorestart-backup': 'certified-at',
-                      },
-                      t('settings.backup.certifiedAtMissing'),
-                    )
-                    : h(
-                      'span',
-                      {
-                        className: 'dsh-autorestart-settings__backup-note',
-                        'data-dsh-autorestart-backup': 'certified-at',
-                      },
-                      fill(t('settings.backup.certifiedAtTime'), { time: formatBackupTime(item && item.certifiedAt) }),
-                    ),
-                ),
-                // WHICH CRITERION — the missing half of "certified by" (2026-11-01).
-                // The row above says WHO signed; this one says WHAT WAS CHECKED, and
-                // that is the difference the user must see: an old stamp has a source
-                // and no criterion, so it is refused as a safe copy even though it
-                // still reads `full-checks`. Without this row the two are identical
-                // on screen — which is how the bad copies got trusted on the hosted
-                // instance.
-                h(
-                  'div',
-                  { className: 'dsh-autorestart-settings__backup-row' },
-                  h(
-                    'span',
-                    { className: 'dsh-autorestart-settings__backup-label' },
-                    t('settings.backup.evidenceLabel'),
-                  ),
-                  h(
-                    'span',
-                    {
-                      className: 'dsh-autorestart-settings__backup-badge',
-                      'data-dsh-autorestart-backup': 'certification-evidence',
-                    },
-                    t('settings.backup.evidence.' + backupEvidenceKey(
-                      item && item.certificationEvidence,
-                      item && item.certifiedBy,
-                    )),
-                  ),
-                ),
-                // WHAT the certification is ABOUT: a configuration-only copy
-                // that booted says nothing about the plugin tree, so the scope
-                // is part of the evidence. An old copy has none, and the row
-                // says so instead of disappearing (a missing row reads as "no
-                // problem", which is the reading this whole layer exists to
-                // stop).
-                h(
-                  'div',
-                  { className: 'dsh-autorestart-settings__backup-row' },
-                  h(
-                    'span',
-                    { className: 'dsh-autorestart-settings__backup-label' },
-                    t('settings.backup.scopeLabel'),
-                  ),
                   h(
                     'span',
                     {
                       className: 'dsh-autorestart-settings__backup-value',
-                      'data-dsh-autorestart-backup': 'scope',
+                      'data-dsh-autorestart-backup': 'time',
                     },
-                    backupScopeKey(item && item.contentScope) === ''
-                      ? t('settings.backup.scopeMissing')
-                      : t('settings.backup.scope.' + backupScopeKey(item && item.contentScope)),
-                  ),
-                ),
-                // WAS THIS BOOT RESCUED? Three answers, because "not recorded"
-                // is not "no" — the next step refuses rescued copies, and that
-                // decision needs the difference.
-                h(
-                  'div',
-                  { className: 'dsh-autorestart-settings__backup-row' },
-                  h(
-                    'span',
-                    { className: 'dsh-autorestart-settings__backup-label' },
-                    t('settings.backup.interventionLabel'),
-                  ),
-                  h(
-                    'span',
-                    {
-                      className: 'dsh-autorestart-settings__backup-value',
-                      'data-dsh-autorestart-backup': 'intervention',
-                    },
-                    t('settings.backup.intervention.' + backupInterventionKey(item && item.intervention)),
-                  ),
-                ),
-                    ) : null,
-                  )
-                })(),
-                // WHEN it was taken. No timezone offset: what is shown is
-                // already the local clock of the machine that took the copy.
-                h(
-                  'div',
-                  { className: 'dsh-autorestart-settings__backup-row' },
-                  h(
-                    'span',
-                    { className: 'dsh-autorestart-settings__backup-label' },
-                    t('settings.backup.time'),
-                  ),
-                  h(
-                    'span',
-                    { className: 'dsh-autorestart-settings__backup-value', 'data-dsh-autorestart-backup': 'time' },
                     formatBackupTime(item && item.atLocal),
                   ),
-                ),
-                // HOW BIG it is — and whether the plugins are in it, because
-                // that is WHY it is that big: the note belongs to the size.
-                h(
-                  'div',
-                  { className: 'dsh-autorestart-settings__backup-row' },
-                  h(
-                    'span',
-                    { className: 'dsh-autorestart-settings__backup-label' },
-                    t('settings.backup.size'),
-                  ),
-                  h(
-                    'span',
-                    { className: 'dsh-autorestart-settings__backup-value', 'data-dsh-autorestart-backup': 'size' },
-                    formatBackupSize(item && item.bytes),
-                  ),
-                  h(
-                    'span',
-                    { className: 'dsh-autorestart-settings__backup-note', 'data-dsh-autorestart-backup': 'plugins' },
-                    item && item.includePlugins === true
-                      ? t('settings.backup.withPlugins')
-                      : t('settings.backup.withoutPlugins'),
-                  ),
-                ),
-                // ROLL BACK TO THIS COPY. The button only OPENS the question —
-                // the route is called from the confirmation card and nowhere
-                // else, so a click alone never restores anything.
-                h(
-                  'div',
-                  { className: 'dsh-autorestart-settings__backup-actions' },
+                  // ROLL BACK TO THIS COPY. The button only OPENS the question —
+                  // the route is called from the confirmation card and nowhere
+                  // else, so a click alone never restores anything.
                   h(
                     'button',
                     {
@@ -7772,34 +7596,17 @@
                     t('settings.backup.rollback'),
                   ),
                 ),
+                index === 0
+                  ? h(
+                      'div',
+                      {
+                        className: 'dsh-autorestart-settings__backup-note',
+                        'data-dsh-autorestart-backup': 'newest-hint',
+                      },
+                      t('settings.backup.newestHint'),
+                    )
+                  : null,
               )),
-              // NOT ONE ENTRY FOR THEM (user decision, 2026-11-02, plan B): an
-              // unverified copy can never be rolled back, so listing those copies
-              // — even behind a fold — is noise on the page whose whole job is to
-              // answer "which copy saves me?". They get ONE grey line with the
-              // count and nothing else: no card, no button, no entries to mistake
-              // for a usable backup.
-              (() => {
-                const others = backupItems.filter((item) => !isSafeBackup(item))
-                if (others.length === 0) return null
-                // THE ONE GREY LINE (plan B). It replaces the per-copy lines this
-                // block used to draw: the count is the whole message, because a
-                // copy that can never be rolled back has nothing else to say.
-                const lineOf = (count) => h(
-                  'span',
-                  {
-                    className: 'dsh-autorestart-settings__backup-note',
-                    'data-dsh-autorestart-backup': 'others-summary',
-                    'data-others-count': String(count),
-                  },
-                  fillTemplate(t('settings.backup.othersSummary'), { n: count }),
-                )
-                return h(
-                  'div',
-                  { className: 'dsh-autorestart-settings__backup-others', 'data-dsh-autorestart-backup': 'others' },
-                  lineOf(others.length),
-                )
-              })(),
               // THE SECOND CONFIRMATION OF A MANUAL ROLLBACK (user decision,
               // 2026-10-30): it names the copy, says that the current state is
               // replaced (and that it is saved first), and says that a restart
