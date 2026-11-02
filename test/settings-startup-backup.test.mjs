@@ -859,12 +859,14 @@ test('② only the copy that could save the user is written out as a card', asyn
     'no plugin version on a card — it reads like a downgrade notice and proves nothing',
   )
   assert.equal(textOf(panel).includes('版本 0.8.5'), false, 'the version is not printed anywhere')
-  const lines = backupValues(panel, 'other-line')
-  assert.equal(lines.length, 2, 'the two unproven copies are two small lines')
-  assert.ok(lines[0].includes('2026-10-29 09:00'), `the snapshot names its time: ${lines[0]}`)
-  assert.ok(lines[0].includes('156 MB'), `the snapshot names its size: ${lines[0]}`)
-  assert.ok(lines[0].includes('不会被自动还原'), `the snapshot says it is never restored automatically: ${lines[0]}`)
-  assert.ok(lines[1].includes('2026-10-28 09:00'), `the old copy names its time: ${lines[1]}`)
+  // PLAN B (user decision, 2026-11-02): the two unproven copies are NOT listed
+  // at all. One grey line counts them and says they are never restored.
+  assert.deepEqual(backupValues(panel, 'other-line'), [], 'no per-copy line for unproven copies')
+  const others = walk(panel).find((node) => node.props
+    && node.props['data-dsh-autorestart-backup'] === 'others-summary')
+  assert.ok(others, 'the count line stands in for them')
+  assert.equal(others.props['data-others-count'], '2', 'and it counts both of them')
+  assert.ok(textOf(others).includes('不会自动还原'), `and says they are never restored automatically: ${textOf(others)}`)
   assert.equal(
     marked(panel, 'data-dsh-autorestart-backup').filter(
       (node) => node.props['data-dsh-autorestart-backup'] === 'rollback',
@@ -950,9 +952,11 @@ test('④ the identities speak English too, and the paragraph follows the langua
     ['Known good'],
     'the English user reads the same one card, under the same rule',
   )
-  const lines = backupValues(panel, 'other-line')
-  assert.equal(lines.length, 2, 'the two unproven copies are two small lines in English too')
-  assert.ok(lines[0].includes('never restored automatically'), `and say what they are: ${lines[0]}`)
+  assert.deepEqual(backupValues(panel, 'other-line'), [], 'no per-copy line for unproven copies in English either')
+  const othersEn = walk(panel).find((node) => node.props
+    && node.props['data-dsh-autorestart-backup'] === 'others-summary')
+  assert.ok(othersEn, 'the count line is there in English too')
+  assert.ok(textOf(othersEn).includes('never restored automatically'), `and says what they are: ${textOf(othersEn)}`)
   const hint = marked(panel, 'data-dsh-autorestart-backup').filter(
     (node) => node.props['data-dsh-autorestart-backup'] === 'identity-hint',
   )
@@ -1057,53 +1061,188 @@ test('the desktop entry shows its icon and its file name, and says what it is fo
   )
 })
 
-test('a platform without a desktop says so instead of hiding the block', async () => {
-  const mounted = mountSettings({
+test('the rescue group is the SAME on both ends (plan B): the desktop entry becomes a copyable command', async () => {
+  // PLAN B (user decision, 2026-11-02): the desktop build keeps its rescue entry,
+  // and the hosted / web page shows the SAME group with the SAME title — only the
+  // one entry that needs a desktop turns into a copyable command. The group is
+  // never removed, and the "the web version has no desktop" excuse line is gone.
+  const noDesktopKit = rescueKit({
+    platform: 'linux',
+    scriptsDir: '/plugin/scripts',
+    restoreProfile: '/plugin/scripts/restore-profile.sh',
+    emergencyDisable: '/plugin/scripts/emergency-disable.sh',
+    desktopDir: '',
+    desktopSource: 'none',
+    shortcutPath: '',
+    iconPath: '',
+  })
+  const hosted = mountSettings({
     info: {
       instance: { isDesktopApp: false, platform: 'linux' },
       supervisor: { mode: 'app', installed: false, startup: { mode: 'desktop' } },
-      rescue: rescueKit({
-        platform: 'linux',
-        scriptsDir: '/plugin/scripts',
-        restoreProfile: '/plugin/scripts/restore-profile.sh',
-        emergencyDisable: '/plugin/scripts/emergency-disable.sh',
-        desktopDir: '',
-        desktopSource: 'none',
-        shortcutPath: '',
-        iconPath: '',
-      }),
+      rescue: noDesktopKit,
     },
   })
-  const panel = await mounted.settled('dsh-autorestart')
-  const text = rescueText(panel, 'no-desktop-platform')
-  assert.match(text, /网页版 \/ 服务器版没有桌面/, `the platform is named: ${text}`)
-  assert.match(text, /\.sh/, 'and it points at the scripts that DO work here')
-  assert.equal(rescueText(panel, 'shortcut'), '', 'no button where there is no desktop to put it on')
-  assert.equal(rescueText(panel, 'no-desktop'), '', 'the "no desktop directory" line is for Windows, not for other platforms')
+  const hostedPanel = await hosted.settled('dsh-autorestart')
 
-  // THE SENTENCE MUST NOT LIE (audit finding G1): "use the two .sh scripts
-  // above" is only allowed when the paths are really rendered — on a platform
-  // without a desktop they are the ONLY way out, so they are never folded.
-  const paths = marked(panel, 'data-dsh-autorestart-rescue')
+  // The group and its title are there — the same ones the desktop build shows.
+  assert.match(textOf(hostedPanel), /桌面救援入口/, 'the same group title as on the desktop')
+  assert.equal(rescueText(hostedPanel, 'no-desktop-platform'), '', 'no "the web version has no desktop" excuse line')
+  assert.equal(rescueText(hostedPanel, 'shortcut-name'), '', 'no .lnk file name where there is no desktop')
+
+  // THE ENTRY ITSELF: a copyable command instead of the desktop shortcut.
+  assert.equal(
+    rescueText(hostedPanel, 'command'),
+    '/plugin/scripts/restore-profile.sh',
+    'the entry is the restore command the Host resolved — not a made-up one',
+  )
+  assert.equal(
+    marked(hostedPanel, 'data-dsh-autorestart-rescue')
+      .filter((node) => node.props['data-dsh-autorestart-rescue'] === 'copy-command').length,
+    1,
+    'and it can be copied',
+  )
+  assert.match(
+    rescueText(hostedPanel, 'command-hint'),
+    /效果和桌面上双击那个入口一样/,
+    'the page says what this command does, in the same terms as the desktop entry',
+  )
+
+  // The paths are still rendered in full where there is no desktop entry.
+  const paths = marked(hostedPanel, 'data-dsh-autorestart-rescue')
     .filter((node) => node.props['data-dsh-autorestart-rescue'] === 'path')
     .map((node) => textOf(node))
   assert.deepEqual(
     paths,
     ['/plugin/scripts/restore-profile.sh', '/plugin/scripts/emergency-disable.sh'],
-    'both .sh path ARE on the page, in full',
+    'both paths ARE on the hosted page, in full',
+  )
+
+  // THE DESKTOP BUILD IS UNCHANGED: the `.lnk` row, the button, the fold.
+  const desktop = mountSettings({
+    info: {
+      instance: { isDesktopApp: true, platform: 'win32' },
+      supervisor: { mode: 'app', installed: false, startup: { mode: 'desktop' } },
+      rescue: rescueKit(),
+    },
+  })
+  const desktopPanel = await desktop.settled('dsh-autorestart')
+  assert.match(textOf(desktopPanel), /桌面救援入口/, 'the same title on the desktop')
+  assert.notEqual(rescueText(desktopPanel, 'shortcut-name'), '', 'the desktop build still names the .lnk')
+  assert.equal(
+    marked(desktopPanel, 'data-dsh-autorestart-rescue')
+      .filter((node) => node.props['data-dsh-autorestart-rescue'] === 'command').length,
+    0,
+    'and it does NOT show the hosted command form',
   )
   assert.equal(
-    marked(panel, 'data-dsh-autorestart-rescue')
-      .filter((node) => node.props['data-dsh-autorestart-rescue'] === 'copy-path').length,
-    2,
-    'each one can be copied',
+    walk(desktopPanel).filter((node) => node.type === 'details'
+      && node.props && node.props['data-dsh-autorestart-rescue'] === 'paths-details').length,
+    1,
+    'the paths still sit behind 详情 where the desktop entry is the main door',
   )
-  // ...and they are not hidden behind a fold on this platform.
+
+  // THE SAME GROUP TITLES ON BOTH ENDS (plan B): the page is one page, not two.
+  const titlesOf = (panel) => walk(panel)
+    .filter((node) => node.props && typeof node.props.className === 'string'
+      && node.props.className.includes('settings__group-title'))
+    .map((node) => textOf(node))
+  const shared = ['重启相关设置', '关机相关设置', '桌面救援入口', '遇到问题']
+  for (const title of shared) {
+    assert.ok(titlesOf(hostedPanel).includes(title), `the web page shows «${title}» like the desktop`)
+    assert.ok(titlesOf(desktopPanel).includes(title), `the desktop shows «${title}»`)
+  }
+  // 开机自启 is the 0.8.5 design and MUST stay where it belongs: on the hosted
+  // host (a desktop app manages its own start-up, so the block is hidden there).
+  assert.ok(titlesOf(hostedPanel).includes('开机自启'), 'the web page keeps the start-at-login group')
+})
+
+/**
+ * THE FLOOD (user report, 2026-11-02): the machine had more than fifteen
+ * unverified copies, so the page opened with fifteen sentences saying "an
+ * unverified copy, never restored automatically" — and the safe copy with its
+ * rollback button was pushed off the first screen. Only the useful ones may be
+ * drawn flat now; the rest are one line that names the count and opens on demand.
+ */
+function manyUnverified(count) {
+  const items = [
+    {
+      name: '2026-11-02T00-00-00-000Z',
+      dir: 'C:\\Users\\fg\\.dsh\\storages\\dsh-autorestart\\backups\\2026-11-02T00-00-00-000Z',
+      at: 1793558400000,
+      atLocal: '2026-11-02T08:00:00+08:00',
+      bytes: 204800,
+      configFiles: 3,
+      includePlugins: true,
+      version: '0.8.6',
+      kind: 'known-good',
+      certifiedBy: 'full-checks',
+      certificationEvidence: 'fingerprint-match',
+    },
+  ]
+  for (let index = 0; index < count; index += 1) {
+    items.push({
+      name: '2026-11-01T' + String(index).padStart(2, '0') + '-00-00-000Z',
+      dir: 'C:\\Users\\fg\\.dsh\\storages\\dsh-autorestart\\backups\\2026-11-01T' + String(index).padStart(2, '0'),
+      at: 1793472000000 - index * 3600000,
+      atLocal: '2026-11-01T' + String(index).padStart(2, '0') + ':00:00+08:00',
+      bytes: 1024,
+      configFiles: 3,
+      includePlugins: false,
+      kind: 'unverified',
+      certifiedBy: 'none',
+      certificationEvidence: 'none',
+    })
+  }
+  return { dir: 'C:\\Users\\fg\\.dsh\\storages\\dsh-autorestart\\backups', max: 20, count: items.length, items }
+}
+
+test('unverified copies are NOT listed at all — one grey count line and nothing else (plan B)', async () => {
+  const mounted = mountSettings({
+    info: {
+      instance: { isDesktopApp: true, platform: 'win32' },
+      supervisor: { mode: 'app', installed: false, startup: { mode: 'desktop' } },
+      backups: manyUnverified(16),
+    },
+  })
+  const panel = await mounted.settled('dsh-autorestart')
+
+  // The useful things stay visible: the safe copy is still a card with a button.
+  assert.deepEqual(backupValues(panel, 'kind'), ['安全份'], 'the safe copy is still the card')
+  assert.equal(
+    marked(panel, 'data-dsh-autorestart-backup').filter(
+      (node) => node.props['data-dsh-autorestart-backup'] === 'rollback',
+    ).length,
+    1,
+    'and it still has its rollback button',
+  )
+
+  // NO ENTRY for an unverified copy (user decision, 2026-11-02): they can never
+  // be rolled back, so there is nothing to show — not a line, not a fold.
+  assert.deepEqual(backupValues(panel, 'other-line'), [], 'no per-copy line for unverified copies')
+  assert.equal(
+    marked(panel, 'data-dsh-autorestart-backup').filter(
+      (node) => node.props['data-dsh-autorestart-backup'] === 'other',
+    ).length,
+    0,
+    'and no entry hidden in a fold either',
+  )
   assert.equal(
     walk(panel).filter((node) => node.type === 'details'
-      && node.props && node.props['data-dsh-autorestart-rescue'] === 'paths-details').length,
+      && node.props && node.props['data-dsh-autorestart-backup'] === 'others-details').length,
     0,
-    'the paths are always visible where there is no desktop entry',
+    'there is no fold to open — the copies are simply not drawn',
+  )
+
+  // ONE grey line says how many there are and what they are worth.
+  const summary = walk(panel).find((node) => node.props
+    && node.props['data-dsh-autorestart-backup'] === 'others-summary')
+  assert.ok(summary, 'the count line is there')
+  assert.equal(summary.props['data-others-count'], '16', 'and it counts every one of them')
+  assert.match(
+    textOf(summary),
+    /另有 16 份重启前自动拍的备份（未验证，不会自动还原）/,
+    'in plain words, saying they are never restored automatically',
   )
 })
 
@@ -1144,10 +1283,20 @@ test('a Windows machine whose desktop cannot be found gets the manual instructio
   assert.notEqual(rescueText(panel, 'shortcut-when'), '')
   assert.notEqual(rescueText(panel, 'shortcut-scope'), '')
   // AND THE PATHS ARE OPEN, because there is no button to use instead.
-  const fold = walk(panel).find((node) => node.type === 'details'
-    && node.props && node.props['data-dsh-autorestart-rescue'] === 'paths-details')
-  assert.ok(fold, 'the fold exists')
-  assert.equal(fold.props.open, true, 'and it opens itself when the shortcut cannot be placed')
+  // PLAN B: with no desktop entry the paths are the only way out, so they are
+  // rendered in full — there is no fold at all.
+  assert.equal(
+    walk(panel).filter((node) => node.type === 'details'
+      && node.props && node.props['data-dsh-autorestart-rescue'] === 'paths-details').length,
+    0,
+    'the paths are never folded when the shortcut cannot be placed',
+  )
+  assert.notEqual(
+    marked(panel, 'data-dsh-autorestart-rescue')
+      .filter((node) => node.props['data-dsh-autorestart-rescue'] === 'path').length,
+    0,
+    'and they are on the page',
+  )
 })
 
 /* ------------------------------------------------------------------ *
@@ -1298,14 +1447,12 @@ test('the first-install seed is never shown as 安全份 — it is one line, wit
   const marks = marked(panel, 'data-dsh-autorestart-backup')
     .filter((node) => node.props['data-dsh-autorestart-backup'] === 'kind')
   assert.equal(marks.length, 0, 'no badge says 安全份 about a seed')
-  const lines = backupValues(panel, 'other-line')
-  assert.equal(lines.length, 1, 'the seed is one small line')
-  assert.ok(
-    lines[0].includes('另有一份首装备份（只含设置、未验证，仅在前一份不可用时才用）'),
-    `the seed line says exactly what it is: ${lines[0]}`,
-  )
-  assert.ok(lines[0].includes('2026-10-31 09:00'), `with its time: ${lines[0]}`)
-  assert.ok(lines[0].includes('68 KB'), `and its size: ${lines[0]}`)
+  // PLAN B: a seed is not a copy you can roll back to, so it is not listed.
+  assert.deepEqual(backupValues(panel, 'other-line'), [], 'the seed is not listed as a copy at all')
+  const seedLine = walk(panel).find((node) => node.props
+    && node.props['data-dsh-autorestart-backup'] === 'others-summary')
+  assert.ok(seedLine, 'a count line stands in for it')
+  assert.equal(seedLine.props['data-others-count'], '1', 'and it counts the seed')
   assert.equal(
     marked(panel, 'data-dsh-autorestart-backup').filter(
       (node) => node.props['data-dsh-autorestart-backup'] === 'rollback',
@@ -1350,9 +1497,11 @@ test('hosted: the fold, the seed rule and the absent version hold on a web host 
 
   // (2) THE SEED IS STILL NOT A 安全份: one line, no card, no badge, no button.
   assert.deepEqual(backupValues(panel, 'kind'), [], 'no badge says 安全份 about a seed')
-  const lines = backupValues(panel, 'other-line')
-  assert.equal(lines.length, 1, 'the seed is one small line here too')
-  assert.ok(lines[0].includes('未验证'), `the line says it is unproven: ${lines[0]}`)
+  assert.deepEqual(backupValues(panel, 'other-line'), [], 'the seed is not listed on a web host either')
+  const seedLineWeb = walk(panel).find((node) => node.props
+    && node.props['data-dsh-autorestart-backup'] === 'others-summary')
+  assert.ok(seedLineWeb, 'the count line stands in for it here too')
+  assert.ok(textOf(seedLineWeb).includes('未验证'), `and it says the copy is unproven: ${textOf(seedLineWeb)}`)
   assert.equal(
     marked(panel, 'data-dsh-autorestart-backup').filter(
       (node) => node.props['data-dsh-autorestart-backup'] === 'rollback',
@@ -1401,9 +1550,11 @@ test('a known-good KIND without a checkable criterion is not a 安全份 either'
   })
   const panel = await mounted.settled('dsh-autorestart')
   assert.deepEqual(backupValues(panel, 'kind'), [], 'the old stamp that cannot be checked is not a safe copy')
-  const lines = backupValues(panel, 'other-line')
-  assert.equal(lines.length, 1, 'it is listed as one line, honestly')
-  assert.ok(lines[0].includes('不会被自动还原'), `and says it is never restored automatically: ${lines[0]}`)
+  assert.deepEqual(backupValues(panel, 'other-line'), [], 'it is not listed as a copy at all')
+  const stampLine = walk(panel).find((node) => node.props
+    && node.props['data-dsh-autorestart-backup'] === 'others-summary')
+  assert.ok(stampLine, 'the count line stands in for it')
+  assert.ok(textOf(stampLine).includes('不会自动还原'), `and says it is never restored automatically: ${textOf(stampLine)}`)
 })
 
 /* ------------------------------------------------------------------ *

@@ -261,6 +261,7 @@
         "seed": "There is also a first-install seed copy (settings only, not verified, used only when the copy above is unavailable), {time}, {size}",
         "other": "There is also an unverified copy (never restored automatically, used only when the copy above is unavailable), {time}, {size}"
       },
+      "othersSummary": "{n} more pre-restart snapshots (unverified, never restored automatically)",
       "identityHint": "A backup has one of two identities: ① “known good” — the copy a boot has proven; when something breaks, only a known-good copy is rolled back, and the first install creates one automatically. ② “this restart's snapshot” — taken right before every restart and not proven yet; old backups (unverified) and that snapshot are never rolled back automatically. At most {n} copies are kept together (the oldest goes first; a known-good copy is never deleted). A manual rollback asks for confirmation first, then restarts automatically.",
       "rollback": "Roll back to this copy",
       "rollbackConfirmTitle": "Roll back to this copy?",
@@ -355,6 +356,10 @@
       "shortcutDone": "It is on the desktop",
       "noDesktop": "This machine has no desktop directory, so no shortcut can be placed (the paths are above — copy them by hand).",
       "noDesktopPlatform": "The web / server version has no desktop, so there is no one-click entry here; use the two .sh scripts above.",
+      "commandLabel": "Rescue entry (command)",
+      "copyCommand": "Copy the command",
+      "commandHint": "Copy this command and run it — the same effect as double-clicking the desktop entry.",
+      "commandUnavailable": "No usable rescue command was found on this machine.",
       "shortcutScope": "It can only put the WHOLE environment back to the last good state — it cannot take one plugin out; for that, use \"A plugin will not start\" above.",
       "shortcutBlocked": "A system policy does not allow creating the shortcut (a group policy or a permission limit). Copy the script path below and put it on the desktop by hand:",
       "shortcutWriteFailed": "The shortcut was not written: {message}. Copy the script path below and put it on the desktop by hand:",

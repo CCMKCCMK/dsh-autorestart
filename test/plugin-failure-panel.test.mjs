@@ -13,7 +13,9 @@
 
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import path from 'node:path'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
 
 import '../client.js'
 
@@ -247,3 +249,226 @@ test('both language files carry exactly the same pluginFailure keys', () => {
   const en = Object.keys(JSON.parse(fs.readFileSync(new URL('../locale/en.json', import.meta.url), 'utf8')).pluginFailure).sort()
   assert.deepEqual(en, zh, 'the two locales must stay in step')
 })
+
+// ---------------------------------------------------------------------------
+// THE FLOATING CARD'S LAYOUT (user report, 2026-11-02).
+//
+// Two things were wrong in the card that reports "two things worth a look":
+//   1. the title was printed TWICE — once by the card header and again as the
+//      first paragraph of the body;
+//   2. «全部恢复» and «知道了» sat at the BOTTOM of the list, where they read as if
+//      they belonged to the LAST plugin in it.
+// Card-level actions belong to the header (title left, buttons right); the
+// per-plugin button («只恢复 <plugin>») must stay inside that plugin's own row.
+//
+// WHY THIS READS THE SOURCE INSTEAD OF RENDERING: the overlay has no render
+// harness here (the panel is registered into a slot from `apply()`). These
+// assertions pin the STRUCTURE the renderer consumes — one title call, actions
+// passed in `actions` rather than pushed into `rows`, and the header rendering
+// those actions inside its own container.
+// ---------------------------------------------------------------------------
+
+const clientDir = path.dirname(fileURLToPath(import.meta.url))
+const clientSource = fs.readFileSync(path.join(clientDir, '..', 'client.js'), 'utf8')
+
+/** The text of one function body, from its `function NAME(` to the matching brace. */
+function functionBodyOf(name) {
+  const start = clientSource.indexOf('function ' + name + '(')
+  assert.notEqual(start, -1, name + ' must exist in client.js')
+  let depth = 0
+  let index = clientSource.indexOf('{', start)
+  const open = index
+  for (; index < clientSource.length; index += 1) {
+    if (clientSource[index] === '{') depth += 1
+    if (clientSource[index] === '}') {
+      depth -= 1
+      if (depth === 0) return clientSource.slice(open, index + 1)
+    }
+  }
+  assert.fail(name + ' has no matching closing brace')
+}
+
+const panel = functionBodyOf('PluginFailurePanel')
+const card = functionBodyOf('OverlayCard')
+
+test('the card title is printed once: the duplicate body line is gone', () => {
+  const titleCalls = panel.split("t('pluginFailure.title')").length - 1
+  assert.equal(titleCalls, 1, 'the title is used exactly once — as the card header title')
+  assert.equal(
+    panel.includes("key: 'title'"),
+    false,
+    'no body paragraph repeats the title any more',
+  )
+})
+
+test('「全部恢复」and「知道了」are card-level actions, not list rows', () => {
+  assert.match(panel, /const actions = \[\]/, 'the panel builds an actions array for the header')
+  assert.match(panel, /actions\.push\(h\('button', \{/, 'its buttons are pushed into that array')
+  // The ONLY button left in the list is the per-plugin one; the two card-level
+  // buttons are pushed into `actions` instead.
+  const rowsButtons = panel.split("rows.push(h('button'").length - 1
+  const actionButtons = panel.split("actions.push(h('button'").length - 1
+  assert.equal(rowsButtons, 1, 'exactly one button stays in the list (the per-plugin one)')
+  assert.equal(actionButtons, 2, 'and the two card-level buttons live in the header actions')
+  assert.ok(
+    panel.includes("'data-dsh-autorestart-plugin-failure': 'restore-all'"),
+    'restore-all carries its own marker',
+  )
+  assert.ok(
+    panel.includes("'data-dsh-autorestart-plugin-failure': 'dismiss'"),
+    'dismiss carries its own marker',
+  )
+  assert.match(panel, /actions,/, 'and the array is handed to the card')
+  assert.match(panel, /h\(OverlayCard, \{/, 'the panel renders the card component directly')
+})
+
+test('the per-plugin button stays inside its own row', () => {
+  assert.match(
+    panel,
+    /rows\.push\(h\('button', \{[^}]*key: 'cta:' \+ entry\.name/s,
+    '«只恢复 <plugin>» is still a row of that plugin',
+  )
+  assert.equal(
+    actionsSectionIncludes("key: 'cta:'"),
+    false,
+    'and it is NOT lifted into the header actions',
+  )
+
+  function actionsSectionIncludes(needle) {
+    const start = panel.indexOf('const actions = []')
+    const end = panel.indexOf('return h(OverlayCard')
+    assert.ok(start !== -1 && end > start, 'the actions section must be findable')
+    return panel.slice(start, end).includes(needle)
+  }
+})
+
+test('the header owns the actions and the title can truncate', () => {
+  assert.match(card, /'data-dsh-autorestart-overlay-header': id/, 'the header is addressable')
+  const headerAt = card.indexOf("'data-dsh-autorestart-overlay-header'")
+  const actionsAt = card.indexOf("'data-dsh-autorestart-overlay-actions'")
+  assert.ok(actionsAt > headerAt, 'the actions container sits inside the header element')
+  assert.match(
+    card.slice(headerAt, actionsAt),
+    /data-dsh-autorestart-overlay-header/,
+    'the header wraps the actions (not the other way round)',
+  )
+  assert.match(card, /textOverflow: 'ellipsis'/, 'the title truncates instead of pushing the buttons out')
+  assert.match(card, /whiteSpace: 'nowrap'/, 'the title stays on one line')
+  assert.match(card, /flexWrap: 'nowrap'/, 'the buttons never wrap onto a second line')
+  assert.match(card, /flex: '1 1 auto'/, 'the title takes the free space')
+  assert.match(card, /flex: '0 0 auto'/, 'and the buttons keep their width')
+})
+
+
+// ---------------------------------------------------------------------------
+// ⑤ THE CARD IS A RESTART RESULT, NOT A MONITOR (user decision, 2026-11-02).
+//
+// It used to fetch plugin-watch and plugin-inventory on every refresh of the
+// shared payload, so it could pop up in the middle of a session. The judgement
+// now belongs to a BOOT: it runs once, the result is recorded under a key that
+// carries the boot identity, and nothing — file changes, plugin installs, the
+// payload polling, a page refresh — judges again inside that same boot. A new
+// boot (the next restart) judges again.
+//
+// The three helpers below are real functions the panel calls; the effect that
+// spends them is checked at the source level because this repository has no
+// render harness for the overlay slot.
+// ---------------------------------------------------------------------------
+
+const bootIdOf = model && typeof model.pluginFailureBootId === 'function' ? model.pluginFailureBootId : null
+const judgedKeyOf = model && typeof model.pluginFailureJudgedKey === 'function' ? model.pluginFailureJudgedKey : null
+const fingerprintOf = model && typeof model.pluginFailureFingerprint === 'function' ? model.pluginFailureFingerprint : null
+
+test('the boot identity is read from the health payload, bootId first', () => {
+  assert.equal(typeof bootIdOf, 'function', 'pluginFailureBootId must be published for the tests')
+  assert.equal(bootIdOf({ bootId: 'boot-a' }), 'boot-a')
+  assert.equal(bootIdOf({ generation: 7 }), '7', 'generation is the fallback and becomes text')
+  assert.equal(bootIdOf({ bootId: 'boot-a', generation: 7 }), 'boot-a', 'bootId wins over generation')
+  assert.equal(bootIdOf({ health: { bootId: 'nested' } }), 'nested', 'a nested payload is accepted too')
+  assert.equal(bootIdOf({ health: { generation: 3 } }), '3', 'and so is a nested generation')
+  assert.equal(bootIdOf({ bootId: '   ' }), '', 'a blank identity is no identity')
+  assert.equal(bootIdOf(null), '')
+  assert.equal(bootIdOf({}), '')
+})
+
+test('① the record is per boot: one key for one boot, a different key for the next', () => {
+  assert.equal(typeof judgedKeyOf, 'function', 'pluginFailureJudgedKey must be published for the tests')
+  assert.equal(judgedKeyOf('boot-a'), judgedKeyOf('boot-a'), 'the same boot always looks in the same place')
+  assert.notEqual(judgedKeyOf('boot-a'), judgedKeyOf('boot-b'), 'a new boot cannot see the old record')
+  assert.match(judgedKeyOf('boot-a'), /boot-a/, 'the key carries the boot identity')
+  assert.equal(judgedKeyOf(''), judgedKeyOf(''), 'a Host that says nothing still gets one stable key')
+})
+
+test('the fingerprint names the report, so one boot can be recognised after a refresh', () => {
+  assert.equal(typeof fingerprintOf, 'function', 'pluginFailureFingerprint must be published')
+  assert.equal(fingerprintOf(null), '')
+  assert.equal(
+    fingerprintOf({ certain: [{ name: 'b' }, { name: 'a' }], clues: [{ name: 'z' }] }),
+    fingerprintOf({ certain: [{ name: 'a' }, { name: 'b' }], clues: [{ name: 'z' }] }),
+    'the order of the payloads does not change the identity',
+  )
+  assert.notEqual(
+    fingerprintOf({ certain: [{ name: 'a' }], clues: [] }),
+    fingerprintOf({ certain: [{ name: 'a' }], clues: [{ name: 'z' }] }),
+    'a different report is a different identity',
+  )
+})
+
+test('②③④ the panel judges once per boot, records it, and never polls again', () => {
+  // ② a judgement already recorded for this boot stops the effect before it
+  assert.ok(
+    panel.includes('if (judgedRecord(judgedKey) !== null) return undefined'),
+    'the effect returns early when this boot was already judged',
+  )
+  // ④ the effect is keyed on the BOOT, not on the live payload that keeps
+  // refreshing — that is what used to make it a monitor.
+  assert.match(panel, /\}, \[judgedKey\]\)/, 'the effect depends on the boot identity alone')
+  assert.equal(
+    /\}, \[info\]\)/.test(panel),
+    false,
+    'nothing re-runs the judgement when the shared payload refreshes',
+  )
+  assert.equal(
+    /setInterval\(/.test(panel),
+    false,
+    'no timer: the judgement is an event, not a poll',
+  )
+  // ① a mount that arrives after the judgement shows nothing
+  assert.match(
+    panel,
+    /if \(!judgedHere && judgedRecord\(judgedKey\) !== null\) return null/,
+    'a second mount of the same boot stays silent',
+  )
+  // The judgement is recorded even when it has nothing to report — otherwise a
+  // file changed later in the same boot would make the card appear.
+  assert.match(
+    panel,
+    /window\.localStorage\.setItem\(judgedKey/,
+    'the boot record is written by the judgement itself',
+  )
+  assert.match(panel, /setJudgedHere\(true\)/, 'and the panel knows the judgement was its own')
+  // ③ dismiss is boot-scoped as well.
+  const dismissAt = panel.indexOf('const dismiss = () => {')
+  assert.notEqual(dismissAt, -1, 'the dismiss handler is still there')
+  const dismissBody = panel.slice(dismissAt, dismissAt + 700)
+  assert.match(dismissBody, /judgedKey/, 'dismissing writes the boot record too')
+  assert.match(dismissBody, /PLUGIN_FAILURE_DISMISS_KEY/, 'and keeps the single-report fingerprint')
+})
+
+// ---------------------------------------------------------------------------
+// ① NO DEAD HELPER LEFT BEHIND (2026-11-02).
+//
+// backupFallbackText drew the one-line-per-unverified-copy view. That view is
+// gone (unverified copies are not listed at all any more), so the helper had no
+// caller. Keeping it would be a loaded gun: the next person to see it would wire
+// it back into the page. It must stay deleted, and nothing may reference it.
+// ---------------------------------------------------------------------------
+
+test('the dead helper backupFallbackText is gone, and nothing references it', () => {
+  assert.equal(
+    clientSource.includes('backupFallbackText'),
+    false,
+    'the helper and every mention of it are gone from client.js',
+  )
+})
+

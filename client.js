@@ -407,6 +407,10 @@
     // two different things to promise about.
     'settings.backup.fallback.seed': '另有一份首装备份（只含设置、未验证，仅在前一份不可用时才用），{time}，{size}',
     'settings.backup.fallback.other': '另有一份未验证的备份（不会被自动还原，仅在前一份不可用时才用），{time}，{size}',
+    // THE FOLD (user report, 2026-11-02): fifteen copies used to be fifteen
+    // sentences. The first two stay; the rest are behind this one line, and the
+    // line says how many and what they are worth.
+    'settings.backup.othersSummary': '另有 {n} 份重启前自动拍的备份（未验证，不会自动还原）',
     // WHY THIS COPY COUNTS AS SAFE (2026-11-01, strict mode). The label alone
     // ("safe copy") was the thing that lied in the incident: it never said WHO
     // checked WHAT. Every row therefore names its evidence, and a copy nobody
@@ -479,6 +483,12 @@
     'settings.rescue.shortcutDone': '已在桌面',
     'settings.rescue.noDesktop': '这台机器上没有桌面目录，所以放不了快捷方式（脚本的路径在上面，可以手动复制过去）。',
     'settings.rescue.noDesktopPlatform': '网页版 / 服务器版没有桌面，所以没有这个一键入口；请用上面两个 .sh 脚本。',
+    // PLAN B (user decision, 2026-11-02): a host without a desktop shows the
+    // SAME rescue entry as a copyable command, not a dead-end explanation.
+    'settings.rescue.commandLabel': '救援入口（命令）',
+    'settings.rescue.copyCommand': '复制命令',
+    'settings.rescue.commandHint': '复制这条命令执行，效果和桌面上双击那个入口一样。',
+    'settings.rescue.commandUnavailable': '这台机器上没有找到可用的救援命令。',
     'settings.rescue.shortcutScope': '它只能把整个环境退回上一次好状态，不能只摘掉某一个插件；只想摘某个插件，请用上面「某个插件起不来」。',
     'settings.rescue.shortcutBlocked': '系统策略不允许创建快捷方式（比如组策略或权限限制）。把下面的脚本路径复制出来，手动放到桌面：',
     'settings.rescue.shortcutWriteFailed': '快捷方式没写成功：{message}。把下面的脚本路径复制出来，手动放到桌面：',
@@ -886,6 +896,7 @@
     // as a card with a button next to it.
     'settings.backup.fallback.seed': 'There is also a first-install seed copy (settings only, not verified, used only when the copy above is unavailable), {time}, {size}',
     'settings.backup.fallback.other': 'There is also an unverified copy (never restored automatically, used only when the copy above is unavailable), {time}, {size}',
+    'settings.backup.othersSummary': '{n} more pre-restart snapshots (unverified, never restored automatically)',
     // WHY THIS COPY COUNTS AS SAFE (2026-11-01, strict mode). The label alone
     // ("known good") was the thing that lied in the incident: it never said WHO
     // checked WHAT. Every row therefore names its evidence, and a copy nobody
@@ -956,6 +967,10 @@
     'settings.rescue.shortcutDone': 'It is on the desktop',
     'settings.rescue.noDesktop': 'This machine has no desktop directory, so no shortcut can be placed (the paths are above — copy them by hand).',
     'settings.rescue.noDesktopPlatform': 'The web / server version has no desktop, so there is no one-click entry here; use the two .sh scripts above.',
+    'settings.rescue.commandLabel': 'Rescue entry (command)',
+    'settings.rescue.copyCommand': 'Copy the command',
+    'settings.rescue.commandHint': 'Copy this command and run it — the same effect as double-clicking the desktop entry.',
+    'settings.rescue.commandUnavailable': 'No usable rescue command was found on this machine.',
     'settings.rescue.shortcutScope': 'It can only put the WHOLE environment back to the last good state — it cannot take one plugin out; for that, use "A plugin will not start" above.',
     'settings.rescue.shortcutBlocked': 'A system policy does not allow creating the shortcut (a group policy or a permission limit). Copy the script path below and put it on the desktop by hand:',
     'settings.rescue.shortcutWriteFailed': 'The shortcut was not written: {message}. Copy the script path below and put it on the desktop by hand:',
@@ -2420,29 +2435,6 @@
     const key = backupKindKey(item)
     if (key === 'seed') return t('settings.backup.certified.seed')
     return t('settings.backup.kind.' + key)
-  }
-
-  /**
-   * THE ONE LINE a copy gets when it is NOT the one automatic recovery would
-   * use (user decision, 2026-11-02).
-   *
-   * Why a line and not a card: the page must answer "which copy saves me?"
-   * with exactly one card. Everything else is still LISTED — hiding it would
-   * hide the disk usage and the fact that a fallback exists — but as one small
-   * line that says what it is, when it was taken and how big it is, and carries
-   * no button at all: restoring something that was never proven must not be one
-   * click away from a user who came here to be safe.
-   *
-   * @param {(key: string) => string} t
-   * @param {object|null|undefined} item
-   * @returns {string}
-   */
-  function backupFallbackText(t, item) {
-    const seed = Boolean(item && item.certifiedBy === 'seed')
-    return fillTemplate(t('settings.backup.fallback.' + (seed ? 'seed' : 'other')), {
-      time: formatBackupTime(item && item.atLocal),
-      size: formatBackupSize(item && item.bytes),
-    })
   }
 
   /**
@@ -6511,6 +6503,15 @@
         // hiding the whole block (user report, 2026-11-02).
         const rescuePlatform = typeof rescueKit.platform === 'string' ? rescueKit.platform : ''
         const rescueIsWindows = rescuePlatform === 'win32'
+        // THE RESCUE ENTRY ON A HOST WITHOUT A DESKTOP (plan B, user decision
+        // 2026-11-02). The desktop build offers a `.lnk` on the desktop; a hosted
+        // web / server host has no desktop, so the same entry is a COPYABLE
+        // COMMAND — the restore script the Host already resolved. '' means the
+        // Host has none, and the page says so instead of inventing a path.
+        const rescueCommand = (() => {
+          const entry = rescuePaths.find((item) => item && item.key === 'restoreProfile')
+          return entry && typeof entry.path === 'string' ? entry.path.trim() : ''
+        })()
         // The file name of the shortcut on the desktop (a `.lnk` since
         // 2026-11-02 — the host names it, so page and disk cannot disagree).
         const rescueShortcutName = typeof rescueKit.shortcutName === 'string' && rescueKit.shortcutName !== ''
@@ -7565,28 +7566,33 @@
                   ),
                 ),
               )),
-              // EVERY OTHER COPY IS ONE SMALL LINE, WITH NO BUTTON (user
-              // decision, 2026-11-02). It stays visible — hiding it would hide
-              // the disk usage and the fact that a fallback exists — but it is
-              // not drawn as an equal card: the page must answer "which copy
-              // saves me?" with exactly one card, and a snapshot or a seed is
-              // never the answer.
-              backupItems.filter((item) => !isSafeBackup(item)).map((item, index) => h(
-                'div',
-                {
-                  className: 'dsh-autorestart-settings__backup-other',
-                  'data-dsh-autorestart-backup': 'other',
-                  key: 'backup-other-' + index,
-                },
-                h(
+              // NOT ONE ENTRY FOR THEM (user decision, 2026-11-02, plan B): an
+              // unverified copy can never be rolled back, so listing those copies
+              // — even behind a fold — is noise on the page whose whole job is to
+              // answer "which copy saves me?". They get ONE grey line with the
+              // count and nothing else: no card, no button, no entries to mistake
+              // for a usable backup.
+              (() => {
+                const others = backupItems.filter((item) => !isSafeBackup(item))
+                if (others.length === 0) return null
+                // THE ONE GREY LINE (plan B). It replaces the per-copy lines this
+                // block used to draw: the count is the whole message, because a
+                // copy that can never be rolled back has nothing else to say.
+                const lineOf = (count) => h(
                   'span',
                   {
                     className: 'dsh-autorestart-settings__backup-note',
-                    'data-dsh-autorestart-backup': 'other-line',
+                    'data-dsh-autorestart-backup': 'others-summary',
+                    'data-others-count': String(count),
                   },
-                  backupFallbackText(t, item),
-                ),
-              )),
+                  fillTemplate(t('settings.backup.othersSummary'), { n: count }),
+                )
+                return h(
+                  'div',
+                  { className: 'dsh-autorestart-settings__backup-others', 'data-dsh-autorestart-backup': 'others' },
+                  lineOf(others.length),
+                )
+              })(),
               // THE SECOND CONFIRMATION OF A MANUAL ROLLBACK (user decision,
               // 2026-10-30): it names the copy, says that the current state is
               // replaced (and that it is saved first), and says that a restart
@@ -8036,10 +8042,16 @@
                 )
               : null,
           ),
-          // "IF DSH WILL NOT START": the two rescue scripts, where they are, and
-          // the way to get them onto the desktop. A user whose host is down
-          // cannot open a README — they need the path, and they need to be
-          // able to copy it.
+          // "IF DSH WILL NOT START": the rescue scripts, where they are, and the
+          // way to reach them. A user whose host is down cannot open a README —
+          // they need the path, and they need to be able to copy it.
+          //
+          // BOTH ENDS SHOW IT (user decision, 2026-11-02, plan B): the desktop
+          // build keeps its rescue entry, and the hosted / web page shows the
+          // SAME group with the SAME title and the SAME entries — the only thing
+          // that changes is that a hosted host has no desktop, so the
+          // "double-click this .lnk" row becomes a COPYABLE COMMAND instead of
+          // being explained away with "the web version has no desktop".
           h(
             'div',
             {
@@ -8063,10 +8075,11 @@
             // come from the Host (the browser never guesses them) and each one
             // has a copy button.
             //
-            // On Windows the desktop entry is the main door, so the paths sit
-            // behind 详情 — but they unfold themselves when there is no desktop
-            // entry to use instead. On every other platform there IS no desktop
-            // entry, so the paths are never folded: they are the only way.
+            // Where there IS a desktop entry, the paths sit behind 详情 (the
+            // entry is the main door). Where there is NO desktop (a hosted host,
+            // or a desktop app whose desktop directory could not be found) the
+            // paths are the only way, so they are never folded — same shape on
+            // both ends, keyed on "is there a desktop entry here", not on the OS.
             rescuePaths.length === 0
               ? null
               : (() => {
@@ -8100,7 +8113,7 @@
                     }, t('settings.rescue.copyPath')),
                   )),
                 )
-                if (rescueIsWindows === false) return list
+                if (rescueDesktop === '') return list
                 const pathsOpen = rescuePathsOpen || rescueDesktop === ''
                 return h(
                   'details',
@@ -8118,59 +8131,114 @@
                   list,
                 )
               })(),
-            // THE DESKTOP ENTRY, SHOWN AS IT WILL LOOK (user report, 2026-11-02):
-            // the user could not find the shortcut (the desktop directory was
-            // guessed, so a moved desktop was simply not where the plugin
-            // wrote), and could not recognise it (a `.cmd` cannot carry an icon,
-            // so it sat there as a blank white page). It is a `.lnk` with DSH's
-            // icon now, and this block shows the icon and the file name BEFORE
-            // the button — so "what am I looking for on the desktop?" is
-            // answered on screen.
+            // THE RESCUE ENTRY, SHOWN THE SAME WAY ON BOTH ENDS (plan B, user
+            // decision 2026-11-02). On a machine WITH a desktop this is the
+            // `.lnk` the user is looking for — its icon and its file name, so
+            // "what am I looking for on the desktop?" is answered on screen, and
+            // one button puts it there. On a host WITHOUT a desktop (a hosted web
+            // / server install) the SAME entry is a COPYABLE COMMAND: copy it,
+            // run it, and it does what the double-click would have done. The
+            // group is never removed and never explained away — only the shape of
+            // this one entry changes, and when the Host has no path at all the
+            // page says so instead of inventing one.
             h(
               'div',
               { className: 'dsh-autorestart-settings__field', 'data-dsh-autorestart-rescue': 'shortcut-block' },
-              h(
-                'div',
-                { className: 'dsh-autorestart-settings__shortcut' },
-                h(
-                  'span',
-                  {
-                    className: 'dsh-autorestart-settings__shortcut-icon',
-                    'data-dsh-autorestart-rescue': 'shortcut-icon',
-                    // WHICH FILE THIS ICON IS: the same one the `.lnk` gets, or
-                    // nothing at all — never a made-up picture.
-                    'data-icon-source': rescueIconName,
-                    'data-icon-available': rescueIconAvailable ? 'true' : 'false',
-                    'aria-hidden': 'true',
-                    title: rescueIconPath,
-                  },
-                  'DSH',
-                ),
-                h(
-                  'span',
-                  {
-                    className: 'dsh-autorestart-settings__shortcut-name',
-                    'data-dsh-autorestart-rescue': 'shortcut-name',
-                  },
-                  rescueShortcutName,
-                ),
-              ),
-              // The button lives only where it can work: a Windows machine with a
-              // desktop. Everywhere else the block still explains itself below
-              // instead of leaving an empty gap.
-              rescueIsWindows && rescueDesktop !== ''
+              rescueDesktop === ''
                 ? h(
-                    'button',
-                    {
-                      type: 'button',
-                      className: 'dsh-autorestart-settings__button',
-                      disabled: busy,
-                      'data-dsh-autorestart-rescue': 'shortcut',
-                      onClick: () => void createRescueShortcut(),
-                    },
-                    rescueShortcutExists ? t('settings.rescue.shortcutDone') : t('settings.rescue.shortcut'),
+                    'div',
+                    { className: 'dsh-autorestart-settings__field', 'data-dsh-autorestart-rescue': 'rescue-command' },
+                    h(
+                      'span',
+                      { className: 'dsh-autorestart-settings__label', 'data-dsh-autorestart-rescue': 'command-label' },
+                      t('settings.rescue.commandLabel'),
+                    ),
+                    rescueCommand === ''
+                      ? h(
+                          'span',
+                          {
+                            className: 'dsh-autorestart-settings__hint',
+                            'data-dsh-autorestart-rescue': 'command-unavailable',
+                          },
+                          t('settings.rescue.commandUnavailable'),
+                        )
+                      : [
+                          h(
+                            'code',
+                            {
+                              className: 'dsh-autorestart-settings__value',
+                              'data-dsh-autorestart-rescue': 'command',
+                              key: 'rescue-command-value',
+                            },
+                            rescueCommand,
+                          ),
+                          h(
+                            'button',
+                            {
+                              type: 'button',
+                              className: 'dsh-autorestart-settings__button',
+                              disabled: busy,
+                              'data-dsh-autorestart-rescue': 'copy-command',
+                              key: 'rescue-command-copy',
+                              onClick: () => void copyRescuePath(rescueCommand),
+                            },
+                            t('settings.rescue.copyCommand'),
+                          ),
+                          h(
+                            'span',
+                            {
+                              className: 'dsh-autorestart-settings__hint',
+                              'data-dsh-autorestart-rescue': 'command-hint',
+                              key: 'rescue-command-hint',
+                            },
+                            t('settings.rescue.commandHint'),
+                          ),
+                        ],
                   )
-                : null,
+                : [
+                    h(
+                      'div',
+                      { className: 'dsh-autorestart-settings__shortcut', key: 'rescue-shortcut-row' },
+                      h(
+                        'span',
+                        {
+                          className: 'dsh-autorestart-settings__shortcut-icon',
+                          'data-dsh-autorestart-rescue': 'shortcut-icon',
+                          // WHICH FILE THIS ICON IS: the same one the `.lnk`
+                          // gets, or nothing at all — never a made-up picture.
+                          'data-icon-source': rescueIconName,
+                          'data-icon-available': rescueIconAvailable ? 'true' : 'false',
+                          'aria-hidden': 'true',
+                          title: rescueIconPath,
+                        },
+                        'DSH',
+                      ),
+                      h(
+                        'span',
+                        {
+                          className: 'dsh-autorestart-settings__shortcut-name',
+                          'data-dsh-autorestart-rescue': 'shortcut-name',
+                        },
+                        rescueShortcutName,
+                      ),
+                    ),
+                    // The button lives only where it can work: a Windows machine
+                    // with a desktop.
+                    rescueIsWindows
+                      ? h(
+                          'button',
+                          {
+                            type: 'button',
+                            className: 'dsh-autorestart-settings__button',
+                            disabled: busy,
+                            'data-dsh-autorestart-rescue': 'shortcut',
+                            key: 'rescue-shortcut-button',
+                            onClick: () => void createRescueShortcut(),
+                          },
+                          rescueShortcutExists ? t('settings.rescue.shortcutDone') : t('settings.rescue.shortcut'),
+                        )
+                      : null,
+                  ],
               rescueNote === ''
                 ? null
                 : h(
@@ -8193,16 +8261,8 @@
                 { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-rescue': 'shortcut-scope' },
                 t('settings.rescue.shortcutScope'),
               ),
-              // NO DESKTOP AT ALL: said out loud, per platform. A hosted web /
-              // server install has no desktop by design, so the sentence names
-              // the scripts to use instead of hiding the whole block.
-              rescueIsWindows === false
-                ? h(
-                    'span',
-                    { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-rescue': 'no-desktop-platform' },
-                    t('settings.rescue.noDesktopPlatform'),
-                  )
-                : null,
+              // A Windows desktop app whose desktop directory could not be found:
+              // no shortcut can be placed, and the paths above are the way out.
               rescueIsWindows && rescueDesktop === ''
                 ? h(
                     'span',
@@ -9536,16 +9596,47 @@
         const title = props ? props.title : ''
         const onClose = props && typeof props.onClose === 'function' ? props.onClose : () => {}
         const rows = props && Array.isArray(props.rows) ? props.rows : []
+        // CARD-LEVEL ACTIONS LIVE IN THE HEADER (user report, 2026-11-02): buttons
+        // that apply to the WHOLE card used to sit at the bottom of the list, so
+        // they looked like they belonged to the last item in it. The header owns
+        // them now — title on the left (it truncates), actions on the right.
+        const actions = props && Array.isArray(props.actions) ? props.actions : []
         const header = h('div', {
           key: 'overlay-header',
+          'data-dsh-autorestart-overlay-header': id,
           style: {
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
             gap: '8px',
+            flexWrap: 'nowrap',
           },
         },
-        h('strong', { key: 'overlay-title', style: { fontSize: '14px', lineHeight: '1.4', color: 'var(--dsw-alias-label-primary, #111111)' } }, title),
+        h('strong', {
+          key: 'overlay-title',
+          style: {
+            flex: '1 1 auto',
+            minWidth: '0',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            fontSize: '14px',
+            lineHeight: '1.4',
+            color: 'var(--dsw-alias-label-primary, #111111)',
+          },
+        }, title),
+        h('div', {
+          key: 'overlay-actions',
+          'data-dsh-autorestart-overlay-actions': id,
+          style: {
+            flex: '0 0 auto',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            flexWrap: 'nowrap',
+          },
+        },
+        actions,
         h('button', {
           type: 'button',
           key: 'overlay-close',
@@ -9563,7 +9654,7 @@
             lineHeight: '1',
             padding: '2px 8px',
           },
-        }, '\u00d7'))
+        }, '\u00d7')))
 
         const body = [header, ...rows]
 
@@ -9906,6 +9997,7 @@
       function PluginFailurePanel() {
         const info = useSharedInfo(true)
         const [loaded, setLoaded] = useState(null)
+        const [judgedHere, setJudgedHere] = useState(false)
         const [busy, setBusy] = useState('')
         const [note, setNote] = useState('')
         const [dismissed, setDismissed] = useState(() => {
@@ -9917,9 +10009,46 @@
         })
         const t = makeTranslate(translate)
 
-        // Every source is optional: a route that fails leaves its half out and the
-        // panel still shows the other half. Neither failure may take the panel down.
+        // The pure helpers live in the second module and are reachable through
+        // the global namespace, like `buildPluginFailureModel` above.
+        const helpers = globalThis.__dshAutorestartClient
+        const build = helpers && typeof helpers.buildPluginFailureModel === 'function'
+          ? helpers.buildPluginFailureModel
+          : null
+        const bootIdOf = helpers && typeof helpers.pluginFailureBootId === 'function'
+          ? helpers.pluginFailureBootId
+          : () => ''
+        const judgedKeyOf = helpers && typeof helpers.pluginFailureJudgedKey === 'function'
+          ? helpers.pluginFailureJudgedKey
+          : () => PLUGIN_FAILURE_DISMISS_KEY
+        const fingerprintOf = helpers && typeof helpers.pluginFailureFingerprint === 'function'
+          ? helpers.pluginFailureFingerprint
+          : () => ''
+
+        // WHICH BOOT IS THIS? (user decision, 2026-11-02.) This card reports the
+        // RESULT of a restart, so the boot identity — not the passing time —
+        // decides when it may appear: `bootId` when the Host sends one,
+        // `generation` when it does not (see pluginFailureBootId).
+        const bootId = bootIdOf(info)
+        const judgedKey = judgedKeyOf(bootId)
+
+        /** The record an earlier judgement of a boot left behind, or null. */
+        const judgedRecord = (key) => {
+          try {
+            const stored = window.localStorage.getItem(key)
+            return stored === null || stored === '' ? null : stored
+          } catch {
+            return null
+          }
+        }
+
+        // THE JUDGEMENT IS THE RESTART EVENT, NOT A LIVE READING. Two requests,
+        // once, on the first mount of this boot — no polling, and nothing that
+        // re-runs when the shared payload refreshes. The effect is keyed on the
+        // boot identity alone, so a page refresh inside the same boot does not
+        // judge again, and the next boot does.
         useEffect(() => {
+          if (judgedRecord(judgedKey) !== null) return undefined
           let alive = true
           const get = async (url) => {
             try {
@@ -9934,21 +10063,34 @@
             const watch = await get(pluginWatchUrlFor(info))
             const inventory = await get(pluginInventoryUrlFor(info))
             if (alive !== true) return
+            // THE RECORD IS WRITTEN EVEN WHEN THERE IS NOTHING TO REPORT: "this
+            // boot was judged" is the whole point, so a file that changes later
+            // in the same boot cannot make the card appear out of nowhere.
+            const modelNow = build === null ? null : build({ watch, inventory })
+            try {
+              window.localStorage.setItem(judgedKey, JSON.stringify({
+                at: Date.now(),
+                boot: bootId,
+                fingerprint: fingerprintOf(modelNow),
+              }))
+            } catch {}
+            setJudgedHere(true)
             setLoaded({ watch, inventory })
           })()
           return () => { alive = false }
-        }, [info])
+        }, [judgedKey])
 
-        const build = globalThis.__dshAutorestartClient
-          && typeof globalThis.__dshAutorestartClient.buildPluginFailureModel === 'function'
-          ? globalThis.__dshAutorestartClient.buildPluginFailureModel
-          : null
+        // AN EARLIER MOUNT OF THIS BOOT ALREADY JUDGED: nothing to show, and
+        // nothing to ask the Host either (the effect above returned early).
+        if (!judgedHere && judgedRecord(judgedKey) !== null) return null
+
         if (loaded === null || build === null) return null
         const model = build({ watch: loaded.watch, inventory: loaded.inventory })
         if (model === null) return null
 
-        // The fingerprint is THIS report's identity, so dismissing silences this
-        // boot only: a new reading makes a new fingerprint and comes back.
+        // The fingerprint is WHICH report this is, so dismissing silences this
+        // one for the rest of the boot; the boot record keeps it silent even
+        // after a page refresh.
         const fingerprint = (model.certain || []).map((entry) => entry.name).sort().join(',')
           + '|' + (model.clues || []).map((entry) => entry.name).sort().join(',')
         if (dismissed !== '' && dismissed === fingerprint) return null
@@ -9969,15 +10111,29 @@
             setBusy('')
           })()
         }
+        // DISMISS IS BOOT-SCOPED TOO (user decision, 2026-11-02): the record for
+        // this boot already exists (it is written at judgement time), so the card
+        // stays away for the rest of the boot — including after a page refresh —
+        // and the next boot judges again. The fingerprint is stored as well so a
+        // single report can be silenced without silencing the boot.
+        // «全部恢复» needs no extra work for the same reason: it acts on the
+        // judgement that this boot already made.
         const dismiss = () => {
           setDismissed(fingerprint)
           try { window.localStorage.setItem(PLUGIN_FAILURE_DISMISS_KEY, fingerprint) } catch {}
+          try {
+            if (judgedRecord(judgedKey) === null) {
+              window.localStorage.setItem(judgedKey, JSON.stringify({ at: Date.now(), boot: bootId, fingerprint }))
+            }
+          } catch {}
         }
 
         const rows = []
         const line = (key, text) => rows.push(h('p', { className: 'dsh-autorestart-announcement__line', key }, text))
 
-        rows.push(h('p', { className: 'dsh-autorestart-announcement__note', key: 'title' }, t('pluginFailure.title')))
+        // NO SECOND TITLE LINE (user report, 2026-11-02): the card header already
+        // says «有两件事要你看一下», and repeating it as the first paragraph made
+        // the panel look like it had two headings.
 
         const certain = Array.isArray(model.certain) ? model.certain : []
         if (certain.length > 0) {
@@ -10018,11 +10174,17 @@
         // ONE BUTTON FOR ALL OF THEM. Only plugins we wrote ourselves are in it:
         // a third-party plugin has no files in the backup, so "restore" cannot be
         // offered for it - those keep their reinstall hint instead.
+        //
+        // IT BELONGS TO THE CARD, SO IT SITS IN THE HEADER (user report,
+        // 2026-11-02): at the bottom of the list it read like "restore all" applied
+        // to the last plugin only. Same for «知道了».
         const linkedClues = clues.filter((entry) => entry.kind === 'linked')
+        const actions = []
         if (linkedClues.length > 1) {
-          rows.push(h('button', {
+          actions.push(h('button', {
             type: 'button',
             className: 'dsh-autorestart-announcement__cta',
+            'data-dsh-autorestart-plugin-failure': 'restore-all',
             key: 'restore-all',
             disabled: busy !== '',
             onClick: () => restoreAll(linkedClues),
@@ -10037,15 +10199,23 @@
         }
         if (note !== '') rows.push(h('p', { className: 'dsh-autorestart-announcement__note', key: 'note' }, note))
 
-        rows.push(h('button', {
+        actions.push(h('button', {
           type: 'button',
           className: 'dsh-autorestart-announcement__cta',
+          'data-dsh-autorestart-plugin-failure': 'dismiss',
           key: 'dismiss',
           title: t('pluginFailure.dismissLabel'),
           onClick: dismiss,
         }, t('pluginFailure.dismiss')))
 
-        return overlayCard('plugin-failure', t('pluginFailure.title'), dismiss, rows.concat([overlayHint(t('pluginFailure.hint'))]))
+        return h(OverlayCard, {
+          key: 'overlay-plugin-failure',
+          id: 'plugin-failure',
+          title: t('pluginFailure.title'),
+          onClose: dismiss,
+          rows: rows.concat([overlayHint(t('pluginFailure.hint'))]),
+          actions,
+        })
       }
 
       return {
@@ -10272,6 +10442,73 @@
   }
 
   /**
+   * THE BOOT THIS PAGE BELONGS TO (user decision, 2026-11-02).
+   *
+   * The plugin card reports the RESULT of a restart, so it is judged once per
+   * boot — not monitored. The identity comes from the health payload: `bootId`
+   * when the Host sends one, `generation` when it does not. Several wrappers are
+   * accepted because the payload is flat in some builds and nested in others;
+   * when the Host says nothing at all the identity is '' and the panel falls back
+   * to one judgement per page load (reporting once beats monitoring forever).
+   *
+   * @param {object|null} info the shared health payload
+   * @returns {string} the boot identity, or ''
+   */
+  function pluginFailureBootId(info) {
+    const read = (source, key) => {
+      if (source === null || typeof source !== 'object') return ''
+      const value = source[key]
+      if (typeof value === 'string' && value.trim() !== '') return value.trim()
+      if (typeof value === 'number' && Number.isFinite(value)) return String(value)
+      return ''
+    }
+    const holders = [info]
+    if (info !== null && typeof info === 'object') {
+      for (const key of ['health', 'status', 'instance', 'restart']) {
+        if (info[key] !== null && typeof info[key] === 'object') holders.push(info[key])
+      }
+    }
+    for (const key of ['bootId', 'boot', 'generation']) {
+      for (const holder of holders) {
+        const found = read(holder, key)
+        if (found !== '') return found
+      }
+    }
+    return ''
+  }
+
+  /**
+   * WHERE the "this boot was already judged" record lives: the key carries the
+   * boot identity, so a restart leaves the old record behind and the next boot
+   * starts clean.
+   *
+   * @param {string} bootId the identity from {@link pluginFailureBootId}
+   * @returns {string} the localStorage key
+   */
+  function pluginFailureJudgedKey(bootId) {
+    const id = typeof bootId === 'string' && bootId.trim() !== '' ? bootId.trim() : 'page'
+    return 'dsh-autorestart.plugin-failure.judged.' + id
+  }
+
+  /**
+   * The identity of one judgement: which functions are missing and which plugins
+   * differ. Stored with the boot record so the page can tell "already reported"
+   * from "the same report came back".
+   *
+   * @param {object|null} model a model from {@link buildPluginFailureModel}
+   * @returns {string}
+   */
+  function pluginFailureFingerprint(model) {
+    const names = (list) => (Array.isArray(list) ? list : [])
+      .map((entry) => (entry && typeof entry.name === 'string' ? entry.name : ''))
+      .filter((name) => name !== '')
+      .sort()
+      .join(',')
+    if (model === null || typeof model !== 'object') return ''
+    return names(model.certain) + '|' + names(model.clues)
+  }
+
+  /**
    * Merge the two data sources into the panel's model.
    *
    * @param {{ watch?: object|null, inventory?: object|null, profile?: string }} input
@@ -10340,6 +10577,9 @@
 
   const PLUGIN_FAILURE_EXPORTS = {
     buildPluginFailureModel,
+    pluginFailureBootId,
+    pluginFailureJudgedKey,
+    pluginFailureFingerprint,
     pluginFailureToolOwner,
     pluginFailurePackageName,
   }
