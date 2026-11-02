@@ -648,6 +648,23 @@ test('① the row button only ASKS — nothing is posted until the user confirms
   assert.ok(cardText.includes('2026-10-30 09:00'), `it names the copy: ${cardText}`)
   assert.ok(cardText.includes('当前状态会被它覆盖'), `it says what is replaced: ${cardText}`)
   assert.ok(cardText.includes('会自动重启'), `it says that a restart follows: ${cardText}`)
+  // THE FACT THE USER ASKED FOR, PINNED VERBATIM (2026-11-02): the restart after
+  // a rollback takes NO further backup. "A restart follows" alone would keep
+  // passing while that promise went missing, so the sentence itself is checked.
+  const restartLine = marked(asked, 'data-dsh-autorestart-backup').filter(
+    (node) => node.props['data-dsh-autorestart-backup'] === 'rollback-confirm-restart',
+  )
+  assert.equal(restartLine.length, 1, 'the restart sentence is its own line on the card')
+  assert.equal(
+    textOf(restartLine[0]),
+    '还原完成后会自动重启一次：回退前已自动存了一份可撤回的现场；回退后的这次重启不会再额外备份。重启期间这个页面会断开，回来后接着用。',
+    'verbatim — including that this restart takes no extra backup',
+  )
+  assert.equal(
+    textOf(restartLine[0]).includes('不会再额外备份'),
+    true,
+    'and that exact fact is in it, not only "a restart follows"',
+  )
 
   // CANCEL: still nothing posted, and the card goes away.
   const cancel = marked(asked, 'data-dsh-autorestart-backup').filter(
@@ -752,17 +769,23 @@ test('④ the panel no longer writes the old tier out — and the true sentences
     )
   }
   // ...WHILE THE SENTENCES THAT ARE TRUE ARE STILL THERE, verbatim: the deletion
-  // must not take them with it (they were checked against the real page).
+  // must not take them with it (they were checked against the real page). The copy
+  // block is TWO lines now (user report, 2026-11-02): line 1 counts the copies and
+  // the disk they take, line 2 states the rule — the paragraph and the bare fact
+  // that repeated that rule are gone.
   assert.match(
-    value('footprint'),
-    /^实际占用 [\d.]+ (B|KB|MB|GB)，当前 2 份$/,
-    'the real footprint, with the number of copies',
+    value('count'),
+    /^当前 2 份，实际占用 [\d.]+ (B|KB|MB|GB)。$/,
+    'line 1: the copies and the disk they take',
   )
   assert.equal(
-    value('purpose'),
-    '每次重启前自动拍的本地插件完整备份，最多保留 3 份，出问题可自行选择一份回档。',
-    'what the folder is for — and that ANY copy can be chosen',
+    value('keep'),
+    '最多保留 3 份，超出自动删最旧的那份。',
+    'line 2: the retention rule, with the limit in force',
   )
+  assert.equal(value('purpose'), '', 'the paragraph that repeated the limit is gone')
+  assert.equal(value('max-effective'), '', 'and so is the bare duplicate of it')
+  assert.equal(value('footprint'), '', 'and the separate footprint line it replaced')
   assert.equal(
     value('kinds-local'),
     '链接安装（自己写的）和本地化过的插件（目录里有 .git）都已完整备份，可以回档。',
@@ -775,8 +798,8 @@ test('④ the panel no longer writes the old tier out — and the true sentences
   )
   assert.equal(
     value('limit-hint'),
-    '备份会占用磁盘空间，请尽量选择较少的份数',
-    'the disk-space hint under the dropdown',
+    '备份会占用磁盘空间，建议尽量选更少的备份数。',
+    'the disk-space hint, now beside the dropdown',
   )
 })
 

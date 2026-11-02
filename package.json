@@ -42,6 +42,7 @@
     "locale/*.json",
     "icon.svg",
     "assets/*.png",
+    "assets/*.ico",
     "screenshots.json",
     "README.md",
     "CHANGELOG.md",

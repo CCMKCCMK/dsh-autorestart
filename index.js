@@ -4799,10 +4799,18 @@ const titleOfSummary = (item) => {
     }
     // ⑤ A NORMAL RESTART (the same request the pill makes). The plugin does not
     // kill anything itself; the restored profile is what comes back up.
+    //
+    // WITHOUT A SNAPSHOT OF ITS OWN (user decision, 2026-11-02): the state this
+    // restart brings back up is the copy the user just picked, and ② above has
+    // already written the undo copy of the live state. Copying the profile again
+    // here produced a duplicate of the restored state and pushed the older, still
+    // useful copies out of the list — the user said no to exactly that. So this
+    // request carries `skipBackup`, and the executor honours it.
     requestRestart(state, {
       reason: 'manual rollback to ' + target.name,
       bySessionId: 'settings',
       resume: false,
+      skipBackup: true,
       now: Date.now(),
     })
       markRestartStage('waiting')
@@ -4841,12 +4849,21 @@ const titleOfSummary = (item) => {
     env: process.env,
     platform: env.platform,
     exists: (target) => fs.existsSync(target),
-    // THE ICON OF THE SHORTCUT IS DSH'S OWN EXECUTABLE (2026-11-02): the host
-    // already knows it, and a shortcut with the program's icon is the one the
-    // user recognises on the desktop. When there is no desktop app (hosted
-    // `dsh web`, a server) there is no executable to borrow an icon from — the
-    // shortcut is then created without one instead of failing.
-    iconPath: env.appExePath || '',
+    // THE ICON OF THE SHORTCUT IS THE PLUGIN'S OWN (user decision, 2026-11-02).
+    //
+    // It used to be `env.appExePath` — DSH's executable — and that was wrong in
+    // the one moment it matters: a user looking at the desktop for a way out of
+    // a broken host saw a file with DSH's own face on it, which reads as "this
+    // is the program", not "this is the rescue tool". So the host executable is
+    // NOT passed here at all any more: `rescueInfo` resolves the plugin's own
+    // icon (`assets/icon.ico`) from the plugin directory, and when this install
+    // ships none the answer is "no icon" — never the wrong face.
+    //
+    // NO FALLBACK TO THE EXECUTABLE, and nothing is written at runtime: the icon
+    // is either in the package or absent. On a host with no desktop shell
+    // (`dsh web`, a server, WSL/Linux/macOS) the shortcut itself is not offered
+    // at all, so the icon is moot there — and on a Windows hosted host the icon
+    // now works, because it no longer depends on an app executable.
   })
 
   /**
@@ -5863,14 +5880,53 @@ const titleOfSummary = (item) => {
       // and now they say so.
       const stateDir = path.dirname(stateFile)
       resetSnapshotCancel()
+      // NO COPY FOR THIS REQUEST (user decision, 2026-11-02).
+      //
+      // A restart that carries out a MANUAL ROLLBACK must not snapshot: ② of
+      // `manualRollback` has just written the undo copy of the live state, and
+      // what is on disk now is the copy the user picked — copying the profile
+      // again only makes a duplicate of it and prunes the older, still useful
+      // copies out of the list. The request carries the fact (`skipBackup`), so
+      // this is not inferred from its reason text.
+      //
+      // ONLY THE COPY IS SKIPPED. The profile directory is still resolved and
+      // handed on, so the watchdog is armed through exactly the same branch as a
+      // restart that takes no snapshot because the operator turned
+      // `backupOnRestart` off: it still brings a host back up after a restart
+      // that never answered, and its report says there is no trusted restore
+      // point of this attempt.
+      const skipBackup = state.restart.skipBackup === true
       // HAS THIS REQUEST ALREADY PAID FOR ITS SNAPSHOT? (user report, 2026-10-30:
       // the copy finished, a conversation postponed the restart, and the retry
       // copied all 205 MB again.) Then it is reused as it is: same request, same
-      // directory, same manifest.
-      const paid = reusableSnapshot()
+      // directory, same manifest. A request that asks for NO copy never looks at
+      // that record: there is nothing to reuse.
+      const paid = skipBackup ? null : reusableSnapshot()
       let cancelled = false
       let snapshot = null
-      if (paid !== null) {
+      if (skipBackup) {
+        const skipProfile = resolveProfileDirDetailed()
+        const skipProfileDir = typeof skipProfile.dir === 'string' ? skipProfile.dir : null
+        snapshot = {
+          backup: null,
+          profileDir: skipProfileDir,
+          profile: {
+            dir: skipProfileDir,
+            source: typeof skipProfile.source === 'string' ? skipProfile.source : 'unknown',
+          },
+          // NOT requested: the record must not say "asked for, did not happen".
+          requested: false,
+          // The deliberate skip, named, so nothing downstream mistakes it for a
+          // failed copy.
+          skipped: true,
+          durationMs: 0,
+          error: null,
+        }
+        log.warn('this restart takes no pre-restart backup: it carries out a manual rollback', {
+          reason: state.restart && typeof state.restart.reason === 'string' ? state.restart.reason : null,
+          profileDir: skipProfileDir,
+        })
+      } else if (paid !== null) {
         log.warn('reusing the snapshot this restart already took; not copying the profile again', {
           dir: paid.dir,
           bytes: paid.bytes,
@@ -5962,7 +6018,9 @@ const titleOfSummary = (item) => {
       // or thrown — the stage leaves it. Everything after this point (arming the
       // watchdog, the supervisor hand-off, the command) is "the restart is being
       // executed", and a deferral from here on goes back to 'waiting'.
-      markRestartStage('restarting', { reason: 'snapshot done' })
+      markRestartStage('restarting', {
+        reason: skipBackup ? 'no snapshot for this restart (manual rollback)' : 'snapshot done',
+      })
       // The snapshot is the rollback point of BOTH branches.
       const backup = snapshot && snapshot.backup ? snapshot.backup : null
       const profileDir = snapshot && snapshot.profileDir ? snapshot.profileDir : null
@@ -6057,7 +6115,14 @@ const titleOfSummary = (item) => {
           backup,
           profileDir,
           durationMs: snapshot && Number.isFinite(snapshot.durationMs) ? snapshot.durationMs : null,
-          error: snapshot && snapshot.error ? snapshot.error : null,
+          // A DELIBERATE skip says so: without this the record fell back to the
+          // generic "the snapshot was not taken", which reads like a copy that
+          // failed. This one was not asked for, and the reason is a fact.
+          error: snapshot && snapshot.error
+            ? snapshot.error
+            : (skipBackup
+              ? 'no pre-restart backup on purpose: this restart carries out a manual rollback, and the undo copy that rollback wrote is its rollback point'
+              : null),
         }),
         checks: [],
       })

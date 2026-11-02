@@ -436,6 +436,8 @@ dsh plugin --profile desktop add C:\path\to\dsh-autorestart
 
 每个平台到底有什么、没有什么，看 [平台能力矩阵](platform-matrix.md)；设置页的「出事了怎么办」只显示**你这台机器上真有的**那两个路径。
 
+**桌面救援快捷方式（只有 Windows 有）。** 设置页可以一键在桌面放一个救援快捷方式，双击它就是跑 `restore-profile.cmd`。**它的图标用的是插件随包的 `assets/icon.ico`，不是 DSH 自己的可执行文件** —— 这是有意的：DSH 起不来的那台机器上，一个长着 DSH 脸的快捷方式读起来像「这就是那个程序」，而它恰恰是坏掉的那个。包内没有这个图标文件时，`.lnk` 照样创建，只是不写 `IconLocation`（不借用别的程序的脸，运行期也不生成图标）。其它平台不提供桌面快捷方式，设置页给的是可复制的还原脚本命令。
+
 **不用等 DSH 跑起来**就能把这个插件摘掉 —— 插件目录里带了一个一键开关：
 
 1. **Windows**：双击 `scripts\emergency-disable.cmd`；**Linux/WSL**：`sh scripts/emergency-disable.sh` —— 它会写清楚做了什么；

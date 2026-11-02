@@ -374,7 +374,12 @@
     'meta.description': '让 DeepSeek Harness 重启后接着干活：落盘的检查点、启动时重新武装 goal 或给一条续接提示，以及一次等人闲下来的优雅重启。',
     'text.missing': '（这条文案还没写）',
     'settings.backup.list': '现在备份了什么',
-    'settings.backup.count': '当前 {n} 份',
+    // TWO LINES, NOT FIVE (user report, 2026-11-02). One line says how many
+    // copies there are and how much disk they take together; the next one says
+    // the rule that keeps their number bounded. Everything else about the folder
+    // was a restatement of one of those two — or a number written into a
+    // sentence, where it went stale the moment the dropdown changed it.
+    'settings.backup.count': '当前 {n} 份，实际占用 {size}。',
     // THE FOLD SAYS WHAT IS INSIDE IT (user decision, 2026-11-02): with the
     // block collapsed, "某个插件起不来" was invisible — and that is the entry a
     // user needs on the day a plugin breaks.
@@ -384,13 +389,18 @@
     // "everything is fine".
     'settings.backup.multiProfile': '检测到多个 profile，备份和回滚已暂停：它不知道该备份哪一个。解决办法：启动时指定 DSH_PROFILE，或者只保留一个 profile。',
     'settings.backup.keep': '最多保留 {n} 份，超出自动删最旧的那份。',
-    'settings.backup.maxEffective': '最多保留 {n} 份',
-    'settings.backup.footprint': '实际占用 {size}，当前 {n} 份',
-    'settings.backup.purpose': '每次重启前自动拍的本地插件完整备份，最多保留 {n} 份，出问题可自行选择一份回档。',
+    // THE SECOND SENTENCE THE USER SAW TWICE IS GONE (user report, 2026-11-02):
+    // "最多保留 2 份" said the same thing as the line above, and the long
+    // paragraph about what the folder is for repeated the number a third time.
+    // Two lines say everything the page can promise; the dropdown below changes
+    // the number, so no sentence carries a frozen copy of it.
     'settings.backup.kindsLocal': '链接安装（自己写的）和本地化过的插件（目录里有 .git）都已完整备份，可以回档。',
     'settings.backup.kindsThirdParty': '第三方插件由插件作者维护，有异常建议重装',
     'settings.backup.limitLabel': '保留份数',
-    'settings.backup.limitHint': '备份会占用磁盘空间，请尽量选择较少的份数',
+    // THE DISK WARNING SITS NEXT TO THE DROPDOWN (user report, 2026-11-02): it
+    // used to be a line BELOW the control, so the warning arrived after the
+    // choice was made. Same place in the tree, right of the select.
+    'settings.backup.limitHint': '备份会占用磁盘空间，建议尽量选更少的备份数。',
     'settings.backup.limitAsk': '将删除 {remove} 份最旧的备份，删除后无法恢复。当前 {from} 份 → 保留 {to} 份。',
     'settings.backup.limitConfirm': '确认删除并改为保留 {to} 份',
     'settings.backup.limitCancel': '取消',
@@ -405,7 +415,7 @@
     'settings.backup.time': '备份时间',
     // THE SIZE OF ONE COPY IS NOT SHOWN, so its label is gone as well (user
     // decision, 2026-11-02): a row is a time and a button, and the disk a copy
-    // needs is only stated once for the whole folder (`settings.backup.footprint`).
+    // needs is only stated once for the whole folder (`settings.backup.count`).
     // A key nothing renders is a promise the page does not keep — the same reason
     // the identity keys went.
     'settings.backup.withPlugins': '（含已装插件）',
@@ -453,7 +463,7 @@
     'settings.backup.startupHint': '这是最近一次启动时的状态。DSH 能启动不代表插件都正常——坏掉的插件会被排除，主机照样起来。要回退到哪一份，请自己判断。',
     'settings.backup.rollbackConfirmTitle': '确定回退到这一份？',
     'settings.backup.rollbackConfirmBody': '会把 {time} 的那份备份还原到现在——**当前状态会被它覆盖**（覆盖前会先自动存一份当前快照，所以这次回退还能再退回来）。',
-    'settings.backup.rollbackConfirmRestart': '还原完成后会自动重启一次；重启期间这个页面会断开，回来后接着用。',
+    'settings.backup.rollbackConfirmRestart': '还原完成后会自动重启一次：回退前已自动存了一份可撤回的现场；回退后的这次重启不会再额外备份。重启期间这个页面会断开，回来后接着用。',
     'settings.backup.rollbackConfirmYes': '确认回退',
     'settings.backup.rollbackConfirmNo': '取消',
     'settings.backup.rollbackBusy': '正在回退…',
@@ -874,17 +884,14 @@
     'meta.description': 'Keeps agent work alive across a DeepSeek Harness restart: a durable checkpoint, goal re-arm or a continuation message on boot, and an idle-aware graceful restart the agent can request itself.',
     'text.missing': '(this text is missing yet)',
     'settings.backup.list': 'What is backed up right now',
-    'settings.backup.count': '{n} copies right now',
+    'settings.backup.count': '{n} copies right now, using {size}.',
     'settings.backup.sectionNote': 'Contains: a plugin will not start? Put it back to the previous version',
     'settings.backup.multiProfile': 'More than one profile was found, so backups and rollbacks are paused: it cannot tell which one to back up. Fix it by starting with DSH_PROFILE set, or by keeping a single profile.',
     'settings.backup.keep': 'At most {n} copies are kept; the oldest one is deleted when there are more.',
-    'settings.backup.maxEffective': 'At most {n} copies are kept',
-    'settings.backup.footprint': 'Using {size} on disk, {n} copies right now',
-    'settings.backup.purpose': 'A complete backup of the local plugins, taken before every restart; at most {n} copies are kept, and you can roll back to any one you pick.',
     'settings.backup.kindsLocal': 'Both linked plugins (written by hand) and localized ones (their directory has a .git) are in the copy in full, so they can be rolled back.',
     'settings.backup.kindsThirdParty': 'Third-party plugins are maintained by their authors; if something is wrong, reinstall them.',
     'settings.backup.limitLabel': 'Copies kept',
-    'settings.backup.limitHint': 'Backups take disk space, so pick as few copies as you need',
+    'settings.backup.limitHint': 'Backups take disk space, so it is best to keep as few copies as possible.',
     'settings.backup.limitAsk': 'This deletes the {remove} oldest copies and cannot be undone. {from} copies now → {to} kept.',
     'settings.backup.limitConfirm': 'Delete and keep {to}',
     'settings.backup.limitCancel': 'Cancel',
@@ -899,7 +906,7 @@
     'settings.backup.time': 'Backup time',
     // THE SIZE OF ONE COPY IS NOT SHOWN, so its label is gone as well (user
     // decision, 2026-11-02): a row is a time and a button, and the disk a copy
-    // needs is only stated once for the whole folder (`settings.backup.footprint`).
+    // needs is only stated once for the whole folder (`settings.backup.count`).
     // A key nothing renders is a promise the page does not keep — the same reason
     // the identity keys went.
     'settings.backup.withPlugins': '(plugins included)',
@@ -941,7 +948,7 @@
     'settings.backup.startupHint': 'This is the state at the most recent startup. DSH starting does not mean every plugin is healthy — a broken plugin is excluded and the host still boots. Which copy to roll back to is your call.',
     'settings.backup.rollbackConfirmTitle': 'Roll back to this copy?',
     'settings.backup.rollbackConfirmBody': 'The backup from {time} will be restored over the current state — **what you have now is replaced** (a snapshot of it is taken first, so this rollback can be undone).',
-    'settings.backup.rollbackConfirmRestart': 'A restart follows automatically; this page disconnects during it and works again afterwards.',
+    'settings.backup.rollbackConfirmRestart': 'A restart follows automatically: a restorable copy of what was here before the rollback was already saved; this restart takes no further backup. This page disconnects during the restart and works again afterwards.',
     'settings.backup.rollbackConfirmYes': 'Roll back',
     'settings.backup.rollbackConfirmNo': 'Cancel',
     'settings.backup.rollbackBusy': 'Rolling back…',
@@ -2852,6 +2859,10 @@
       const DEFAULT_CANCEL_URL = ROUTE_PREFIX + '/cancel'
       // The route of the MANUAL ROLLBACK (restore ONE copy the user picked).
       const DEFAULT_ROLLBACK_URL = ROUTE_PREFIX + '/rollback-to'
+      // The route that writes the copy limit (how many backups to keep). It has a
+      // default for the same reason the rollback does: this page must not depend
+      // on an optional field of the state payload to be able to send a write.
+      const DEFAULT_BACKUP_LIMIT_URL = ROUTE_PREFIX + '/backup-limit'
       // The route that persists the one-time install choice.
       const DEFAULT_CHOICE_URL = ROUTE_PREFIX + '/choice'
       // The browser-side record of the one-time install choice. The prompt is
@@ -3299,16 +3310,27 @@
 
       /**
        * The route that writes the backup copy limit (user decision, 2026-11-02).
-       * Same shape as the others: the Host sends it with the state payload, and an
-       * older Host gets it derived from the health route, which is a sibling under
-       * the same prefix.
+       *
+       * THE BUG THIS FIXES (user report, 2026-11-02: "2 份改 3 份不生效"): the
+       * Host sends `healthUrl` as a FULL URL (`http://127.0.0.1:<port>/…/health`),
+       * and this function only accepted a value starting with `/` — so it fell
+       * through to `''`, and `submitBackupLimit` returned before it ever called
+       * `fetch`. Nothing was sent, nothing was said, and the number did not move.
+       * The sibling of health is the same path with its last segment replaced,
+       * whether the Host spelled it as a path or as an absolute URL; when it
+       * sends neither, the derived default is used — exactly like the rollback
+       * route, which never had this problem.
        */
       function backupLimitUrlFor(info) {
         const sent = info && typeof info.backupLimitUrl === 'string' ? info.backupLimitUrl.trim() : ''
         if (sent.startsWith('/')) return sent
         const health = info && typeof info.healthUrl === 'string' ? info.healthUrl.trim() : ''
-        if (health.startsWith('/')) return health.replace(/\/[^/]+$/, '/backup-limit')
-        return ''
+        const asSibling = health.replace(/\/[^/?]+(\?.*)?$/, '/backup-limit')
+        // An absolute URL keeps only its path: every write in this client is a
+        // same-origin path, and the page's own origin is the instance it talks to.
+        if (/^https?:\/\//i.test(health)) return asSibling.replace(/^https?:\/\/[^/]+/i, '')
+        if (health.startsWith('/')) return asSibling
+        return DEFAULT_BACKUP_LIMIT_URL
       }
 
       /**
@@ -6350,7 +6372,16 @@
          */
         const submitBackupLimit = async (wanted) => {
           const url = backupLimitUrlFor(info)
-          if (url === '') return
+          // A WRITE THAT CANNOT BE ADDRESSED MUST SAY SO (user report,
+          // 2026-11-02): this used to `return` silently, which is exactly how
+          // "2 份改 3 份不生效" looked from the outside — no request, no message,
+          // no change. The default route makes this branch unreachable, and if a
+          // future change makes it reachable again the page says it failed
+          // instead of pretending nothing happened.
+          if (url === '') {
+            setLimitNote(t('settings.backup.limitFailed'))
+            return
+          }
           setLimitBusy(true)
           setLimitNote('')
           try {
@@ -6370,6 +6401,11 @@
             const removed = Array.isArray(answer.removed) ? answer.removed.length : 0
             const kept = Number.isFinite(Number(answer.kept)) ? Number(answer.kept) : wanted
             setLimitValue(Number.isFinite(Number(answer.maxBackups)) ? Number(answer.maxBackups) : wanted)
+            // BOTH READINGS MOVE TOGETHER (user report, 2026-11-02): the select
+            // shows the confirmed number at once, and this poll brings the two
+            // lines above it to the same value instead of leaving them saying the
+            // old limit until the next 2 s tick.
+            void pollOnce()
             setLimitNote(answer.keptWillExceedRequest === true
               ? fill(t('settings.backup.limitMore'), { requested: String(wanted), kept: String(kept) })
               : fill(t('settings.backup.limitDeleted'), { removed: String(removed), kept: String(kept) }))
@@ -6553,7 +6589,11 @@
         const rescueShortcutName = typeof rescueKit.shortcutName === 'string' && rescueKit.shortcutName !== ''
           ? rescueKit.shortcutName
           : 'DSH 出事了双击这里.lnk'
-        // The icon the shortcut carries (DSH's own executable); '' = no icon.
+        // The icon the shortcut carries: THIS PLUGIN'S OWN `assets/icon.ico`.
+        // It used to be DSH's executable, which put the face of the very program
+        // that was broken on the rescue shortcut. '' = this install ships no icon
+        // of its own: the `.lnk` is still created, it just gets no IconLocation —
+        // never somebody else's face, and nothing is written at runtime.
         const rescueIconPath = typeof rescueKit.iconPath === 'string' ? rescueKit.iconPath.trim() : ''
         // ONE SOURCE FOR THE ICON (user decision, 2026-11-02): the desktop `.lnk`
         // and this tile must come from the SAME host answer, and both must say
@@ -7323,50 +7363,27 @@
                 { className: 'dsh-autorestart-settings__label' },
                 t('settings.backup.list'),
               ),
-              // HOW MANY ARE USABLE, not just how many are on disk (user
-              // decision, 2026-11-02): the question the page answers is "what
-              // saves me if something breaks", and that is the number of copies
-              // automatic recovery would actually pick. The total stays, because
-              // the retention limit is about the total.
+              // TWO LINES, AND ONLY TWO (user report, 2026-11-02). This block used
+              // to spend five lines on the same three facts — twice on the
+              // retention limit, and once with the number spelled out inside a
+              // sentence, which went stale the moment the dropdown changed it.
+              // Line 1: how many copies there are and what they take on disk.
               h(
                 'span',
                 { className: 'dsh-autorestart-settings__value', 'data-dsh-autorestart-backup': 'count' },
-                fill(t('settings.backup.count'), { n: backupItems.length }),
+                fill(t('settings.backup.count'), {
+                  n: backupItems.length,
+                  size: formatBackupSize(
+                    backupItems.reduce((total, item) => total + (Number(item && item.bytes) || 0), 0),
+                  ),
+                }),
               ),
+              // Line 2: the rule that bounds them, with the limit in force — the
+              // dropdown below is what changes that number.
               h(
                 'span',
                 { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-backup': 'keep' },
                 fill(t('settings.backup.keep'), { n: backupsInfo.max }),
-              ),
-              // THE EFFECTIVE VALUE, NOT AN INPUT (user decision, 2026-11-02).
-              //
-              // The number is `backups.max`, i.e. the maxBackups the host itself
-              // wrote into the config. The plugin-config form is where it is
-              // edited; this page only reports it, and says so — a number with no
-              // hint reads like a setting that refuses to change.
-              h(
-                'span',
-                { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-backup': 'max-effective' },
-                fill(t('settings.backup.maxEffective'), { n: backupsInfo.max }),
-              ),
-              // HOW MUCH DISK IT TAKES, next to how many copies there are: those
-              // two numbers together answer "is this costing me 2 MB or 2 GB".
-              h(
-                'span',
-                { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-backup': 'footprint' },
-                fill(t('settings.backup.footprint'), {
-                  size: formatBackupSize(
-                    backupItems.reduce((total, item) => total + (Number(item && item.bytes) || 0), 0),
-                  ),
-                  n: backupItems.length,
-                }),
-              ),
-              // WHAT THE FOLDER IS FOR, and what it holds — the two questions the
-              // old page answered only by implication.
-              h(
-                'span',
-                { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-backup': 'purpose' },
-                fill(t('settings.backup.purpose'), { n: backupsInfo.max }),
               ),
               h(
                 'span',
@@ -7414,11 +7431,14 @@
                   [2, 3, 4, 5, 6, 7, 8, 9, 10].map((value) =>
                     h('option', { key: 'limit-' + value, value: String(value) }, String(value))),
                 ),
-              ),
-              h(
-                'span',
-                { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-backup': 'limit-hint' },
-                t('settings.backup.limitHint'),
+                // THE DISK WARNING SITS TO THE RIGHT OF THE DROPDOWN (user
+                // report, 2026-11-02): as its own line BELOW the control it
+                // arrived after the choice had already been made.
+                h(
+                  'span',
+                  { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-backup': 'limit-hint' },
+                  t('settings.backup.limitHint'),
+                ),
               ),
               limitAsk === null
                 ? null

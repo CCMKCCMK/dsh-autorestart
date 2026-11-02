@@ -174,6 +174,15 @@ in [`scripts/README.md`](scripts/README.md).
 [`docs/platform-matrix.md`](docs/platform-matrix.md) — the settings page shows the paths of the
 scripts that really exist on the machine you are on.
 
+**The desktop rescue shortcut (Windows only).** The settings page can put a rescue shortcut on the
+desktop; double-clicking it runs `restore-profile.cmd`. **Its icon is the plugin's own
+`assets/icon.ico` — not DSH's executable.** That is deliberate: on a desktop where DSH will not
+start, a shortcut wearing DSH's face reads as "this is the program", which is exactly the thing
+that is broken. When an install ships no icon file, the `.lnk` is still created — it simply gets no
+`IconLocation` instead of borrowing some other program's face, and nothing is generated at runtime.
+Every other platform gets no desktop shortcut at all; the settings page gives a copyable
+restore-script command instead.
+
 ### What has really been tested
 
 | How it was started | Tested on a real machine? | Evidence |

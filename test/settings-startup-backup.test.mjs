@@ -152,6 +152,7 @@ function mountSettings({
   restoreAnswer = null,
   announcements = [],
   supervisor = null,
+  limitAnswer = null,
 } = {}) {
   const source = fs.readFileSync(new URL('../client.js', import.meta.url), 'utf8')
   let definition = null
@@ -229,6 +230,15 @@ function mountSettings({
           status,
           json: async () => answer,
         })
+      }
+      if (target.includes('/backup-limit')) {
+        // The write of the copy limit. Its answer is what the page shows, so a
+        // test that clicks the dropdown can check the number the Host confirmed.
+        const answer = limitAnswer === null
+          ? { ok: true, maxBackups: 3, removed: [], kept: 3, requested: 3, keptWillExceedRequest: false }
+          : limitAnswer
+        const status = typeof answer.status === 'number' ? answer.status : 200
+        return Promise.resolve({ ok: status < 400, status, json: async () => answer })
       }
       return Promise.resolve({
         ok: true,
@@ -534,20 +544,27 @@ test('the settings page shows the count, the local time and the path', async () 
   // add "可用于回退的 {m} 份", which implied a tier the list does not have any
   // more. Every row has its own button now, so the only honest number is the
   // number of copies.
-  assert.equal(value('count'), '当前 1 份', 'the count of copies, with no tier and no second number')
-  assert.equal(value('keep'), '最多保留 2 份，超出自动删最旧的那份。', 'the keep limit')
+  // THE COPY BLOCK IS TWO LINES (user report, 2026-11-02): line 1 says how many
+  // copies there are and what they cost on disk, line 2 says the rule that bounds
+  // them. The old "可用于回退的 {m} 份" half is still gone — every row has its own
+  // button now, so the only honest number is the number of copies.
+  assert.equal(
+    value('count'),
+    '当前 1 份，实际占用 117.7 MB。',
+    'line 1: how many copies and the disk they take, in one sentence',
+  )
+  assert.equal(
+    value('keep'),
+    '最多保留 2 份，超出自动删最旧的那份。',
+    'line 2: the retention rule, with the number in force',
+  )
   assert.equal(value('time'), '2026-10-29 08:25', 'the local time, to the minute and without the offset')
   // THE PER-COPY SIZE AND SCOPE ROWS ARE GONE (user decision, 2026-11-02): the
   // row answers "which copy do I go back to", and a byte count next to the
-  // button only pushed the button away. The TOTAL stays — that is the number the
-  // disk question is about — so the fitted unit is still pinned here.
+  // button only pushed the button away. The TOTAL moved into line 1 above — the
+  // unit that fits it is pinned there (117.7 MB).
   assert.deepEqual(backupValues(panel, 'size'), [], 'no per-copy size row any more')
   assert.deepEqual(backupValues(panel, 'plugins'), [], 'no per-copy plugin scope either')
-  assert.equal(
-    value('footprint'),
-    '实际占用 117.7 MB，当前 1 份',
-    'the total footprint is still reported, with the unit that fits it',
-  )
   assert.equal(value('path'), 'C:\\Users\\fg\\.dsh\\storages\\dsh-autorestart\\backups', 'where they live')
 })
 
@@ -607,14 +624,22 @@ function backupValues(panel, key) {
     .map((node) => textOf(node))
 }
 
-test('the limit in force is stated as a fact — the dropdown is the only control', async () => {
-  // THE TWO LINES MUST NOT CONTRADICT EACH OTHER (user report, 2026-11-02): the
-  // number is changed by the dropdown ON THIS PAGE, so a "(change it in the
-  // plugin config)" beside it pointed at a second door that does not exist. The
-  // row now states the fact, and the pointer is gone — in both languages.
+test('the limit in force is stated ONCE — the dropdown is the only control', async () => {
+  // THE NUMBER IS SAID ONCE (user report, 2026-11-02): the block used to say
+  // "最多保留 2 份" twice — once as a bare fact and once inside a paragraph —
+  // while the sentence the user came for was the rule below it. Now the rule
+  // line IS the fact, and neither duplicate is drawn any more.
+  //
+  // The other half of the old report still holds: the number is changed by the
+  // dropdown ON THIS PAGE, so a pointer to "the plugin config" beside it pointed
+  // at a second door that does not exist.
   const cases = [
-    { language: 'zh', expected: '最多保留 2 份', guide: '在插件配置里改' },
-    { language: 'en', expected: 'At most 2 copies are kept', guide: 'change it in the plugin config' },
+    { language: 'zh', expected: '最多保留 2 份，超出自动删最旧的那份。', guide: '在插件配置里改' },
+    {
+      language: 'en',
+      expected: 'At most 2 copies are kept; the oldest one is deleted when there are more.',
+      guide: 'change it in the plugin config',
+    },
   ]
   for (const { language, expected, guide } of cases) {
     const mounted = mountSettings({
@@ -626,12 +651,14 @@ test('the limit in force is stated as a fact — the dropdown is the only contro
       },
     })
     const panel = await mounted.settled('dsh-autorestart')
-    // ① The fact, with the number in force — nothing else on the line.
+    // ① The rule line carries the number in force — and nothing repeats it.
     assert.deepEqual(
-      backupValues(panel, 'max-effective'),
+      backupValues(panel, 'keep'),
       [expected],
-      language + ': the limit is stated as a fact, with the number in force',
+      language + ': the limit is stated as a fact, once, on the rule line',
     )
+    assert.deepEqual(backupValues(panel, 'max-effective'), [], language + ': the bare duplicate is gone')
+    assert.deepEqual(backupValues(panel, 'purpose'), [], language + ': and so is the paragraph that repeated it')
     // ② The control really is on this page — that is what made the pointer wrong.
     assert.equal(
       marked(panel, 'data-dsh-autorestart-backup')
@@ -712,9 +739,9 @@ test('the size that is still on the page is the total, with the unit that fits i
   assert.deepEqual(backupValues(panel, 'size'), [], 'no per-copy size row any more')
   assert.deepEqual(backupValues(panel, 'plugins'), [], 'no per-copy plugin scope either')
   assert.deepEqual(
-    backupValues(panel, 'footprint'),
-    ['实际占用 156.1 MB，当前 2 份'],
-    'the total footprint, with the unit that fits it',
+    backupValues(panel, 'count'),
+    ['当前 2 份，实际占用 156.1 MB。'],
+    'the total footprint rides in line 1 now, with the unit that fits it',
   )
   assert.equal(text.includes('156.0'), false, `no pointless tenth: ${text}`)
   assert.equal(text.includes('0.1 MB'), false, 'the KB copy must not read as a fraction of a MB')
@@ -971,23 +998,26 @@ test('③ the page no longer promises a tier — the old 安全份 paragraphs ar
   )
   assert.equal(staleNodes.length, 0, 'and the two paragraphs are not drawn as orphan nodes either')
 
-  // WHAT STAYS IS WHAT IS TRUE — checked verbatim, because these four sentences
+  // WHAT STAYS IS WHAT IS TRUE — checked verbatim, because these sentences
   // were verified against the real page and must not drift with the deletion.
+  //
+  // THE COPY BLOCK IS TWO LINES (user report, 2026-11-02): the count line now
+  // also carries the disk the copies take, and the rule line carries the limit —
+  // the paragraph that repeated that limit, and the bare "最多保留 3 份" fact,
+  // are both gone.
+  assert.match(
+    backupValues(panel, 'count')[0] || '',
+    /^当前 3 份，实际占用 [\d.]+ (B|KB|MB|GB)。$/,
+    'line 1: the three copies and the disk they take together',
+  )
   assert.equal(
     backupValues(panel, 'keep')[0],
     '最多保留 3 份，超出自动删最旧的那份。',
-    'the retention rule, with the number in force',
+    'line 2: the retention rule, with the number in force',
   )
-  assert.match(
-    backupValues(panel, 'footprint')[0] || '',
-    /^实际占用 [\d.]+ (B|KB|MB|GB)，当前 3 份$/,
-    'the real footprint of the three copies',
-  )
-  assert.equal(
-    backupValues(panel, 'purpose')[0],
-    '每次重启前自动拍的本地插件完整备份，最多保留 3 份，出问题可自行选择一份回档。',
-    'what the folder is for — and that ANY copy can be chosen',
-  )
+  assert.deepEqual(backupValues(panel, 'max-effective'), [], 'the bare duplicate of the limit is gone')
+  assert.deepEqual(backupValues(panel, 'purpose'), [], 'and the paragraph that repeated it is gone too')
+  assert.deepEqual(backupValues(panel, 'footprint'), [], 'the old separate footprint line is gone as well')
   assert.equal(
     backupValues(panel, 'kinds-local')[0],
     '链接安装（自己写的）和本地化过的插件（目录里有 .git）都已完整备份，可以回档。',
@@ -1000,8 +1030,8 @@ test('③ the page no longer promises a tier — the old 安全份 paragraphs ar
   )
   assert.equal(
     backupValues(panel, 'limit-hint')[0],
-    '备份会占用磁盘空间，请尽量选择较少的份数',
-    'the disk-space hint under the dropdown',
+    '备份会占用磁盘空间，建议尽量选更少的备份数。',
+    'the disk-space hint, next to the dropdown',
   )
 })
 
@@ -1111,10 +1141,10 @@ test('seventeen copies are seventeen rows — the tail is never dropped', async 
     1,
     'the sentence still appears exactly once, on the newest copy',
   )
-  assert.deepEqual(
-    backupValues(panel, 'count'),
-    ['当前 17 份'],
-    'and the count says how many copies there are — no "how many could save you" half',
+  assert.match(
+    backupValues(panel, 'count')[0] || '',
+    /^当前 17 份，实际占用 [\d.]+ (B|KB|MB|GB)。$/,
+    'and line 1 says how many copies there are, with what they take on disk',
   )
 })
 
@@ -1513,10 +1543,10 @@ test('hosted: the fold, the row-per-copy list and the absent version hold on a w
     1,
     'and the one sentence, because it is also the newest copy',
   )
-  assert.deepEqual(
-    backupValues(panel, 'count'),
-    ['当前 1 份'],
-    'the count says how many copies there are — and nothing about a tier on a web host either',
+  assert.match(
+    backupValues(panel, 'count')[0] || '',
+    /^当前 1 份，实际占用 [\d.]+ (B|KB|MB|GB)。$/,
+    'line 1 says how many copies there are — and nothing about a tier on a web host either',
   )
 
   // (3) THE MEANINGLESS VERSION NUMBER IS NOT PRINTED — checked against a
@@ -2180,10 +2210,141 @@ test('the limit dropdown offers exactly 1-10 and shows the value in force', () =
   )
 })
 
-test('the disk hint is verbatim', () => {
-  assert.equal(backupLocale('zh').limitHint, '备份会占用磁盘空间，请尽量选择较少的份数')
-  assert.match(backupLocale('en').limitHint, /disk space/i)
-  assert.match(functionBodyOfSettings(), /settings\.backup\.limitHint/, 'the page renders it')
+test('the disk hint is verbatim, and sits to the RIGHT of the dropdown', async () => {
+  assert.equal(backupLocale('zh').limitHint, '备份会占用磁盘空间，建议尽量选更少的备份数。')
+  assert.equal(
+    backupLocale('en').limitHint,
+    'Backups take disk space, so it is best to keep as few copies as possible.',
+  )
+  const mounted = mountSettings({
+    info: {
+      instance: { isDesktopApp: true, platform: 'win32' },
+      supervisor: { mode: 'app', installed: false, startup: { mode: 'desktop' } },
+      backups: twoBackups(),
+    },
+  })
+  const panel = await mounted.settled('dsh-autorestart')
+  // THE WARNING MUST ARRIVE WITH THE CHOICE (user report, 2026-11-02): as its own
+  // line BELOW the control it showed up after the number had been picked. So it
+  // has to be a child of the SAME row as the select, positioned after it.
+  const rows = walk(panel).filter(
+    (node) => node.props && typeof node.props.className === 'string'
+      && node.props.className.includes('dsh-autorestart-settings__backup-row'),
+  )
+  const limitRow = rows.find((row) => walk(row).some(
+    (node) => node.props && node.props['data-dsh-autorestart-backup'] === 'limit-select',
+  ))
+  assert.ok(limitRow, 'the dropdown sits in a row')
+  const children = limitRow.children || []
+  const selectAt = children.findIndex(
+    (node) => node.props && node.props['data-dsh-autorestart-backup'] === 'limit-select',
+  )
+  const hintAt = children.findIndex(
+    (node) => node.props && node.props['data-dsh-autorestart-backup'] === 'limit-hint',
+  )
+  assert.notEqual(hintAt, -1, 'the disk warning is in that row, not on a line of its own')
+  assert.equal(hintAt > selectAt, true, 'and it comes after the dropdown — to its right')
+  assert.deepEqual(backupValues(panel, 'limit-hint'), [backupLocale('zh').limitHint], 'printed once, verbatim')
+})
+
+/**
+ * THE BUG THE USER HIT (user report, 2026-11-02): "把「保留份数」从 2 改成 3，
+ * 界面没有任何变化".
+ *
+ * The Host reports `healthUrl` as a FULL URL (`http://127.0.0.1:<port>/…/health`),
+ * and the page derived the write route only from a value starting with `/`. It
+ * resolved to `''`, `submitBackupLimit` returned BEFORE calling `fetch`, and the
+ * page said nothing: no request, no message, no change. The dropdown moved, the
+ * number did not — so this test pins all three things the user could not see:
+ * one POST goes out, its body carries the picked number, and the number the page
+ * shows afterwards is the one the Host confirmed.
+ */
+test('② 2 → 3 really writes the limit: one POST goes out and the number moves', async () => {
+  const mounted = mountSettings({
+    info: {
+      instance: { isDesktopApp: true, platform: 'win32' },
+      supervisor: { mode: 'app', installed: false, startup: { mode: 'desktop' } },
+      // EXACTLY the shape the Host reports — an absolute URL, not a path.
+      healthUrl: 'http://127.0.0.1:51949/__dsh_autorestart/health',
+      backups: twoBackups(),
+    },
+    limitAnswer: { ok: true, maxBackups: 3, removed: [], kept: 3, requested: 3, keptWillExceedRequest: false },
+  })
+  const panel = await mounted.settled('dsh-autorestart')
+  const selectOf = (tree) => marked(tree, 'data-dsh-autorestart-backup').filter(
+    (node) => node.props['data-dsh-autorestart-backup'] === 'limit-select',
+  )[0]
+
+  assert.equal(selectOf(panel).props.value, '2', 'the dropdown starts at the limit in force')
+
+  selectOf(panel).props.onChange({ target: { value: '3' } })
+  await new Promise((resolve) => setTimeout(resolve, 10))
+
+  // ① A REQUEST REALLY GOES OUT — the whole bug was that none did.
+  const posts = mounted.fetches.filter((call) => String(call.url).includes('/backup-limit'))
+  assert.equal(posts.length, 1, 'exactly one write goes out (the bug sent none at all)')
+  assert.equal(String(posts[0].url), '/__dsh_autorestart/backup-limit', 'to the sibling of the health route')
+  assert.equal(posts[0].init.method, 'POST', 'as a write')
+  assert.deepEqual(JSON.parse(posts[0].init.body), { maxBackups: 3 }, 'carrying the number the user picked')
+
+  // ② ...AND THE NUMBER ON SCREEN REALLY MOVES.
+  const after = mounted.render('dsh-autorestart')
+  assert.equal(selectOf(after).props.value, '3', 'the dropdown shows the confirmed number at once')
+  assert.deepEqual(
+    marked(after, 'data-dsh-autorestart-backup').map((node) => node.props['data-dsh-autorestart-backup']).includes('limit-note'),
+    true,
+    'and the page says what happened instead of staying silent',
+  )
+  assert.equal(textOf(after).includes('现在保留 3 份'), true, `the note names the number kept: ${textOf(after)}`)
+})
+
+test('the write route survives every shape the Host reports health in', async () => {
+  // A PATH, an ABSOLUTE URL and NOTHING AT ALL must all end at the same route.
+  // The middle one is the shape the real Host sends, and it is the one that broke.
+  const shapes = [
+    { label: 'a path', info: { healthUrl: '/__dsh_autorestart/health?state=1' }, expected: '/__dsh_autorestart/backup-limit' },
+    { label: 'an absolute URL', info: { healthUrl: 'http://127.0.0.1:51949/__dsh_autorestart/health' }, expected: '/__dsh_autorestart/backup-limit' },
+    { label: 'an explicit backupLimitUrl', info: { backupLimitUrl: '/custom/backup-limit' }, expected: '/custom/backup-limit' },
+  ]
+  for (const shape of shapes) {
+    const mounted = mountSettings({
+      info: {
+        instance: { isDesktopApp: true, platform: 'win32' },
+        supervisor: { mode: 'app', installed: false, startup: { mode: 'desktop' } },
+        backups: twoBackups(),
+        ...shape.info,
+      },
+    })
+    const panel = await mounted.settled('dsh-autorestart')
+    const select = marked(panel, 'data-dsh-autorestart-backup').filter(
+      (node) => node.props['data-dsh-autorestart-backup'] === 'limit-select',
+    )[0]
+    select.props.onChange({ target: { value: '3' } })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    const posts = mounted.fetches.filter((call) => String(call.url).includes('backup-limit'))
+    assert.equal(posts.length, 1, shape.label + ': the write goes out')
+    assert.equal(String(posts[0].url), shape.expected, shape.label + ': to the right route')
+  }
+
+  // ...and with no hint at all the derived default answers, so the page can
+  // always write; it must never fall back to sending nothing.
+  const bare = mountSettings({
+    info: {
+      instance: { isDesktopApp: true, platform: 'win32' },
+      supervisor: { mode: 'app', installed: false, startup: { mode: 'desktop' } },
+      backups: twoBackups(),
+    },
+  })
+  const barePanel = await bare.settled('dsh-autorestart')
+  marked(barePanel, 'data-dsh-autorestart-backup').filter(
+    (node) => node.props['data-dsh-autorestart-backup'] === 'limit-select',
+  )[0].props.onChange({ target: { value: '3' } })
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  assert.equal(
+    bare.fetches.filter((call) => String(call.url).includes('backup-limit')).length,
+    1,
+    'with no URL hint the page still writes instead of doing nothing',
+  )
 })
 
 test('cancelling the confirmation sends no request at all', () => {

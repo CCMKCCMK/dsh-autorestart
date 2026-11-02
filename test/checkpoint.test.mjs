@@ -263,6 +263,9 @@ test('requestRestart bumps generation, defers, and marks bySessionId pending', (
       { sessionId: 's1', requestedAt: T + 50, reason: 'user asked for restart', resume: true },
     ],
     parkGoals: true,
+    // A restart takes its pre-restart snapshot unless the request says not to;
+    // the fact is stored, so it is asserted here (user decision, 2026-11-02).
+    skipBackup: false,
   });
   assert.equal(state.sessions.s1.running, false);
   assert.equal(state.sessions.s1.pendingResume, true);
