@@ -215,6 +215,56 @@ json_parses() {
   return 0
 }
 
+# Is every field of this package.json on ONE line?
+#
+# A compact profile (a generator, a bundler, a human with `jq -c`) puts the whole
+# document on a single line. The line-oriented sed below cannot work on that: it
+# deletes a WHOLE line (which would delete the entire file) and it appends after
+# a line that ENDS with `[` (which never happens when the array has members on
+# the same line). So a compact file takes the node path instead.
+compact_file() {
+  file="$1"
+  [ -n "$NODE_BIN" ] || return 1
+  [ -f "$file" ] || return 1
+  "$NODE_BIN" -e '
+    const fs = require("fs");
+    try {
+      const text = fs.readFileSync(process.argv[1], "utf8").replace(/^\uFEFF/, "");
+      process.exit(text.replace(/\r?\n$/, "").includes("\n") ? 1 : 0);
+    } catch (error) { process.exit(1); }
+  ' "$file" >/dev/null 2>&1
+}
+
+# Rewrite a COMPACT package.json on still ONE line, without touching anything but
+# the bundles array: the document is parsed, the name is removed from (or pushed
+# into) `dsh.profile.bundles`, and the result is serialized back to a single line
+# with the keys in their original order. Every other field, the name of the
+# profile included, keeps its value.
+#
+# Prints the new document on stdout; nothing is written here (the caller writes
+# it into the temp file it already knows how to swap in).
+compact_edit() {
+  file="$1"
+  action="$2"
+  "$NODE_BIN" -e '
+    const fs = require("fs");
+    const [file, action, name] = process.argv.slice(1);
+    const text = fs.readFileSync(file, "utf8").replace(/^\uFEFF/, "");
+    let doc;
+    try { doc = JSON.parse(text); } catch (error) { process.exit(3); }
+    const profile = doc && doc.dsh && doc.dsh.profile;
+    const bundles = profile && Array.isArray(profile.bundles) ? profile.bundles : null;
+    if (bundles === null) process.exit(4);
+    const next = bundles.filter((entry) => entry !== name);
+    // FIRST in the list, like the multi-line sed path does (it inserts right
+    // after the opening bracket). The two paths agree on order.
+    if (action === "enable") next.unshift(name);
+    profile.bundles = next;
+    const single = JSON.stringify(doc);
+    process.stdout.write(single + (text.endsWith("\n") ? "\n" : ""));
+  ' "$file" "$action" "$PACKAGE_NAME"
+}
+
 # --- Start ---
 
 if [ -n "$PACKAGE_JSON" ]; then
@@ -280,7 +330,16 @@ if ! cp -- "$pkg" "$backup"; then
 fi
 
 tmp="$pkg.tmp-emergency-$$"
-if [ "$ACTION" = 'disable' ]; then
+if compact_file "$pkg"; then
+  # ONE LINE IN, ONE LINE OUT: the document is edited as JSON and written back
+  # in the same style, because the line-oriented sed below has no line to work
+  # on (it would delete the whole file, or append after a line that never ends
+  # with the opening bracket).
+  if ! compact_edit "$pkg" "$ACTION" > "$tmp"; then
+    rm -f -- "$tmp" 2>/dev/null || true
+    fail "$(fmt "$(t 'emergency.writeFailed' 'the write failed - the backup is at {0}: {1}')" "$backup" "$pkg")"
+  fi
+elif [ "$ACTION" = 'disable' ]; then
   sed "/^[[:space:]]*\"$PACKAGE_NAME\"[[:space:]]*,\{0,1\}[[:space:]]*$/d" "$pkg" > "$tmp"
 else
   sed "s/^\\([[:space:]]*\"bundles\"[[:space:]]*:[[:space:]]*\\[\\)$/\\1\\n    \"$PACKAGE_NAME\",/" "$pkg" > "$tmp"

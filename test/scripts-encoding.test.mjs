@@ -595,3 +595,50 @@ test('the profile restorer really restores the newest snapshot WITH a manifest (
     fs.rmSync(fixture.root, { recursive: true, force: true });
   }
 });
+
+test('the emergency switch works on a COMPACT single-line profile too (POSIX)', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-sh-compact-'));
+  try {
+    const pkg = path.join(root, 'package.json');
+    fs.writeFileSync(
+      pkg,
+      '{"name":"compact-profile","dsh":{"profile":{"bundles":["dsh-autorestart","another-plugin"]}}}\n',
+      'utf8',
+    );
+
+    // Disable: a line-oriented editor has no line to work on here, so this is the
+    // case that used to fail (and roll back) on a minified profile.
+    const disabled = runPosixScript('emergency-disable.sh', ['--action', 'disable', '--package', pkg]);
+    if (disabled === null) {
+      t.skip('no POSIX shell (sh / WSL bash) is available here');
+      return;
+    }
+    assert.equal(disabled.code, 0, 'disable must succeed: ' + disabled.out);
+    assert.deepEqual(bundlesOf(pkg), ['another-plugin'], 'the plugin is out of the bundles');
+
+    const afterDisable = fs.readFileSync(pkg, 'utf8');
+    assert.equal(
+      afterDisable.replace(/\r?\n$/, '').includes('\n'),
+      false,
+      'the compact file is still ONE line (it is not reformatted)',
+    );
+    assert.ok(afterDisable.includes('"name":"compact-profile"'), 'the profile name was not touched');
+
+    // Enable: back in the bundles, still one line, still the same name.
+    const enabled = runPosixScript('emergency-disable.sh', ['--action', 'enable', '--package', pkg]);
+    assert.equal(enabled.code, 0, 'enable must succeed: ' + enabled.out);
+    assert.deepEqual(bundlesOf(pkg), ['dsh-autorestart', 'another-plugin'], 'the plugin is back');
+
+    const afterEnable = fs.readFileSync(pkg, 'utf8');
+    assert.equal(
+      afterEnable.replace(/\r?\n$/, '').includes('\n'),
+      false,
+      'the compact file stayed compact after enable',
+    );
+    assert.ok(afterEnable.includes('"name":"compact-profile"'), 'the name line was not polluted');
+    assert.ok(emergencyBackups(pkg).length >= 1, 'every write was backed up first');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
