@@ -249,14 +249,15 @@ test('⑤ a seed that cannot be written says so, with the reason', async (t) => 
 });
 
 /* ------------------------------------------------------------------ *
- * ⑥ Three copies are the default now.
+ * ⑥ TWO copies are the default now (design, 2026-11-02).
  * ------------------------------------------------------------------ */
 
-test('⑥ the configuration default is twenty copies', () => {
-  assert.equal(DEFAULTS.maxBackups, 20, 'the default of the config');
-  assert.equal(normalizeConfig({}).maxBackups, 20, 'and after normalization');
-  assert.equal(normalizeConfig({ maxBackups: 'nonsense' }).maxBackups, 20, 'a wrong value falls back to twenty');
+test('⑥ the configuration default is two copies', () => {
+  assert.equal(DEFAULTS.maxBackups, 2, 'the default of the config');
+  assert.equal(normalizeConfig({}).maxBackups, 2, 'and after normalization');
+  assert.equal(normalizeConfig({ maxBackups: 'nonsense' }).maxBackups, 2, 'a wrong value falls back to two');
   assert.equal(normalizeConfig({ maxBackups: 1 }).maxBackups, 1, 'an explicit value still wins');
+  assert.equal(normalizeConfig({ maxBackups: 20 }).maxBackups, 20, 'and so does a bigger one');
 });
 
 /* ------------------------------------------------------------------ *

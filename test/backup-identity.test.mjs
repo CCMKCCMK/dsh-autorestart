@@ -93,24 +93,28 @@ function names(backups) {
     .sort();
 }
 
-test('① twenty backups are kept by default', () => {
-  // A backup records CHANGES, not restarts (user decision, 2026-11-01): with
-  // hard-link dedup the history costs almost nothing, so three was far too few.
-  assert.equal(DEFAULT_MAX_BACKUPS, 20, 'twenty copies of history');
+test('① TWO backups are kept by default (the design: one safe + one newest)', () => {
+  // CHANGED 2026-11-02 (design): at most two copies — one verified "safe" copy
+  // plus the newest unverified one. It used to be twenty, which is exactly why a
+  // hosted instance that was never configured kept seventeen copies and never
+  // pruned: nothing was ever over the ceiling.
+  assert.equal(DEFAULT_MAX_BACKUPS, 2, 'two copies: one safe, one newest');
 });
 
 test('② pruning above the limit removes the OLDEST copies', async (t) => {
   const { profile, backups } = fixture(t);
   const made = [];
   for (const now of [1_000, 2_000, 3_000, 4_000, 5_000]) {
-    const result = await takeBackup(profile, backups, now);
+    // An EXPLICIT limit: this test is about the ORDER of pruning, and the
+    // default is two copies since 2026-11-02, so five would already be pruned.
+    const result = await takeBackup(profile, backups, now, { maxBackups: 20 });
     assert.equal(result.ok, true);
     made.push(result);
   }
 
-  // Five is far below the new default of twenty, so nothing is pruned yet.
+  // Five is far below the limit this test asked for, so nothing is pruned yet.
   const left = names(backups);
-  assert.equal(left.length, 5, 'five backups are well inside the default of twenty');
+  assert.equal(left.length, 5, 'five backups are well inside the limit of twenty');
   for (const kept of made) {
     assert.equal(left.includes(kept.stamp), true, 'every copy survives');
   }
@@ -410,7 +414,9 @@ test('⑦ the four proving sources stay distinguishable', async (t) => {
   ];
   const seen = new Set();
   for (const [index, source] of sources.entries()) {
-    const backup = await createBackup({ slimBackup: false, profileDir: profile, backupsDir: backups, includePlugins: false, now: 2_000 + index });
+    // An EXPLICIT limit: the point here is the SOURCE of a proof, not pruning
+    // (the default is two copies since 2026-11-02).
+    const backup = await createBackup({ slimBackup: false, profileDir: profile, backupsDir: backups, includePlugins: false, now: 2_000 + index, maxBackups: 20 });
     assert.equal(backup.ok, true);
     assert.equal(markKnownGood(backup.dir, { reason: 'r-', certifiedBy: source }).promoted, true);
     const meta = readBackupMeta(backup.dir);
@@ -538,7 +544,7 @@ test('⑦ pruning never deletes the LAST certified copy, even when the limit say
   assert.equal(fs.existsSync(path.join(backups, stamps[0])), true, 'and the oldest reference is untouched as before');
 });
 
-test('⑦ with NO certified copy at all, pruning deletes nothing and says so', (t) => {
+test('⑦ with NO certified copy at all, pruning still converges to the newest limit', (t) => {
   const { backups } = certFixture(t);
   const stamps = [
     '2026-03-01T00-00-00-000Z',
@@ -547,17 +553,21 @@ test('⑦ with NO certified copy at all, pruning deletes nothing and says so', (
   ];
   for (const stamp of stamps) certRawBackup(backups, stamp);
 
+  // CHANGED 2026-11-02 (user decision): an UNPROVEN copy cannot be restored, so
+  // keeping it "just in case" protects nothing and only spends disk. A hosted
+  // WSL instance never certifies anything and accumulated FIFTEEN copies — the
+  // floor that kept everything is exactly what let that happen.
   const prune = pruneBackups(backups, 1);
-  assert.deepEqual(prune.removed, [], 'not one copy was deleted');
-  assert.equal(prune.skipped, true, 'and the answer says the floor kicked in');
-  assert.match(String(prune.reason), /no certified backup/i, 'with the reason a report can repeat to the user');
+  assert.deepEqual(prune.removed, [stamps[0], stamps[1]], 'the two oldest copies went');
+  assert.equal(prune.skipped, false, 'the prune really ran');
+  assert.match(String(prune.reason), /no certified backup/i, 'and it says there is no proof');
   assert.equal(prune.certifiedCount, 0);
   assert.equal(prune.keptCertified, null);
-  assert.equal(prune.budget, 2, 'the budget it refused to spend is reported too');
-  assert.deepEqual(certNames(backups), stamps, 'every copy is still on disk');
+  assert.equal(prune.budget, 2, 'the budget it spent is reported too');
+  assert.deepEqual(certNames(backups), [stamps[2]], 'only the newest copy is left');
 });
 
-test('⑦ createBackup reports a skipped prune instead of hiding it', async (t) => {
+test('⑦ createBackup prunes and reports it even with no proof', async (t) => {
   const { profile, backups } = certFixture(t);
   const results = [];
   for (const now of [9_000, 10_000, 11_000]) {
@@ -565,24 +575,29 @@ test('⑦ createBackup reports a skipped prune instead of hiding it', async (t) 
     assert.equal(result.ok, true);
     results.push(result);
   }
-  // Nothing was ever certified, so the history is left alone on purpose...
+  // Nothing was ever certified — and the history converges anyway (2026-11-02).
+  // Each write prunes as it goes, so the LAST write spends one unit of budget:
+  // after the third copy there are two on disk and the limit is one.
   const last = results[results.length - 1];
-  assert.deepEqual(last.pruned, [], 'nothing was pruned');
-  assert.equal(last.pruneSkipped, true, 'because no copy carries evidence');
+  assert.equal(last.pruned.length, 1, 'the copy over the limit was pruned by that very write');
+  assert.equal(last.pruneSkipped, false, 'a prune that ran is not reported as skipped');
   assert.match(String(last.pruneReason), /no certified backup/i);
-  assert.equal(certNames(backups).length, 3, 'all three copies survive the limit of one');
+  assert.equal(certNames(backups).length, 1, 'only the newest copy is left');
 
-  // ...and once one copy is certified, the normal pruning resumes.
+  // Once one copy carries evidence the protected pruning takes over: the proven
+  // copy stays and the budget is spent on the copies around it.
   const certifiedName = certNames(backups)[0];
   writeBackupMeta(path.join(backups, certifiedName), {
     kind: KIND_SNAPSHOT,
     at: 9_000,
     certifiedBy: CERTIFIED_BY.SEED,
   });
-  // A limit of TWO (not one) on purpose: with a limit of one the pre-existing
-  // "oldest first" order would have nothing left to spend the budget on but the
-  // copy that was just taken, and THAT rule is not part of this change.
-  const after = await createBackup({ slimBackup: false, profileDir: profile, backupsDir: backups, includePlugins: false, maxBackups: 2, now: 12_000 });
+  // A limit of TWO on purpose: with a limit of one the pre-existing "oldest
+  // first" order would have nothing to spend the budget on but the newest copy,
+  // and THAT rule is not part of this change.
+  const second = await createBackup({ slimBackup: false, profileDir: profile, backupsDir: backups, includePlugins: false, maxBackups: 2, now: 12_000 });
+  assert.equal(second.pruned.length, 0, 'nothing over the limit yet');
+  const after = await createBackup({ slimBackup: false, profileDir: profile, backupsDir: backups, includePlugins: false, maxBackups: 2, now: 13_000 });
   assert.equal(after.ok, true);
   assert.equal(after.pruneSkipped, false);
   assert.equal(after.pruneReason, null);
@@ -591,3 +606,99 @@ test('⑦ createBackup reports a skipped prune instead of hiding it', async (t) 
   assert.equal(fs.existsSync(after.dir), true, 'and the new copy is there as always');
   assert.equal(certNames(backups).length, 2, 'the certified copy plus the new one');
 });
+
+/* ------------------------------------------------------------------ *
+ * THE CEILING, NOT ONLY THE FLOOR (2026-11-02).
+ *
+ * t24 fixed the floor: with no certified copy the prune used to delete nothing.
+ * A real hosted instance still kept SEVENTEEN copies after that fix, because the
+ * CEILING was `DEFAULT_MAX_BACKUPS = 20` — nothing was ever over it, so the
+ * prune never had a budget. The design is two copies (one safe + one newest).
+ * ------------------------------------------------------------------ */
+
+test('a machine that never configured maxBackups converges to TWO on the next write', async (t) => {
+  const { profile, backups } = certFixture(t);
+  // THE REAL SHAPE OF THE BUG: seventeen unproven copies already on disk.
+  for (let index = 0; index < 17; index += 1) {
+    const day = String(index + 1).padStart(2, '0');
+    certRawBackup(backups, `2026-04-${day}T00-00-00-000Z`);
+  }
+  assert.equal(certNames(backups).length, 17, 'seventeen copies to start with');
+
+  // ONE ordinary write, with maxBackups simply NOT passed (the hosted profile
+  // does not configure it). The prune runs inside that write. `now` is a real
+  // 2026-04 moment so the new copy is genuinely the newest by name — the keep
+  // list is by NAME, so a copy stamped older would be pruned immediately.
+  const result = await createBackup({ slimBackup: false, profileDir: profile, backupsDir: backups, includePlugins: false, now: Date.parse('2026-04-20T00:00:00Z') });
+  assert.equal(result.ok, true);
+  const left = certNames(backups);
+  assert.equal(left.length <= 2, true, `converged to at most two copies (got ${left.length})`);
+  assert.equal(left.length, 2, 'exactly two: the new copy and the newest old one');
+  assert.match(left[left.length - 1], /^2026-04-20/, 'the copy that was just written is one of them');
+  assert.equal(result.pruned.length, 16, 'the other sixteen were removed by that same write');
+  assert.match(String(result.pruneReason), /no certified backup/i, 'and the reason is reported, not silent');
+});
+
+/* ------------------------------------------------------------------ *
+ * A COPY THAT CANNOT BE READ MUST NOT KILL THE PRUNE (2026-11-02).
+ *
+ * The real hosted machine kept EIGHTEEN copies while `backups.max` was already
+ * 2, with an EMPTY pruneReason. Two of those directories had no `meta.json`;
+ * the known-good lookup read `metas.get(name).kind`, `null.kind` threw, and the
+ * prune died before deleting anything — the silence looked exactly like "the
+ * prune never ran".
+ * ------------------------------------------------------------------ */
+
+test('a copy with no meta.json does not break the prune (the eighteen-copy machine)', (t) => {
+  const { backups } = certFixture(t);
+  const stamps = [];
+  for (let day = 1; day <= 18; day += 1) {
+    stamps.push('2026-05-' + String(day).padStart(2, '0') + 'T00-00-00-000Z');
+  }
+  for (const stamp of stamps) certRawBackup(backups, stamp, { meta: { kind: KIND_SNAPSHOT, at: 1_000 } });
+  // The two the real machine had: a manifest, NO `meta.json`.
+  const noMeta = [stamps[2], stamps[5]];
+  for (const name of noMeta) fs.rmSync(path.join(backups, name, META_NAME), { force: true });
+  // ...and the newest copy is the safe one.
+  markKnownGood(path.join(backups, stamps[17]), { reason: 'boot-ok', certifiedBy: CERTIFIED_BY.SEED });
+
+  // THIS THREW A TypeError BEFORE THE FIX.
+  const prune = pruneBackups(backups, 2);
+
+  assert.equal(prune.failed, undefined, 'the prune did not fall into its own failure net');
+  assert.equal(prune.budget, 16, 'eighteen copies, a limit of two');
+  assert.equal(prune.removed.length, 16, 'the budget was really spent');
+  const left = certNames(backups);
+  assert.equal(left.length, 2, 'two copies are left, as the design says');
+  assert.equal(left.includes(stamps[17]), true, 'the safe copy stayed');
+  for (const name of noMeta) {
+    assert.equal(
+      fs.existsSync(path.join(backups, name)),
+      false,
+      'a copy that cannot be read is a delete candidate, not a blocker',
+    );
+  }
+});
+
+test('a prune that cannot delete anything says so instead of staying silent', (t) => {
+  const { backups } = certFixture(t);
+  for (const stamp of ['2026-07-01T00-00-00-000Z', '2026-07-02T00-00-00-000Z', '2026-07-03T00-00-00-000Z']) {
+    certRawBackup(backups, stamp, { meta: { kind: KIND_SNAPSHOT, at: 1_000 } });
+  }
+  // Every removal fails: the run must still REPORT the budget it could not spend.
+  const original = fs.rmSync;
+  fs.rmSync = () => {
+    throw new Error('boom-rm');
+  };
+  let prune;
+  try {
+    prune = pruneBackups(backups, 1);
+  } finally {
+    fs.rmSync = original;
+  }
+  assert.deepEqual(prune.removed, []);
+  assert.equal(prune.budget > 0, true, 'there was a budget');
+  assert.match(String(prune.reason), /nothing was removed/i, 'and the reason is not empty');
+  assert.equal(certNames(backups).length, 3, 'nothing was really deleted');
+});
+

@@ -382,16 +382,19 @@ test('pruning protects a proven copy, and a polluted one protects nothing', (t) 
   const polluted = makeCopy(backups, '2026-11-01T00-00-00-000Z', { at: 1_000, rawMeta: oldCriterionMeta({ at: 1_000 }) });
   makeCopy(backups, '2026-11-01T00-10-00-000Z', { at: 2_000, rawMeta: { kind: KIND_SNAPSHOT, at: 2_000 } });
 
-  // ONLY a stained stamp on disk: there is no trusted fallback, so the strict floor
-  // deletes nothing and says so.
+  // ONLY a stained stamp on disk: there is no trusted fallback. CHANGED
+  // 2026-11-02 (user decision): an unproven copy cannot be restored, so keeping
+  // it "just in case" protects nothing — the history converges anyway.
   const refused = pruneBackups(backups, 1);
-  assert.equal(refused.skipped, true);
-  assert.deepEqual(refused.removed, []);
+  assert.equal(refused.skipped, false);
+  assert.deepEqual(refused.removed, [polluted.name], 'the older, unproven copy went');
   assert.equal(refused.certifiedCount, 0);
   assert.match(String(refused.reason), /no certified backup/);
+  assert.equal(fs.existsSync(polluted.dir), false, 'it is really gone');
 
-  // Certify it for real: now the floor has something to protect.
-  markKnownGood(polluted.dir, {
+  // Put it back with a real criterion: now the floor has something to protect.
+  const proven = makeCopy(backups, polluted.name, { at: 1_000, rawMeta: oldCriterionMeta({ at: 1_000 }) });
+  markKnownGood(proven.dir, {
     reason: 'boot-ok',
     certifiedBy: CERTIFIED_BY.FULL_CHECKS,
     certificationEvidence: CERTIFICATION_EVIDENCE.FINGERPRINT_MATCH,
@@ -399,8 +402,8 @@ test('pruning protects a proven copy, and a polluted one protects nothing', (t) 
   const prune = pruneBackups(backups, 1);
   assert.equal(prune.skipped, false);
   assert.equal(prune.certifiedCount, 1);
-  assert.equal(prune.keptCertified, polluted.name, 'the proven copy is the one the floor names');
-  assert.equal(fs.existsSync(polluted.dir), true);
+  assert.equal(prune.keptCertified, proven.name, 'the proven copy is the one the floor names');
+  assert.equal(fs.existsSync(proven.dir), true, 'and it is never a victim');
 });
 
 /* ------------------------------------------------------------------ *
