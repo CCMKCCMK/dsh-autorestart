@@ -33,7 +33,9 @@ import path from 'node:path';
 import test from 'node:test';
 
 import {
+  BACKUP_TRIGGERS,
   backupsRoot,
+  BOOT_OBSERVATIONS,
   CERTIFICATION_EVIDENCE,
   CERTIFIED_BY,
   contentFingerprintOf,
@@ -41,6 +43,7 @@ import {
   CONTENT_SCOPES,
   createBackup,
   DEFAULT_MAX_BACKUPS,
+  isCertifiedBackup,
   KIND_KNOWN_GOOD,
   KIND_SNAPSHOT,
   KIND_UNKNOWN,
@@ -52,6 +55,37 @@ import {
   readBackupMeta,
   writeBackupMeta,
 } from '../lib/backup.js';
+
+/**
+ * THE VERDICT WORDS THAT MUST NO LONGER BE WRITTEN TO A meta.json (2026-11-02).
+ *
+ * The user's decision was "记录里也一起清掉": a record may answer WHEN, WHAT
+ * TRIGGERED IT and WHAT THE BOOT SAID, and may not answer "is this copy safe".
+ * Asserting their ABSENCE is the only way a future edit cannot quietly bring the
+ * old register back — the read side still derives those words, so nothing else
+ * would notice.
+ */
+const VERDICT_FIELDS = ['kind', 'reason', 'certifiedBy', 'certificationEvidence', 'certifiedAt'];
+
+/** The `meta.json` of a copy, parsed — what is really on disk. */
+function rawMeta(dir) {
+  return JSON.parse(fs.readFileSync(path.join(dir, META_NAME), 'utf8'));
+}
+
+/** Every verdict word is gone from the file on disk. */
+function assertFactsOnly(dir) {
+  const raw = rawMeta(dir);
+  for (const field of VERDICT_FIELDS) {
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(raw, field),
+      false,
+      `meta.json must not carry the verdict field "${field}"`,
+    );
+  }
+  assert.equal(typeof raw.takenAt, 'string', 'it says WHEN the copy was taken');
+  assert.equal(typeof raw.trigger, 'string', 'and WHAT put it there');
+  return raw;
+}
 
 /** A profile-looking tree and an empty backups directory. */
 function fixture(t) {
@@ -215,8 +249,21 @@ test('⑤ markKnownGood promotes a copy and keeps its version', async (t) => {
   assert.equal(meta.certifiedBy, 'full-checks', 'the source that certified it');
   assert.equal(meta.certificationEvidence, CERTIFICATION_EVIDENCE.FINGERPRINT_MATCH, 'and the criterion that was applied');
   assert.equal(meta.version, '0.8.5', 'the version it was proven with');
-  assert.equal(meta.reason, 'boot-ok');
+  // THE RECORD NOW SAYS WHAT HAPPENED, NOT A VERDICT (2026-11-02): what put the
+  // copy there, and what the boot that followed it reported. `reason: 'boot-ok'`
+  // said the same two things in one word that reads like a promise.
+  assert.equal(meta.trigger, BACKUP_TRIGGERS.PRE_RESTART, 'it was taken before a restart');
+  assert.equal(meta.boot.started, true, 'and the boot that followed came up');
+  assert.equal(meta.boot.observedBy, BOOT_OBSERVATIONS.STARTUP_CHECKS, 'watched by the four startup checks');
+  assert.equal(meta.boot.contentMatched, true, 'running exactly the content this copy holds');
+  assert.equal(meta.reason, null, 'the old verdict word is gone from the record');
   assert.equal(meta.requestId, 7, 'the request that took it is kept');
+  // AND THE FILE ITSELF carries no verdict: the derivation above belongs to this
+  // process, never to the user's disk.
+  const raw = assertFactsOnly(snapshot.dir);
+  assert.equal(raw.trigger, BACKUP_TRIGGERS.PRE_RESTART);
+  assert.equal(raw.boot.started, true);
+  assert.equal(raw.boot.contentMatched, true);
 
   const newest = latestKnownGood(backups);
   assert.ok(newest, 'the promoted copy is the rollback target');
@@ -236,7 +283,10 @@ test('⑥ createBackup writes the identity (snapshot by default) and can be seed
   assert.equal(seed.kind, KIND_KNOWN_GOOD);
   const meta = readBackupMeta(seed.dir);
   assert.equal(meta.kind, KIND_KNOWN_GOOD);
-  assert.equal(meta.reason, 'first install');
+  // WHAT IT SAYS NOW (2026-11-02): the trigger, and the honest "no boot yet" —
+  // the free-text `reason` is no longer a place a copy's story is kept.
+  assert.equal(meta.trigger, BACKUP_TRIGGERS.FIRST_INSTALL, 'the fresh installation put this copy there');
+  assert.equal(meta.boot, null, 'and nothing has booted on it yet');
   assert.equal(latestKnownGood(backups).name, seed.stamp, 'the seed is the newest known-good');
 
   // A nonsense kind never silently becomes something else: a copy nobody
@@ -245,13 +295,44 @@ test('⑥ createBackup writes the identity (snapshot by default) and can be seed
   assert.equal(odd.kind, KIND_SNAPSHOT);
 });
 
-test('writeBackupMeta keeps only the three identities', (t) => {
+test('writeBackupMeta writes FACTS, and translates the old vocabulary instead of storing it', (t) => {
   const { backups } = fixture(t);
   const dir = rawBackup(backups, '2026-02-01T00-00-00-000Z');
+  // An unknown word is not an identity, and it does not become one: the record
+  // says NOTHING about what the copy is (no trigger), which reads back as
+  // 'unknown' — the same answer a copy written before this layer gives.
   assert.equal(writeBackupMeta(dir, { kind: 'nonsense', version: '1.2.3' }), true);
   assert.equal(readBackupMeta(dir).kind, KIND_UNKNOWN, 'an unknown word is not an identity');
+  assert.equal(readBackupMeta(dir).trigger, null, 'and nothing is claimed about what put it there');
+  assert.equal(readBackupMeta(dir).version, '1.2.3', 'the version survives');
+  assert.equal(fs.existsSync(path.join(dir, META_NAME)), true, 'the record itself was still written');
+
   assert.equal(writeBackupMeta(dir, { kind: KIND_SNAPSHOT }), true);
   assert.equal(readBackupMeta(dir).kind, KIND_SNAPSHOT);
+  assert.equal(readBackupMeta(dir).trigger, BACKUP_TRIGGERS.PRE_RESTART, 'a snapshot was taken before a restart');
+  assert.equal(readBackupMeta(dir).boot, null, 'nothing was claimed about a boot');
+  assertFactsOnly(dir);
+
+  // THE OLD VOCABULARY IS INPUT, NEVER OUTPUT (2026-11-02): a caller that still
+  // says `certifiedBy` is answering in the old words, so the answer is turned into
+  // the fact it stands for — and the file is checked to prove nothing else leaked.
+  assert.equal(
+    writeBackupMeta(dir, {
+      kind: KIND_KNOWN_GOOD,
+      at: 1_000,
+      certifiedBy: CERTIFIED_BY.FULL_CHECKS,
+      certificationEvidence: CERTIFICATION_EVIDENCE.FINGERPRINT_MATCH,
+      certifiedAt: '2026-02-01T00:00:00.000Z',
+    }),
+    true,
+  );
+  const translated = readBackupMeta(dir);
+  assert.equal(translated.boot.started, true, 'a stated source meant "that boot came up"');
+  assert.equal(translated.boot.observedBy, BOOT_OBSERVATIONS.STARTUP_CHECKS, 'and it says what looked at it');
+  assert.equal(translated.boot.contentMatched, true, 'and that it ran this content');
+  assert.equal(translated.boot.at, '2026-02-01T00:00:00.000Z', 'the moment is the one the caller named');
+  assert.equal(translated.certifiedBy, CERTIFIED_BY.FULL_CHECKS, 'the old vocabulary is derived back on read');
+  assertFactsOnly(dir);
 });
 
 /* ==================================================================== *
@@ -420,14 +501,30 @@ test('⑦ the four proving sources stay distinguishable', async (t) => {
     assert.equal(backup.ok, true);
     assert.equal(markKnownGood(backup.dir, { reason: 'r-', certifiedBy: source }).promoted, true);
     const meta = readBackupMeta(backup.dir);
-    assert.equal(meta.certifiedBy, source, 'the source is stored verbatim');
-    assert.ok(Number.isFinite(Date.parse(meta.certifiedAt)), 'certifiedAt is a real ISO moment');
+    // THE OLD SOURCE NAME SURVIVES THE ROUND TRIP, because it is derived from the
+    // facts on read — but what stands on disk is the observation itself.
+    assert.equal(meta.certifiedBy, source, 'the source is derived back from the fact that was stored');
+    assertFactsOnly(backup.dir);
+    if (source === CERTIFIED_BY.SEED) {
+      assert.equal(meta.trigger, BACKUP_TRIGGERS.FIRST_INSTALL, 'a seed is a trigger, not a boot');
+      assert.equal(meta.boot, null, 'and it claims no boot it never had');
+    } else {
+      const observed = source === CERTIFIED_BY.FULL_CHECKS
+        ? BOOT_OBSERVATIONS.STARTUP_CHECKS
+        : (source === CERTIFIED_BY.COMMAND_PROBE
+          ? BOOT_OBSERVATIONS.HEALTH_PROBE
+          : BOOT_OBSERVATIONS.MANUAL_ROLLBACK);
+      assert.equal(meta.boot.observedBy, observed, 'the record names what really looked at that boot');
+      assert.ok(Number.isFinite(Date.parse(meta.boot.at)), 'and when it did');
+      assert.equal(meta.boot.contentMatched, false, 'a source with no criterion is still not a proof');
+      assert.equal(isCertifiedBackup(meta), false, 'so the copy is not a restore candidate');
+    }
     seen.add(meta.certifiedBy);
   }
   assert.equal(seen.size, 4, 'a full check, a health probe, a seed and a manual rollback are four different answers');
 });
 
-test('⑦ the seed of a fresh installation is born certified, as "seed"', async (t) => {
+test('⑦ the seed of a fresh installation is born with its trigger, as "seed"', async (t) => {
   const { profile, backups } = certFixture(t);
   const seed = await createBackup({
     slimBackup: false,
@@ -440,8 +537,14 @@ test('⑦ the seed of a fresh installation is born certified, as "seed"', async 
   });
   const meta = readBackupMeta(seed.dir);
   assert.equal(meta.kind, KIND_KNOWN_GOOD);
-  assert.equal(meta.certifiedBy, CERTIFIED_BY.SEED, 'the install seed is the one copy that may start out certified');
-  assert.ok(Number.isFinite(Date.parse(meta.certifiedAt)));
+  assert.equal(meta.certifiedBy, CERTIFIED_BY.SEED, 'the install seed is the one copy that may start out restorable');
+  // A SEED HAS NO BOOT BEHIND IT, and the record now says exactly that instead of
+  // carrying a `certifiedAt` that named a check nobody ran.
+  assert.equal(meta.trigger, BACKUP_TRIGGERS.FIRST_INSTALL);
+  assert.equal(meta.takenAt, new Date(3_000).toISOString(), 'when the fresh installation copied it');
+  assert.equal(meta.boot, null);
+  assert.equal(meta.certifiedAt, null, 'nothing was checked, so nothing claims to have been');
+  assertFactsOnly(seed.dir);
 });
 
 test('⑦ markKnownGood promotes NOTHING without evidence, and does not rewrite meta', async (t) => {

@@ -557,7 +557,7 @@ test('a probe that answered on the SAME configuration certifies it, and the fing
   )
 
   const certified = fake.logs.find((entry) => entry.level === 'info'
-    && entry.text.includes('is certified: the health probe answered'))
+    && entry.text.includes('is recorded as booted: the health probe answered'))
   assert.ok(certified, 'the promotion is reported')
   const detail = logDetail(certified)
   assert.equal(detail.fingerprintState, 'equal');
@@ -645,7 +645,7 @@ test('a snapshot taken before fingerprints existed IS certified when its content
   )
 
   const certified = fake.logs.find((entry) => entry.level === 'info'
-    && entry.text.includes('is certified: the health probe answered'))
+    && entry.text.includes('is recorded as booted: the health probe answered'))
   assert.ok(certified, 'the promotion is reported')
   const detail = logDetail(certified)
   // THE LOG HAS TO NAME WHERE THE FINGERPRINT CAME FROM: `computed` (taken just

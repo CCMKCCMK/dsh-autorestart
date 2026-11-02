@@ -26,12 +26,15 @@ import test from 'node:test';
 
 import { apply, seedFirstInstallBackup, verifyRestartBoot } from '../index.js';
 import {
+  BACKUP_TRIGGERS,
   backupsRoot,
+  BOOT_OBSERVATIONS,
   createBackup,
   KIND_KNOWN_GOOD,
   KIND_SNAPSHOT,
   latestKnownGood,
   markKnownGood,
+  META_NAME,
   readBackupMeta,
 } from '../lib/backup.js';
 import { buildRestartVerdict, writeRestartVerdict, RESTART_RESULTS } from '../lib/restart-verdict.js';
@@ -89,7 +92,12 @@ test('① the first boot of a new process seeds a known-good copy', async (t) =>
   assert.ok(newest, 'a known-good copy exists now');
   assert.equal(newest.dir, record.dir);
   assert.equal(readBackupMeta(newest.dir).kind, KIND_KNOWN_GOOD, 'the seed IS known-good, not a snapshot');
-  assert.equal(readBackupMeta(newest.dir).reason, 'first-install');
+  // WHAT THE RECORD SAYS NOW (2026-11-02): what put the copy there, and — the
+  // honest half — that no boot has been observed on it. The free-text
+  // `reason: 'first-install'` was a sentence about a decision; the trigger is the
+  // fact behind it.
+  assert.equal(readBackupMeta(newest.dir).trigger, BACKUP_TRIGGERS.FIRST_INSTALL);
+  assert.equal(readBackupMeta(newest.dir).boot, null, 'nothing has booted on the seed, and it says so');
   assert.equal(readBackupMeta(newest.dir).version, '0.8.5', 'the version it was seeded with');
   assert.ok(fs.existsSync(path.join(record.dir, 'config', 'cordis.patch.yml')), 'the copy really holds the profile');
 });
@@ -193,14 +201,32 @@ test('③ a restart that came up leaves its snapshot UNPROVEN until the caller s
   // checks must have run and passed. Here the profile was not touched between the
   // snapshot and the boot, so the content identity holds and the copy is promoted.
   const certified = readBackupMeta(snapshot.dir)
-  assert.equal(certified.kind, KIND_KNOWN_GOOD, 'the snapshot is the safe copy now')
-  assert.equal(certified.certifiedBy, 'full-checks', 'and it says WHY it counts as safe')
-  assert.ok(Number.isFinite(Date.parse(certified.certifiedAt)), 'with the moment it was checked')
+  assert.equal(certified.kind, KIND_KNOWN_GOOD, 'the snapshot is the known-booted copy now')
+  assert.equal(certified.certifiedBy, 'full-checks', 'and it says which observation is behind it')
+  // WHAT THE RECORD SAYS (2026-11-02): when the copy was taken, what put it there,
+  // and what that boot reported — three answers a reader can check, instead of the
+  // word "boot-ok" that read like a promise about the plugins inside.
+  assert.equal(certified.trigger, BACKUP_TRIGGERS.PRE_RESTART, 'it was taken before the restart it belongs to')
+  assert.equal(certified.boot.started, true, 'and the host really came up after it')
+  assert.equal(certified.boot.observedBy, BOOT_OBSERVATIONS.STARTUP_CHECKS, 'watched by the four startup checks')
+  assert.equal(certified.boot.contentMatched, true, 'running exactly the content the copy holds')
+  assert.ok(Number.isFinite(Date.parse(certified.boot.at)), 'with the moment it was checked')
+  // AN EMPTY LIST, NOT `null`: the four checks ran, and the `plugin` check is the
+  // one that reports plugin load failures — so this boot CAN answer the question,
+  // and the answer is "none". (`null` would mean nobody looked.)
+  assert.deepEqual(certified.boot.loadFailures, [], 'this boot reported no plugin load failure')
   assert.equal(certified.contentScope, 'config-only', 'and the content the check applies to')
   // No restorer report is on disk in this fixture, so nobody can say whether this
   // boot needed help: `null` ("not recorded") — never a made-up `false`.
   assert.equal(certified.intervention, null, 'an unrecorded intervention stays unknown')
-  assert.equal(certified.reason, 'boot-ok')
+  assert.equal(certified.reason, null, 'the old verdict word is gone from the record')
+  // AND NOTHING ON DISK CARRIES A VERDICT: the derivation belongs to this process.
+  const raw = JSON.parse(fs.readFileSync(path.join(snapshot.dir, META_NAME), 'utf8'))
+  for (const field of ['kind', 'reason', 'certifiedBy', 'certificationEvidence', 'certifiedAt']) {
+    assert.equal(Object.prototype.hasOwnProperty.call(raw, field), false, `meta.json must not carry "${field}"`)
+  }
+  assert.equal(raw.boot.started, true)
+  assert.equal(raw.boot.contentMatched, true)
   assert.equal(latestKnownGood(backups).dir, snapshot.dir)
 });
 

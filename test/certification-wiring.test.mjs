@@ -838,7 +838,7 @@ test('a boot whose snapshot is an OLD copy certifies it when the content is what
   // polluted ones it sits next to.
   assert.equal(meta.certificationEvidence, 'fingerprint-match', '老备份补封条时也要写明判据');
 
-  const certified = runtime.infos.find((entry) => /is certified/.test(String(entry.message)));
+  const certified = runtime.infos.find((entry) => /is recorded as booted/.test(String(entry.message)));
   assert.ok(certified, 'the promotion is reported');
   assert.match(String(certified.message), /COMPUTED just now/, 'the log says the fingerprint was computed, not recorded');
   assert.equal(certified.detail.fingerprintSource, FINGERPRINT_SOURCES.COMPUTED, 'and names the source');

@@ -107,10 +107,11 @@ The plugin turns a restart into a **resumable** event, and the order never chang
    itself; the hosted web client is covered below);
 4. **The new process checks itself** — four things: is the port up, are the routes there, did the
    plugin load, did the sessions resume;
-5. **If it did not come up, it rolls back** — a snapshot (configuration + installed plugins) that has
-   been **verified to work** is put back, and the verdict of that restart is written down honestly.
-   **When there is not a single verified one**, it does not put "the newest one" in its place: it
-   reports plainly that there is no trusted restore point.
+5. **If it did not come up, it rolls back** — a snapshot (configuration + installed plugins) whose
+   identity is `known-good` (it was taken before a restart that then came up) is put back, and the
+   verdict of that restart is written down honestly.
+   **When there is not a single copy with that identity**, it does not put "the newest one" in its
+   place: it reports plainly that there is no restore point carrying an identity.
 
 So "the restart lost my work" becomes "the restart carried on": you do not have to type "continue".
 
@@ -348,32 +349,45 @@ Two blocks of the settings page are worth a word, because they show facts instea
 
 - **What is backed up right now** (right under the two backup switches): the HOST reads
   `<DSH_HOME>/storages/dsh-autorestart/backups/`, so the number of copies, the **local time** of each
-  one, its size, whether the installed plugins are in it and where it lives are all real. Only
-  the directory metadata is read — the contents are never walked (one copy can be 150 MB). With no
-  backup at all it says: "No backup yet; one is written before every restart."
-  Every copy leads with **what it is** — its identity — so the list answers the only question that
-  matters ("may this one be restored?"), then two labelled rows, so nothing runs into anything else:
+  one, how much disk they take together and where the folder lives are all real. Only the directory
+  metadata is read — the contents are never walked (one copy can be 150 MB). With no backup at all it
+  says: "No backup yet; one is written before every restart."
+  Every row is one copy and carries two things: its backup **time**, and the one action that applies
+  to it ("Roll back to this copy"). A row carries **no size** — the total sits once, above the list,
+  as "Using 156 MB on disk, 2 copies right now". The list does **not** say which copy is the safe
+  one — the plugin no longer makes that call (user decision, 2026-11-02): a row is a time and a
+  button, and the judgement is the reader's:
 
   ```
-  Identity  Known good · version 0.8.6
-  Backup time 2026-10-29 22:08
-  Backup size 156 MB (plugins included)
+  Using 156 MB on disk, 2 copies right now
+
+  Backup time 2026-10-29 22:08   [Roll back to this copy]
+  Backup time 2026-10-29 21:44   [Roll back to this copy]
   ```
 
-  The identity is one of **known good** (a copy a boot has already proven — the only kind an automatic
-  rollback may restore), **this restart's snapshot** (taken right before a restart and not proven yet)
-  or **old backup (unverified)** (written before the identity layer existed, or without an identity
-  file — shown, never rolled back automatically). A short paragraph above the list says the same in
-  plain words, plus the rules behind it (only a known-good copy is rolled back, the first install
-  seeds one, at most three copies are kept, a manual rollback asks for confirmation and then
-  restarts). The identity and the version it was proven with come from the Host
-  (`backups.items[].kind` / `backups.items[].version`) — the browser cannot read `meta.json`.
+  One row can carry one more neutral sentence, and it is not a verdict: the copy the host last
+  started from says "This is the state at the most recent startup. DSH starting does not mean every
+  plugin is healthy — a broken plugin is excluded and the host still boots. Which copy to roll back
+  to is your call." It is attached by the copy's own record, never by its position in the list.
+
+  The identity still exists, but **it is not on disk**. `meta.json` next to each copy records FACTS
+  only — when the copy was taken (`takenAt` / `at`), what put it there (`trigger`: `first-install` /
+  `pre-restart` / `manual-rollback`), `version`, the content fingerprint, and what the boot that
+  followed reported (`boot`: did the host come up, was it running this content, which plugin load
+  failures it listed). The three names are **derived from those facts when the copy is read** —
+  `known-good` (a boot is on record after it, or it is the first-install copy), `snapshot` (no boot
+  after it yet) or `unknown` (no readable `meta.json`, or no usable boot record on an old copy). Being
+  restorable is a **second, narrower check** on top of that name: an automatic rollback only restores
+  a copy whose recorded boot both started and ran this exact content. The value records what happened
+  after the copy was taken; it is not an evaluation of whether the plugins
+  inside it work. The browser cannot read `meta.json`, and no identity is printed on a row.
 
   The time is the local clock of the machine that took the copy, **to the minute and with no
-  timezone offset** (a `+08:00` only adds noise — the reader is looking at their own clock). The
-  size picks its own unit (`92 KB` / `156 MB`), keeps the tenth only when it says something
-  (`117.7 MB`, never `156.0 MB`), and the plugin scope sits in brackets right after it, because it
-  is the reason the copy is that big. Two copies are two groups with air between them.
+  timezone offset** (a `+08:00` only adds noise — the reader is looking at their own clock). The size
+  of the whole folder picks its own unit (`92 KB` / `156 MB`) and keeps the tenth only when it says
+  something (`117.7 MB`, never `156.0 MB`); it is printed once in the summary line above the rows,
+  never on a row, and it carries no "(plugins included)" bracket. Two copies are two groups with air
+  between them.
 - **A setting that was saved says so.** Every control writes itself the moment it is changed, so the
   panel has to say whether the write landed: once the HOST answers `ok: true`, a green strip at the
   **top of the settings panel itself** (inside the panel — a `sticky` row, so it stays visible while
@@ -420,7 +434,7 @@ show up in the Plugin Manager and in the config editor.
 | `continuationText` | `''` | Overrides the default continuation prompt text. |
 | `backupOnRestart` | `true` | Snapshot the profile before every restart, so a restart that leaves the host unable to boot can be rolled back. |
 | `backupIncludePlugins` | `true` | Include the installed plugin tree in that snapshot (about 117 MB here, ~3 s). `false` keeps only the configuration files. |
-| `maxBackups` | `3` | How many snapshots are kept (the current one plus the two before it); older ones are deleted when a new one is written — **except the newest known-good copy, which is never deleted**. |
+| `maxBackups` | `3` | How many snapshots are kept (the current one plus the two before it); older ones are deleted when a new one is written — **except the newest copy whose identity is `known-good`, which is never deleted**. |
 | `rollbackTimeoutMs` | `90000` | How long the detached watcher waits for the new host before it restores the snapshot. |
 | `restartCommandTimeoutMs` | `30000` | How long the restart command may run before the plugin stops waiting for it. A command that starts the host in the foreground never returns — that is reported as "still running", not as a failure. |
 | `rollbackCopyTimeoutMs` | `120000` | How long ONE restore step (the configuration files, then the plugin tree) may take. A restore that does not finish in time is given up and the reason is written into the rollback report. |
@@ -628,20 +642,29 @@ it was started from, so a restart that leaves the host unable to boot can be und
   working), `replaced` (the copy takes its place), `target-missing`, `no-backup`. The restore script
   has `-ForceLinkPlugins` for "replace them all"; the watchdog uses the same rules
   (`decideLinkRestore`) and does not give a link a second chance (`attempts >= 2` ⇒ replaced).
-- **The rollback target is the newest PROVEN copy, not the newest copy** (user decision,
-  2026-10-30). Every copy carries its identity in a `meta.json`: `known-good` (a copy a boot has
-  already survived), `snapshot` (taken right before a restart, not proven yet) or `unknown` (written
-  before the identity layer). The snapshot taken right before THIS restart is never the rollback
-  target — it may be the broken state itself (that is exactly the "I edited a plugin and clicked
-  restart" case). The first install seeds one known-good copy, and every boot that passes its health
-  check promotes the snapshot of that restart to known-good.
-- **No known-good copy, no restore at all.** When nothing has been proven yet, the plugin restores
-  nothing and says why: the report carries `no-known-good: <reason>`, the profile is left exactly as
-  the failed restart left it, and no watcher is armed (a watcher with nothing to restore would only
-  write the broken state back).
+- **The rollback target is the copy taken before an earlier restart that came up, not the newest
+  copy** (user decision, 2026-10-30). Every copy carries a `meta.json`, and **it records facts
+  only**: when it was taken, what put it there (`trigger`), `version`, the content fingerprint, and
+  what the boot that followed reported (did the host come up, was it this content, which plugin load
+  failures). The three identity names — `known-good`, `snapshot`, `unknown` — are **derived from
+  those facts when the copy is read, never written to disk**: a copy with a boot on record after it
+  (or the first-install copy) is `known-good`; a copy with no boot after it yet is `snapshot`; a copy
+  with no readable `meta.json`, or an old one with no usable boot record, is `unknown`. That name is
+  not the same question as "can it be restored": the automatic rollback additionally requires the
+  recorded boot to have started and to have run this exact content. The identity records what
+  happened after the copy was taken; it is not an
+  evaluation of whether the plugins inside it work. The snapshot taken right before THIS restart is
+  never the rollback target — it may be the broken state itself (that is exactly the "I edited a
+  plugin and clicked restart" case). The first install seeds one copy with `trigger: first-install`,
+  and every boot whose checks pass on this exact content records a `boot` on that restart's snapshot.
+- **No `known-good` copy, no restore at all.** When no copy has a boot recorded after it yet, the
+  plugin restores nothing and says why: the report carries `no-known-good: <reason>`, the profile is
+  left exactly as the failed restart left it, and no watcher is armed (a watcher with nothing to
+  restore would only write the broken state back).
 - **How many are kept:** the newest `maxBackups` snapshots (default `3`: the current one plus the two
-  before it); older ones are deleted when a new one is written. The newest **known-good** copy is
-  never deleted, whatever the limit says — it is the only thing a failed boot can roll back to.
+  before it); older ones are deleted when a new one is written. The newest copy whose identity is
+  `known-good` is never deleted, whatever the limit says — it is the only kind an automatic rollback
+  restores.
 - **How a failed boot is detected:** a small watcher runs **outside** the host process (so it survives
   the host being killed). It waits for the **new** instance and probes **its** health route for
   `rollbackTimeoutMs` (default `90000`). The new instance publishes its own port and its own boot id
@@ -658,8 +681,8 @@ it was started from, so a restart that leaves the host unable to boot can be und
   The watcher is therefore started **before** the command runs, and it is the one that decides
   whether the new instance came up.
 - **A manual rollback to ANY copy** (user decision, 2026-10-30): the settings page offers
-  "roll back to this copy" on every row, so a copy from last week — even an unverified one — can be
-  restored on purpose. It asks first (which copy, that the current state is replaced, that a restart
+  "roll back to this copy" on every row, so a copy from last week — even one with no boot recorded
+  after it — can be restored on purpose. It asks first (which copy, that the current state is replaced, that a restart
   follows); the Host saves the current state as a fresh snapshot BEFORE it restores anything, writes
   `last-manual-rollback.json`, and only then requests a normal restart (the plugin never kills the
   host itself). The route (`POST /__dsh_autorestart/rollback-to`) takes a backup NAME only — a path
@@ -790,8 +813,8 @@ The two failures are handled by two different mechanisms, and they never overlap
 | **reported** — the host is up, one plugin silently did not activate | **a report and a popup, nothing else** — the user decides, and one button puts ONE plugin back |
 
 **THE BOOT PASS DOES NOT FIX ANYTHING** (user decision, 2026-11-01). It used to
-put the known-good copy back and ask for one restart; measurement showed that
-was redundant work on top of what the host already does:
+put the backup whose identity is `known-good` back and ask for one restart;
+measurement showed that was redundant work on top of what the host already does:
 
 - the host **already survives** a broken plugin — measured at **22 s** on the
   desktop (normal boot, the broken plugin's route 404s, the configuration is not
@@ -815,7 +838,7 @@ action: *"Restore `<plugin>` only"*.
 the ONLY remaining writer into the profile, and it only runs because a human
 pressed the button:
 
-- **`overwrite`** — the newest **known-good** backup holds a real copy: the live
+- **`overwrite`** — the newest backup whose identity is `known-good` holds a real copy: the live
   directory is renamed to `<name>.broken-<ts>` (**evidence — nothing is ever
   deleted**) and the backup copy takes its place;
 - **`replace-link`** — the backup only holds the CONTENTS of a `link:` install
@@ -885,8 +908,11 @@ Everything is written to `<stateDir>/last-plugin-recovery.json`:
 ```
 
 `restoredAt` and `backupKind` come from the **backup's own `meta.json`**, so the
-answer to "restored to which point in time" is the identity of that copy and not
-the moment the clock was read. The same object is exposed as `pluginRecovery` on
+answer to "restored to which point in time" is that copy's own record and not
+the moment the clock was read. The file holds facts (when the copy was taken, what
+triggered it, `version`, the content fingerprint, what the boot after it reported);
+`backupKind` is the identity the Host **derives** from those facts — the file does
+not carry a `kind` field any more. The same object is exposed as `pluginRecovery` on
 the health route and by `continuum_status` (`null` / omitted when this machine
 never had such an incident). The reading of the report is not part of this
 change: the interface part is a separate task.
@@ -1196,9 +1222,9 @@ against)` — there is no "broken" state.
   to be handled by hand.
 - **It only stands watch inside one window**: a restart that **this plugin** started. After the host is
   replaced it waits for the new instance and asks **that instance's own** health route (never the old
-  instance, never the old port), then works in a fixed order: **restore the newest proven ("known-good")
-  backup → clear the stale `dsh-auth-*` handshake cookies → start the host again → wait for the ready
-  marker**.
+  instance, never the old port), then works in a fixed order: **restore the newest backup whose
+  identity is `known-good` → clear the stale `dsh-auth-*` handshake cookies → start the host again →
+  wait for the ready marker**.
 - **Three possible triggers, one chosen from what this machine can do and reported honestly**: a Windows
   scheduled task / a systemd user timer / a background process of its own; **with none of the three this
   machine has no automatic rollback** and the settings page says exactly that.

@@ -148,6 +148,75 @@ test('the two locale files and the built-in dictionaries have the same keys', ()
   assert.deepEqual(fileEn, inlineEn, 'locale/en.json is the mirror of the English dictionary')
 })
 
+/** The flattened key → text of a nested dictionary (values kept, not just paths). */
+function flatTexts(object, prefix = '') {
+  const out = {}
+  for (const [key, value] of Object.entries(object)) {
+    const path = prefix === '' ? key : prefix + '.' + key
+    if (value && typeof value === 'object' && !Array.isArray(value)) Object.assign(out, flatTexts(value, path))
+    else out[path] = value
+  }
+  return out
+}
+
+/**
+ * THE MIRRORS SAY THE SAME THING AS THE DICTIONARY — text for text (2026-11-02).
+ *
+ * WHY THIS EXISTS: the check above compares KEYS, and only keys. That keeps the
+ * mirrors complete; it does not keep them truthful. `watchdog.explain` went on
+ * saying "验证过能用" in BOTH mirrors for a whole round after the dictionary had been
+ * reworded, and nothing went red, because every key was still there. What the user
+ * read was the old promise, not the new fact — the very sentence this change is
+ * about.
+ *
+ * A mirror that is allowed to disagree with its source is not a mirror; it is a
+ * second copy that will drift. So the values are compared here, for every key, in
+ * both languages.
+ */
+test('the locale files mirror the dictionaries TEXT FOR TEXT, not only by key', () => {
+  const api = loadClient({ language: 'zh-CN' })
+  const pairs = [
+    ['zh.json', 'zh'],
+    ['en.json', 'en'],
+  ]
+  for (const [file, language] of pairs) {
+    const mirror = flatTexts(JSON.parse(fs.readFileSync(new URL('../locale/' + file, import.meta.url), 'utf8')))
+    const inline = api.dictionaries[language]
+    assert.deepEqual(Object.keys(mirror).sort(), Object.keys(inline).sort(), file + ' has exactly the dictionary keys')
+    const differing = Object.keys(inline).filter((key) => mirror[key] !== inline[key])
+    assert.deepEqual(differing, [], 'locale/' + file + ' must say what the dictionary says (drifted keys listed above)')
+  }
+})
+
+/**
+ * AND THE ONE SENTENCE THE USER ACTUALLY READ: the rescue notice (2026-11-02).
+ *
+ * It may say what the rescue DOES and by which two facts it picks a copy — the
+ * content fingerprint matched, and that boot came up. It may NOT promise a usable
+ * backup: "these plugins are fine" is exactly what the record cannot know, since a
+ * boot on this content says nothing about whether the plugins inside are healthy.
+ */
+test('watchdog.explain states the criterion and promises nothing about the plugins', () => {
+  const api = loadClient({ language: 'zh-CN' })
+  const zh = api.dictionaries.zh['watchdog.explain']
+  const en = api.dictionaries.en['watchdog.explain']
+  const fileZh = JSON.parse(fs.readFileSync(new URL('../locale/zh.json', import.meta.url), 'utf8')).watchdog.explain
+  const fileEn = JSON.parse(fs.readFileSync(new URL('../locale/en.json', import.meta.url), 'utf8')).watchdog.explain
+
+  assert.equal(fileZh, zh, 'locale/zh.json is character-for-character the dictionary text')
+  assert.equal(fileEn, en, 'locale/en.json is character-for-character the dictionary text')
+
+  assert.equal(zh.includes('验证过能用'), false, 'the old promise is gone from the Chinese text')
+  assert.equal(zh.includes('内容指纹一致'), true, 'the Chinese text names the first criterion')
+  assert.equal(zh.includes('那次启动起来了'), true, 'and the second one')
+  assert.equal(zh.includes('这不代表里面的插件都正常'), true, 'and says what it does NOT mean')
+
+  assert.equal(en.includes('verified backup'), false, 'the old promise is gone from the English text')
+  assert.equal(en.includes('content fingerprint matched'), true, 'the English text names the first criterion')
+  assert.equal(en.includes('that boot came up'), true, 'and the second one')
+  assert.equal(en.includes('does not mean the plugins inside are all fine'), true, 'and says what it does NOT mean')
+})
+
 test('the language follows the Host, and the browser is only the fallback', () => {
   const api = loadClient({ language: 'zh-CN' })
   assert.equal(api.currentLanguage(), 'zh', 'the browser language decides when the Host says nothing')

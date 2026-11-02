@@ -78,6 +78,11 @@ import {
   backupPluginDirIn,
   BACKUP_LIMIT_MAX,
   BACKUP_LIMIT_MIN,
+  // WHAT PUT A COPY ON DISK, AND WHAT THE BOOT AFTER IT REPORTED (2026-11-02):
+  // the fact vocabulary that replaced the old "is this copy safe" register. The
+  // call sites below state these instead of a stamp.
+  BACKUP_TRIGGERS,
+  BOOT_OBSERVATIONS,
   CERTIFIED_BY,
   claimRollbackLock,
   manifestPluginsOf,
@@ -2112,7 +2117,7 @@ export function readEnabledPlugins(profileDir) {
 }
 
 /**
- * THE FIRST SAFE COPY (user decision, 2026-10-30).
+ * THE FIRST-INSTALL BACKUP (user decision, 2026-10-30).
  *
  * A machine that has never restarted has no backup at all, so a boot that fails
  * after the plugin is installed has nothing to roll back to. The FIRST boot of a
@@ -2125,7 +2130,7 @@ export function readEnabledPlugins(profileDir) {
  *
  * A failure is NOT silent: it is recorded on `runtime.firstInstallBackup` (and
  * in the checkpoint, so it survives the next boot) and the health route reports
- * it, because a machine with no safe copy must be able to say so.
+ * it, because a machine with no backup must be able to say so.
  *
  * @param {object} runtime
  * @param {object} [config]
@@ -2137,7 +2142,7 @@ export async function seedFirstInstallBackup(runtime, config = {}, overrides = {
   if (state === null) return null
   if (runtime.isNewBoot !== true) return null
   // NO BACKUPS AT ALL: the user switched the pre-restart snapshot off, so a
-  // safe copy is not wanted either.
+  // backup is not wanted either.
   if (config.backupOnRestart === false) return null
   const stateDir = path.dirname(String(runtime.stateFile ?? ''))
   const backupsDir = backupsDirFor(stateDir)
@@ -2185,7 +2190,7 @@ export async function seedFirstInstallBackup(runtime, config = {}, overrides = {
     return record({ result: 'present', at: Date.now(), dir: existing.dir, bytes: null, error: null })
   }
   /**
-   * Report that this machine has NO safe copy, with the reason.
+   * Report that this machine has NO backup, with the reason.
    *
    * @param {string} error
    * @returns {object}
@@ -2193,7 +2198,7 @@ export async function seedFirstInstallBackup(runtime, config = {}, overrides = {
   const failed = (error) => {
     const value = { result: 'no-known-good', at: Date.now(), dir: null, bytes: null, error: String(error) }
     try {
-      runtime.log.warn('the first safe copy could not be written: this machine has nothing to roll back to', { error: String(error) })
+      runtime.log.warn('the first-install backup could not be written: this machine has nothing to roll back to', { error: String(error) })
     } catch {}
     return record(value)
   }
@@ -2214,7 +2219,11 @@ export async function seedFirstInstallBackup(runtime, config = {}, overrides = {
       includePlugins: false,
       maxBackups: Number.isFinite(maxBackups) && maxBackups >= 1 ? Math.trunc(maxBackups) : DEFAULT_MAX_BACKUPS,
       kind: KIND_KNOWN_GOOD,
-      reason: 'first-install',
+      // WHAT PUT THIS COPY THERE, as a fact (2026-11-02): the fresh installation.
+      // The old `reason: 'first-install'` free-text field is gone from the record;
+      // this is the field a reader can compare against, and it is also what makes
+      // the seed restorable without ever calling it "safe".
+      trigger: BACKUP_TRIGGERS.FIRST_INSTALL,
       version: runtime.pluginVersion ?? PLUGIN_VERSION_FALLBACK,
       bootId: runtime.bootId ?? null,
     })
@@ -2222,7 +2231,7 @@ export async function seedFirstInstallBackup(runtime, config = {}, overrides = {
     return failed(error && error.message ? error.message : String(error))
   }
   if (!result || result.ok !== true || typeof result.dir !== 'string' || result.dir === '') {
-    return failed(result && result.error ? result.error : 'the safe copy was not written')
+    return failed(result && result.error ? result.error : 'the first-install backup was not written')
   }
   return record({
     result: 'seeded',
@@ -4725,7 +4734,11 @@ const titleOfSummary = (item) => {
         includePlugins: config.backupIncludePlugins !== false,
         maxBackups: config.maxBackups,
         kind: KIND_SNAPSHOT,
-        reason: 'before-manual-rollback',
+        // WHAT PUT THIS COPY THERE, as a fact (2026-11-02): the undo copy of a
+        // manual rollback. The old `reason: 'before-manual-rollback'` said the same
+        // thing in a free-text field, which is the field that used to be read as a
+        // label of quality.
+        trigger: BACKUP_TRIGGERS.MANUAL_ROLLBACK,
         version: ownVersion(),
         bootId,
       })
@@ -6212,7 +6225,7 @@ const titleOfSummary = (item) => {
             // 但「新实例答了健康路由」并不等于「重启前那份配置能起来」（2026-11-01，本插件第二条同型路径）：
             //   - 探活可能是**旧实例**答的（端口/引导号没换、或新实例根本起在别的配置上）；
             //   - 配置可能在快照与这次探活之间被换过（还原、手改、别的写入者）。
-            // 只要这两件事有任何一件发生，把重启前那份盖成 `command-probe` 安全份，
+            // 只要这两件事有任何一件发生，把重启前那份记成「探活成功时跑的就是这一份」，
             // 就是 12-04-33 那次事故的翻版（坏配置被认证，随后被「还原」覆盖回去）。
             // 所以这里和 app 模式那条（verifyRestartBoot -> decideBootCertification）用**同一条判据**：
             //   快照侧的指纹 == 此刻磁盘上这份配置的指纹，两侧都存在且相等才盖章。
@@ -6226,7 +6239,7 @@ const titleOfSummary = (item) => {
             //   - 快照侧：`snapshotConfigFingerprint(backup.dir)` —— meta.json 里**当初记下**的指纹优先；
             //     没有（老备份，那份 meta 比这个字段还老）就**现算**：读副本自己的 `config/` 算一张。
             //     没指纹 ≠ 内容不对：当初没拍照，不等于内容可疑；文件还在就能补拍一张再比。
-            //     不给它补，等于「升级一次就把用户手里的安全份全收走」——这是本插件最不该做的事。
+            //     不给它补，等于「升级一次就把用户手里那份能回退的备份全收走」——这是本插件最不该做的事。
             //     代价：早先刻意只读 meta，是为了防「事后被改过的副本自证」；现算让这层防护弱了一点
             //     （要同时把副本和现役配置改成同一份内容才能骗过，而那时「这份内容能起来」本来就是真的）。
             //     取舍写在这里的唯一出处：`snapshotConfigFingerprint` 的注释。
@@ -6237,7 +6250,7 @@ const titleOfSummary = (item) => {
             //     （profile 根目录，不是副本里的 config/ 子目录）。
             //   - 时机：command 模式下这段跑在**旧宿主进程**里（见上面 5746 附近那段注释），此刻磁盘上的配置
             //     就是新实例启动时读的那一份；之后若有人又写了配置，指纹就会不一致——那正是要拒绝的时候。
-            // 拿不到任何一侧的可靠指纹时**一律拒绝**：宁可没有安全份，也不许盖错章。
+            // 拿不到任何一侧的可靠指纹时**一律拒绝**：宁可没有可回退的那一份，也不许盖错章。
             if (backup && typeof backup.dir === 'string' && backup.dir !== '') {
               const side = snapshotConfigFingerprint(backup.dir)
               if (side.source === FINGERPRINT_SOURCES.UNAVAILABLE) {
@@ -6280,25 +6293,30 @@ const titleOfSummary = (item) => {
                 } else {
                   const intervention = detectBootIntervention(stateDir, { sinceMs: restartStartedAt })
                   const promoted = markKnownGood(backup.dir, {
-                    reason: 'boot-ok',
-                    certifiedBy: CERTIFIED_BY.COMMAND_PROBE,
-                    // AND WHICH CRITERION PROVED IT (2026-11-01): `fingerprint-match`,
-                    // i.e. the comparison `decideProbeCertification` just accepted.
-                    // Without it the seal would name a source and nothing else — the
-                    // exact shape of the two broken 71B/70B configurations this
-                    // change exists to invalidate. The value comes FROM the decision
-                    // (`null` when it refused), so a refusal can never be written as
-                    // a stamp even if a future edit forgets to check `certified`.
-                    certificationEvidence: decision.certificationEvidence,
+                    // THE FACTS, NOT A VERDICT (user decision, 2026-11-02): what was
+                    // really observed on that boot — it came up, it was running
+                    // exactly the content this copy holds, and the observation was
+                    // the health probe (the four startup checks do NOT run on this
+                    // path, so they are not named). The copy's own record then
+                    // answers "was this ever booted, and on what" without ever
+                    // claiming the plugins inside are good.
+                    observedBy: BOOT_OBSERVATIONS.HEALTH_PROBE,
+                    hostStarted: true,
+                    // `fingerprintsEqual` IS the criterion, taken from the decision
+                    // itself so a refusal can never be written as a match.
+                    contentMatched: decision.fingerprintsEqual === true,
+                    // No check ran on this path, so nobody looked at plugin load
+                    // failures: `null` ("not recorded"), never an empty list that
+                    // would read as "there were none".
+                    loadFailures: null,
                     // The content that was PROVEN is the fingerprint that was compared —
                     // recorded in the meta, or computed from the copy when the meta had
-                    // none. Either way THIS is the value the comparison accepted, so it
-                    // is what the seal names.
+                    // none. Either way THIS is the value the comparison accepted.
                     contentFingerprint: decision.snapshotFingerprint,
                     contentScope: contentScopeOf(backup.dir),
                     intervention: intervention.intervention,
                   })
-                  log.info('the snapshot of this restart is certified: the health probe answered and this boot runs exactly the snapshot content' + sourceNote, {
+                  log.info('the snapshot of this restart is recorded as booted: the health probe answered and this boot runs exactly the snapshot content' + sourceNote, {
                     dir: backup.dir,
                     mode: 'command',
                     promoted: promoted.promoted,
@@ -8295,7 +8313,7 @@ export const FINGERPRINT_STATE_UNREADABLE = 'snapshot-unreadable'
  * takes editing the copy AND the live profile to the same content — at which
  * point "this content boots" is true anyway, which is the whole claim a
  * certification makes. The trade is deliberate: it buys back "the upgrade does
- * not take away every safe copy a user had".
+ * not take away every booted copy a user had".
  *
  * NOTHING IS WRITTEN HERE. The computed value is used for THIS decision only and
  * is never stored back into the meta: the field in `meta.json` is "what was
@@ -8430,7 +8448,7 @@ export function fingerprintSourceNote(source) {
  * A copy older than the fingerprint field is NOT refused for being old: its
  * fingerprint is COMPUTED from the copy's own `config/` (`snapshotConfigFingerprint`)
  * and then compared exactly like a recorded one. 没指纹 ≠ 内容不对 — 老备份只是当初
- * 没拍照，补拍一张再比；不补，升级一次就把用户手里的安全份全收走了。 What still
+ * 没拍照，补拍一张再比；不补，升级一次就把用户手里那份能回退的备份全收走了。 What still
  * refuses is CONTENT that differs, and a reference that cannot even be computed
  * (missing / unreadable copy), which is reported as a computation failure — never
  * as a mismatch. The computed value is NOT written back into the meta.
@@ -8491,7 +8509,7 @@ export async function verifyRestartBoot(runtime, options = {}) {
         //     taken — and, for a copy older than that field, one COMPUTED from the
         //     copy's own `config/` right now (`snapshotConfigFingerprint`).
         //     没指纹 ≠ 内容不对：升级上来的老备份不是可疑，只是当初没拍照；文件还在，
-        //     就能补拍一张再比。不给它补，等于升级一次就把用户的安全份全收走。
+        //     就能补拍一张再比。不给它补，等于升级一次就把用户那份能回退的备份全收走。
         //     代价（现算放弃了「事后被改过的副本不能自证」这层防护）写在
         //     `snapshotConfigFingerprint` 的注释里，那里是唯一的出处。
         //   - the current side is the configuration on disk in this very boot.
@@ -8541,26 +8559,33 @@ export async function verifyRestartBoot(runtime, options = {}) {
             // 也正因如此：指纹一致 + 四检全过才会走到这里，restore 改过盘就一定不一致。
             const intervention = detectBootIntervention(stateDir, { sinceMs: pending.startedAt })
             const promoted = markKnownGood(snapshotDir, {
-              reason: 'boot-ok',
-              certifiedBy: CERTIFIED_BY.FULL_CHECKS,
-              // AND THE CRITERION, from the decision itself (`null` when it
-              // refused): the two fingerprints were compared and matched. This is
-              // the "补封条" channel — an OLD copy whose meta recorded no
-              // fingerprint gets one computed from its own `config/` and is then
-              // sealed exactly like a fresh one, so an upgrade does not take away
-              // the safe copies a user already had. What it never does is seal a
-              // copy whose content did NOT match: `decideBootCertification` refuses
-              // those, and a refusal carries `certificationEvidence: null`.
-              certificationEvidence: decision.certificationEvidence,
+              // THE FACTS, NOT A VERDICT (user decision, 2026-11-02): that boot came
+              // up, it was running exactly the content this copy holds, and the four
+              // startup checks are what looked at it. "插件可用" is not one of those
+              // three answers, and the record no longer pretends to give it.
+              observedBy: BOOT_OBSERVATIONS.STARTUP_CHECKS,
+              hostStarted: true,
+              contentMatched: decision.fingerprintsEqual === true,
+              // DID ANY PLUGIN FAIL TO LOAD on that boot: the `plugin` check is the
+              // one that carries it, and this promotion only runs when every check
+              // passed — so the honest answer here is an empty list, not "unknown".
+              // (It is recorded anyway, so a future boot that reports failures has
+              // somewhere to put them instead of a field nobody writes.)
+              loadFailures: checks
+                .filter((check) => check.name === 'plugin' && check.ok !== true)
+                .map((check) => ({ plugin: null, version: null, error: check.detail })),
               // The content that was PROVEN is the fingerprint that was compared —
               // recorded in the meta, or computed from the copy when the meta had
-              // none. Either way THIS is the value the comparison accepted, so it
-              // is what the seal names.
+              // none. This is the "补封条" channel: an OLD copy whose meta recorded
+              // no fingerprint gets one computed from its own `config/` and is then
+              // recorded exactly like a fresh one, so an upgrade does not take away
+              // the copies a user already had. What it never does is record a copy
+              // whose content did NOT match: `decideBootCertification` refuses those.
               contentFingerprint: decision.snapshotFingerprint,
               contentScope: contentScopeOf(snapshotDir),
               intervention: intervention.intervention,
             })
-            log.info('the snapshot of this restart is certified: the four startup checks passed and this boot runs exactly the snapshot content' + sourceNote, {
+            log.info('the snapshot of this restart is recorded as booted: the four startup checks passed and this boot runs exactly the snapshot content' + sourceNote, {
               dir: snapshotDir,
               promoted: promoted.promoted,
               certifiedBy: decision.certifiedBy,
@@ -11871,7 +11896,7 @@ function registerHealthRoute(ctx, runtime, config, sleep) {
             // The copy progress on its own as well, so a client that only wants
             // the numbers does not have to walk the stage object.
             progress: stage.progress,
-            // THE FIRST SAFE COPY: what happened when this machine looked for a
+            // THE FIRST-INSTALL BACKUP: what happened when this machine looked for a
             // known-good backup and found none (user decision, 2026-10-30).
             // Absent when nothing was ever tried, so an old client sees no change.
             ...(live.firstInstallBackup ? { firstInstallBackup: live.firstInstallBackup } : {}),
@@ -12125,7 +12150,7 @@ function registerHealthRoute(ctx, runtime, config, sleep) {
         // THE LAST RESTORE A HUMAN ASKED FOR (the popup's button): "this one
         // plugin was put back from that backup at that time, restart to load it".
         ...(runtime.pluginRestoreInfo() ? { pluginRestore: runtime.pluginRestoreInfo() } : {}),
-        // THE FIRST SAFE COPY: what happened when this machine looked for a
+        // THE FIRST-INSTALL BACKUP: what happened when this machine looked for a
         // known-good backup and found none (user decision, 2026-10-30). Absent
         // when nothing was ever tried.
         ...(state.firstInstallBackup ? { firstInstallBackup: state.firstInstallBackup } : {}),
@@ -12451,12 +12476,12 @@ export function apply(ctx, rawConfig, options = {}) {
     runtime.resetStaleStage('plugin reload')
   }
 
-  // THE FIRST SAFE COPY (user decision, 2026-10-30): a machine that has never
+  // THE FIRST-INSTALL BACKUP (user decision, 2026-10-30): a machine that has never
   // restarted has nothing a failed boot could roll back to, so a NEW host
   // process seeds one known-good copy. A reload seeds nothing, and the seed is
   // fire-and-forget: the boot path never waits for a 117 MB copy.
   void seedFirstInstallBackup(runtime, config).catch((error) => {
-    log.warn('the first-install safe copy failed:', String(error))
+    log.warn('the first-install backup failed:', String(error))
   })
 
   // THE FILES THE OLD BUILDS LEFT BEHIND (2026-11-02). Every build before this

@@ -395,7 +395,7 @@
     'settings.backup.limitConfirm': '确认删除并改为保留 {to} 份',
     'settings.backup.limitCancel': '取消',
     'settings.backup.limitDeleted': '已删除 {removed} 份，现在保留 {kept} 份。',
-    'settings.backup.limitMore': '已选 {requested} 份，因安全份不可删除，实际保留 {kept} 份。',
+    'settings.backup.limitMore': '已选 {requested} 份，实际保留 {kept} 份。',
     'settings.backup.limitFailed': '没能改成功，份数保持原样。',
     'settings.backup.empty': '还没有备份；每次重启前会自动生成一份。',
     'settings.backup.path': '存放路径',
@@ -403,16 +403,13 @@
     'settings.backup.copied': '路径已复制',
     'settings.backup.copyFailed': '复制失败，请手动选中上面的路径',
     'settings.backup.time': '备份时间',
-    'settings.backup.size': '备份大小',
+    // THE SIZE OF ONE COPY IS NOT SHOWN, so its label is gone as well (user
+    // decision, 2026-11-02): a row is a time and a button, and the disk a copy
+    // needs is only stated once for the whole folder (`settings.backup.footprint`).
+    // A key nothing renders is a promise the page does not keep — the same reason
+    // the identity keys went.
     'settings.backup.withPlugins': '（含已装插件）',
     'settings.backup.withoutPlugins': '（不含已装插件）',
-    // WHAT a copy is (user decision, 2026-10-30). Only a proven copy may be
-    // rolled back to, so the identity is said in plain words on every row.
-    'settings.backup.kindLabel': '身份',
-    'settings.backup.kind.known-good': '安全份',
-    'settings.backup.kind.snapshot': '本次快照',
-    'settings.backup.kind.unknown': '旧备份（未验证）',
-    'settings.backup.version': '版本 {v}',
     // THE ONE LINE A COPY GETS WHEN IT IS NOT THE ONE (user decision,
     // 2026-11-02): a copy automatic recovery would never use is still listed,
     // but as a sentence with its time and its size — never as a card with a
@@ -424,26 +421,12 @@
     // sentences. The first two stay; the rest are behind this one line, and the
     // line says how many and what they are worth.
     'settings.backup.othersSummary': '另有 {n} 份重启前自动拍的备份（未验证，不会自动还原）',
-    // WHY THIS COPY COUNTS AS SAFE (2026-11-01, strict mode). The label alone
-    // ("safe copy") was the thing that lied in the incident: it never said WHO
-    // checked WHAT. Every row therefore names its evidence, and a copy nobody
-    // checked says "未认证" in so many words.
-    'settings.backup.certifiedLabel': '认证依据',
-    'settings.backup.certified.full-checks': '四项启动自检全过',
-    'settings.backup.certified.command-probe': '命令模式探活通过',
-    'settings.backup.certified.seed': '首装种子（还没验证过）',
-    'settings.backup.certified.manual-rollback': '人工回滚后确认',
-    'settings.backup.certified.none': '未认证',
-    'settings.backup.certifiedAtTime': '认证于 {time}',
-    'settings.backup.certifiedAtMissing': '（没有记录）',
-    // WHAT "certified by" WAS CHECKED WITH (2026-11-01). The row above names WHO
-    // signed; this one names the criterion — and the difference matters, because
-    // the old criterion and the new one both sign as "four checks passed".
-    'settings.backup.evidenceLabel': '认证判据',
-    'settings.backup.evidence.fingerprint-match': '指纹比对通过（新判据）',
-    'settings.backup.evidence.seed': '首装种子：还没被验证过，只是新装时唯一的一份',
-    'settings.backup.evidence.stale': '旧判据盖的章：没有可验证的判据，自动还原不会选它',
-    'settings.backup.evidence.none': '没有判据记录',
+    // THE CERTIFICATE VOCABULARY IS GONE (user decision, 2026-11-02). Two rounds
+    // of deletion ended here: first the rendering stopped grading copies, then the
+    // labels and now the evidence sentences themselves. Nothing draws them any
+    // more — a copy is a time and a button — and a dictionary that still carried
+    // them could be picked up again by a later change without anyone noticing that
+    // it re-introduces a verdict the plugin cannot support.
     'settings.backup.scopeLabel': '内容范围',
     'settings.backup.scope.config-only': '只含配置',
     'settings.backup.scope.config+plugins': '配置 + 已装插件',
@@ -459,10 +442,15 @@
     // after a card that says which one, what it replaces, and that a restart
     // follows.
     'settings.backup.rollback': '回退到这一份',
-    // THE ONE SENTENCE THE PAGE MAY SAY ABOUT A COPY (user decision,
-    // 2026-11-02): only the newest copy gets it, because only that one is the
-    // state from before THIS restart. Verbatim — do not reword.
-    'settings.backup.newestHint': '这是这次重启前的状态。如果问题是这次重启引起的，回到这份就能恢复；如果重启前就已经坏了，这份也修不好。',
+    // THE ONE SENTENCE THE PAGE MAY SAY ABOUT A COPY (user decision, 2026-11-02).
+    //
+    // It hangs on exactly one copy — the one taken at the most recent startup —
+    // and it says only WHAT THAT COPY IS: the state the host last started from.
+    // It does not say the copy is good, because the plugin cannot know that: a
+    // plugin that fails to load is dropped and the host comes up anyway. Which
+    // copy to roll back to is the reader's call, and the sentence ends by saying
+    // so. Verbatim — do not reword.
+    'settings.backup.startupHint': '这是最近一次启动时的状态。DSH 能启动不代表插件都正常——坏掉的插件会被排除，主机照样起来。要回退到哪一份，请自己判断。',
     'settings.backup.rollbackConfirmTitle': '确定回退到这一份？',
     'settings.backup.rollbackConfirmBody': '会把 {time} 的那份备份还原到现在——**当前状态会被它覆盖**（覆盖前会先自动存一份当前快照，所以这次回退还能再退回来）。',
     'settings.backup.rollbackConfirmRestart': '还原完成后会自动重启一次；重启期间这个页面会断开，回来后接着用。',
@@ -488,7 +476,7 @@
     'settings.rescue.rollbackUnknown': '自动回滚：还不知道（这台机器的能力还没检查过）',
     'settings.rescue.watchdogTier': '看门狗的触发方式：{tier}',
     'settings.rescue.watchdogLast': '上一次看门狗的结果：{result}',
-    'settings.rescue.watchdogStrict': "上一次自动救援没有动手：没有可信任的还原点（没有一份备份既被验证过、又没被系统介入过）。请手动处理。",
+    'settings.rescue.watchdogStrict': '上一次自动救援没有动手：找不到同时满足两个条件的备份——那份备份有过启动记录，而且那次启动没有系统介入过。请手动处理。',
     'settings.rescue.watchdogRestoredFrom': "上一次自动救援还原的这一份：{dir}",
     'settings.rescue.tierScheduledTask': 'Windows 计划任务',
     'settings.rescue.tierSystemdRun': 'systemd 定时器',
@@ -626,7 +614,7 @@
     'pluginFailure.failed': "{plugin} 恢复没有完成：{reason}",
     'pluginFailure.noBackup': "这台机器没有可用备份，只能手动处理。",
     'watchdog.title': "重启失败时，会自动帮你救回来",
-    'watchdog.explain': "这个插件自带自动救援：重启之后新版本一直起不来时，它会拿一份验证过能用的备份帮你恢复，再把程序重新拉起来，你就不用自己去救。它默认就是开着的。",
+    'watchdog.explain': "这个插件自带自动救援：重启之后新版本一直起不来时，它会拿一份它自己认为可用的备份帮你恢复（判据是内容指纹一致、且那次启动起来了——这不代表里面的插件都正常），再把程序重新拉起来。它默认就是开着的。",
     'watchdog.whereOff': "不想要的话，到设置页把「自动救援」的开关关掉就行——关掉之后，新版本起不来就只能手动处理了。",
     'watchdog.gotIt': "知道了",
     'watchdog.noticeSaved': "好的，就这一条提示，以后不会再弹了。",
@@ -901,7 +889,7 @@
     'settings.backup.limitConfirm': 'Delete and keep {to}',
     'settings.backup.limitCancel': 'Cancel',
     'settings.backup.limitDeleted': 'Deleted {removed} copies; {kept} are kept now.',
-    'settings.backup.limitMore': 'You picked {requested}, but {kept} are kept because a certified copy cannot be deleted.',
+    'settings.backup.limitMore': 'You picked {requested}; {kept} are kept.',
     'settings.backup.limitFailed': 'The change did not go through; the copy limit is unchanged.',
     'settings.backup.empty': 'No backup yet; one is written before every restart.',
     'settings.backup.path': 'Where they live',
@@ -909,41 +897,25 @@
     'settings.backup.copied': 'The path is on the clipboard',
     'settings.backup.copyFailed': 'The copy failed — please select the path above by hand',
     'settings.backup.time': 'Backup time',
-    'settings.backup.size': 'Backup size',
+    // THE SIZE OF ONE COPY IS NOT SHOWN, so its label is gone as well (user
+    // decision, 2026-11-02): a row is a time and a button, and the disk a copy
+    // needs is only stated once for the whole folder (`settings.backup.footprint`).
+    // A key nothing renders is a promise the page does not keep — the same reason
+    // the identity keys went.
     'settings.backup.withPlugins': '(plugins included)',
     'settings.backup.withoutPlugins': '(plugins excluded)',
-    // WHAT a copy is (user decision, 2026-10-30). Only a proven copy may be
-    // rolled back to, so the identity is said in plain words on every row.
-    'settings.backup.kindLabel': 'Identity',
-    'settings.backup.kind.known-good': 'Known good',
-    'settings.backup.kind.snapshot': "This restart's snapshot",
-    'settings.backup.kind.unknown': 'Old backup (unverified)',
-    'settings.backup.version': 'version {v}',
     // THE ONE LINE A COPY GETS WHEN IT IS NOT THE ONE (user decision,
     // 2026-11-02): listed, but as a sentence with its time and its size — never
     // as a card with a button next to it.
     'settings.backup.fallback.seed': 'There is also a first-install seed copy (settings only, not verified, used only when the copy above is unavailable), {time}, {size}',
     'settings.backup.fallback.other': 'There is also an unverified copy (never restored automatically, used only when the copy above is unavailable), {time}, {size}',
     'settings.backup.othersSummary': '{n} more pre-restart snapshots (unverified, never restored automatically)',
-    // WHY THIS COPY COUNTS AS SAFE (2026-11-01, strict mode). The label alone
-    // ("known good") was the thing that lied in the incident: it never said WHO
-    // checked WHAT. Every row therefore names its evidence, and a copy nobody
-    // checked says "not certified" in so many words.
-    'settings.backup.certifiedLabel': 'Certified by',
-    'settings.backup.certified.full-checks': 'all four startup checks passed',
-    'settings.backup.certified.command-probe': 'the health probe in command mode answered',
-    'settings.backup.certified.seed': 'first-install seed (not proven yet)',
-    'settings.backup.certified.manual-rollback': 'confirmed after a manual rollback',
-    'settings.backup.certified.none': 'not certified',
-    'settings.backup.certifiedAtTime': 'checked {time}',
-    'settings.backup.certifiedAtMissing': '(not recorded)',
-    // The criterion behind "certified by": who signed is not enough, WHAT was
-    // checked is what makes the seal worth something (2026-11-01).
-    'settings.backup.evidenceLabel': 'Certification criterion',
-    'settings.backup.evidence.fingerprint-match': 'the fingerprints matched (current rule)',
-    'settings.backup.evidence.seed': 'first-install seed: never proven, just the only copy a fresh install has',
-    'settings.backup.evidence.stale': "signed under the OLD rule: no checkable criterion, never picked automatically",
-    'settings.backup.evidence.none': 'no criterion recorded',
+    // THE CERTIFICATE VOCABULARY IS GONE (user decision, 2026-11-02). Two rounds
+    // of deletion ended here: first the rendering stopped grading copies, then the
+    // labels and now the evidence sentences themselves. Nothing draws them any
+    // more — a copy is a time and a button — and a dictionary that still carried
+    // them could be picked up again by a later change without anyone noticing that
+    // it re-introduces a verdict the plugin cannot support.
     'settings.backup.scopeLabel': 'What it holds',
     'settings.backup.scope.config-only': 'configuration only',
     'settings.backup.scope.config+plugins': 'configuration and installed plugins',
@@ -958,7 +930,15 @@
     // — but only after a card that says which one, what it replaces, and that
     // a restart follows.
     'settings.backup.rollback': 'Roll back to this copy',
-    'settings.backup.newestHint': 'This is the state from before this restart. If this restart caused the problem, going back to this copy fixes it; if it was already broken before the restart, this copy cannot fix it either.',
+    // THE ONE SENTENCE THE PAGE MAY SAY ABOUT A COPY (user decision, 2026-11-02).
+    //
+    // It hangs on exactly one copy — the one taken at the most recent startup —
+    // and it says only WHAT THAT COPY IS: the state the host last started from.
+    // It does not say the copy is good, because the plugin cannot know that: a
+    // plugin that fails to load is dropped and the host comes up anyway. Which
+    // copy to roll back to is the reader's call, and the sentence ends by saying
+    // so. Verbatim — do not reword.
+    'settings.backup.startupHint': 'This is the state at the most recent startup. DSH starting does not mean every plugin is healthy — a broken plugin is excluded and the host still boots. Which copy to roll back to is your call.',
     'settings.backup.rollbackConfirmTitle': 'Roll back to this copy?',
     'settings.backup.rollbackConfirmBody': 'The backup from {time} will be restored over the current state — **what you have now is replaced** (a snapshot of it is taken first, so this rollback can be undone).',
     'settings.backup.rollbackConfirmRestart': 'A restart follows automatically; this page disconnects during it and works again afterwards.',
@@ -984,7 +964,7 @@
     'settings.rescue.rollbackUnknown': 'Automatic rollback: not known yet (this machine has not been checked)',
     'settings.rescue.watchdogTier': 'How the watchdog is triggered: {tier}',
     'settings.rescue.watchdogLast': 'The last watchdog run: {result}',
-    'settings.rescue.watchdogStrict': "The last watchdog run did NOT act: there is no trusted restore point (no backup was both certified and free of a system intervention). Please handle it by hand.",
+    'settings.rescue.watchdogStrict': 'The last watchdog run did NOT act: no backup satisfies both conditions — it records a startup, and that startup had no system intervention. Please handle it by hand.',
     'settings.rescue.watchdogRestoredFrom': "The copy the last watchdog run restored: {dir}",
     'settings.rescue.tierScheduledTask': 'a Windows scheduled task',
     'settings.rescue.tierSystemdRun': 'a systemd timer',
@@ -1116,7 +1096,7 @@
     'pluginFailure.failed': "{plugin} was not restored: {reason}",
     'pluginFailure.noBackup': "There is no usable backup on this machine; it has to be handled by hand.",
     'watchdog.title': "If a restart fails, it can rescue you automatically",
-    'watchdog.explain': "This plugin ships with an automatic rescue: if a newly restarted version never comes up, it puts the last verified backup back and starts the program again, so you do not have to rescue it yourself. It is on by default.",
+    'watchdog.explain': "This plugin ships with an automatic rescue: when a newly restarted version never comes up, it restores a backup it considers usable (the criterion is that the content fingerprint matched and that boot came up — it does not mean the plugins inside are all fine), then starts the program again. It is on by default.",
     'watchdog.whereOff': "If you do not want it, turn it off on the settings page — with it off, a new version that does not start has to be handled by hand.",
     'watchdog.gotIt': "Got it",
     'watchdog.noticeSaved': "That is the only notice; it will not appear again.",
@@ -2393,122 +2373,83 @@
   }
 
   /**
-   * THE SOURCES THAT CAN PROVE A BOOT (user decision, 2026-11-02).
+   * THE GRADING OF COPIES IS GONE (user decision, 2026-11-02).
    *
-   * `seed` is deliberately NOT one of them: the first-install seed is a copy
-   * taken BEFORE anything was proven, and a boot that was merely restored from
-   * it is not a proof of it either. Only these three sign with a criterion that
-   * can be re-checked — and only together with `fingerprint-match` below does
-   * the interface dare to call a copy "安全份".
+   * The page used to sort every copy into an identity and let only one of them
+   * carry a verdict — a source plus a criterion ("full-checks" AND
+   * "fingerprint-match") had to agree before a row was allowed to look better
+   * than the others. Two things were wrong with that and the user ruled both
+   * out: the verdict was read as "the plugins in it are fine", which a boot
+   * cannot establish (a plugin that fails to load is dropped and the host comes
+   * up anyway), and on a hosted instance nothing ever qualified, so the good tier
+   * stayed empty while every real copy sat in the demoted row.
+   *
+   * So there is no `isSafeBackup`, no identity key and no per-copy label any
+   * more: a row is a time and a button. What replaces the question is one fact
+   * the page can state honestly — WHICH COPY IS THE STATE THE HOST LAST STARTED
+   * FROM — and that is `startupCopyName` below.
    */
-  const SAFE_CERTIFIED_BY = Object.freeze(['full-checks', 'command-probe', 'manual-rollback'])
 
   /**
-   * IS THIS THE ONE COPY AUTOMATIC RECOVERY WOULD USE? — the single question the
-   * panel exists to answer, and therefore the question that must have exactly
-   * ONE answer on screen.
+   * The moment a copy says it was taken, read from the copy's OWN record.
    *
-   * BOTH halves are read from the Host, and both are required: a source that
-   * proved a boot AND the criterion that can be re-checked. `kind:
-   * 'known-good'` is NOT consulted: in the 2026-11-01 incident that label was
-   * written by an older stamp nobody could verify, and the seed carries it too
-   * from the day it is created — which is exactly how a never-proven copy ended
-   * up reading "安全份" on the settings page.
+   * `takenAt` is the take time under the name the Host records it with; `at` is
+   * the number the same manifest has carried for longer. Either may arrive as a
+   * number of milliseconds or as an ISO string. A copy that says neither cannot
+   * answer the question, and gets no sentence at all — silence beats a guess.
    *
    * @param {object|null|undefined} item one backup of the state payload
-   * @returns {boolean}
+   * @returns {number|null}
    */
-  function isSafeBackup(item) {
-    if (!item) return false
-    if (!SAFE_CERTIFIED_BY.includes(item.certifiedBy)) return false
-    return item.certificationEvidence === 'fingerprint-match'
+  function copyTakeTime(item) {
+    if (!item) return null
+    for (const value of [item.takenAt, item.at]) {
+      if (typeof value === 'number' && Number.isFinite(value)) return value
+      if (typeof value === 'string' && value !== '') {
+        const parsed = Date.parse(value)
+        if (Number.isFinite(parsed)) return parsed
+      }
+    }
+    return null
   }
 
   /**
-   * WHAT A COPY IS — the identity word of the interface.
+   * WHICH COPY WAS TAKEN AT THE MOST RECENT STARTUP? (user decision, 2026-11-02)
    *
-   * Only a copy `isSafeBackup` accepts may read "安全份". Everything else says
-   * what it really is: the snapshot of a restart ("本次快照") was not proven
-   * yet, the first-install seed (`seed`) was never proven at all, and a copy
-   * whose stamp cannot be re-checked — or that has no identity file — was
-   * written before the current rule ("旧备份（未验证）"). An unfamiliar answer is
-   * shown as unproven on purpose: never claim more than the copy itself says.
+   * The answer is the copy whose own record carries the latest take time: that is
+   * the state the host was started from the last time it came up. It is
+   * deliberately NOT "the first row of the list" — the row order is a rendering
+   * detail, and a page that read its fact from the row order would move the one
+   * sentence onto a different copy the day the order changes (or silently onto
+   * the wrong copy when the list is not sorted).
    *
-   * @param {object|null|undefined} item one backup of the state payload
-   * @returns {'known-good'|'snapshot'|'seed'|'unknown'}
+   * Nothing here judges the copy: the sentence this name selects says what the
+   * copy IS, never that it is healthy.
+   *
+   * @param {Array<object>|null|undefined} items the copies as the Host reports them
+   * @returns {string|null} the name of that copy, or null when no copy can say
    */
-  function backupKindKey(item) {
-    const kind = item && item.kind
-    if (kind === 'snapshot') return 'snapshot'
-    if (isSafeBackup(item)) return 'known-good'
-    if (item && item.certifiedBy === 'seed') return 'seed'
-    return 'unknown'
+  function startupCopyName(items) {
+    if (!Array.isArray(items)) return null
+    let best = null
+    for (const item of items) {
+      if (!item || typeof item.name !== 'string' || item.name === '') continue
+      const at = copyTakeTime(item)
+      if (at === null) continue
+      if (best === null || at > best.at) best = { name: item.name, at }
+    }
+    return best === null ? null : best.name
   }
 
   /**
-   * The words of one identity.
-   *
-   * The seed is the only identity that has no `settings.backup.kind.*` entry of
-   * its own — and it does not need one: `settings.backup.certified.seed` already
-   * says exactly what a seed is ("首装种子（还没验证过）" / "first-install seed (not
-   * proven yet)"). Reusing that text keeps ONE wording for one fact instead of a
-   * second key that could drift away from it.
-   *
-   * @param {(key: string) => string} t
-   * @param {object|null|undefined} item
-   * @returns {string}
+   * THE TWO KEY MAPPERS OF THE CERTIFICATE VOCABULARY ARE GONE (user decision,
+   * 2026-11-02). One named the source that "signed" a copy, the other the
+   * criterion that backed it; both existed only to pick a per-copy sentence out
+   * of the dictionary. No row grades a copy any more, so once the list stopped
+   * rendering identities they had no caller left — deleted rather than kept as a
+   * hook a later change could quietly revive. Their dictionary entries went with
+   * them: the whole "who certified it" family is not in this file any more.
    */
-  function backupKindText(t, item) {
-    const key = backupKindKey(item)
-    if (key === 'seed') return t('settings.backup.certified.seed')
-    return t('settings.backup.kind.' + key)
-  }
-
-  /**
-   * WHICH dictionary entry says why this copy counts as safe.
-   *
-   * The five sources come from the Host (`certifiedBy`), and an unknown value
-   * falls back to `none`: an unfamiliar answer must never be shown as a proof.
-   * An old copy carries no evidence at all and lands on `none` as well — that is
-   * exactly what the interface has to say about it.
-   *
-   * @param {unknown} certifiedBy
-   * @returns {string} the suffix of `settings.backup.certified.*`
-   */
-  function backupCertifiedKey(certifiedBy) {
-    if (certifiedBy === 'full-checks') return 'full-checks'
-    if (certifiedBy === 'command-probe') return 'command-probe'
-    if (certifiedBy === 'seed') return 'seed'
-    if (certifiedBy === 'manual-rollback') return 'manual-rollback'
-    return 'none'
-  }
-
-  /**
-   * WHICH dictionary entry says WHICH CRITERION proved this copy (2026-11-01).
-   *
-   * WHY A SEPARATE ROW: `certifiedBy` says WHO signed — and the old criterion
-   * ("the host came up") and the new one ("this boot ran exactly the content the
-   * copy holds") both sign as `full-checks`. On the hosted instance that made the
-   * two broken 71B/70B configurations look identical to a proven copy, so the page
-   * has to show the difference instead of leaving it to a footnote.
-   *
-   * THREE ANSWERS, and none of them is rounded up:
-   *   'fingerprint-match'  proven by the comparison;
-   *   nothing recorded + a source named  -> an old stamp, NOT trusted any more;
-   *   nothing recorded + no source       -> never certified at all.
-   * The seed is not a fourth kind of proof: it is a copy taken before anything was
-   * proven, and the wording says exactly that.
-   *
-   * @param {unknown} certificationEvidence
-   * @param {unknown} certifiedBy
-   * @returns {string} the suffix of `settings.backup.evidence.*`
-   */
-  function backupEvidenceKey(certificationEvidence, certifiedBy) {
-    if (certificationEvidence === 'fingerprint-match') return 'fingerprint-match'
-    if (certifiedBy === 'seed') return 'seed'
-    if (typeof certifiedBy === 'string' && certifiedBy !== '' && certifiedBy !== 'none') return 'stale'
-    return 'none'
-  }
 
   /** Which dictionary entry describes what a copy holds. */
   function backupScopeKey(contentScope) {
@@ -6581,6 +6522,10 @@
           ? info.backups
           : { dir: '', max: 0, count: 0, items: [] }
         const backupItems = Array.isArray(backupsInfo.items) ? backupsInfo.items : []
+        // WHICH COPY THE ONE SENTENCE BELONGS TO (user decision, 2026-11-02):
+        // resolved ONCE from the copies' own records, so the sentence follows the
+        // copy and not the row it happens to be drawn in.
+        const startupCopy = startupCopyName(backupItems)
         // THE RESCUE KIT: the two scripts and where they are, as the Host
         // resolved them. The browser never guesses a path.
         const rescuePaths = rescuePathsFor(info)
@@ -7527,20 +7472,23 @@
                     t('settings.backup.empty'),
                   )
                 : null,
-              // ONE ROW PER COPY, AND ONLY THE NEWEST ONE GETS A SENTENCE
-              // (user decision, 2026-11-02, frontend b).
+              // ONE ROW PER COPY, AND ONE SENTENCE ON ONE COPY
+              // (user decision, 2026-11-02).
               //
-              // The page used to split the list into "the safe copy" and
+              // The page used to split the list into "the good copy" and
               // "everything else". That split was a promise the plugin cannot
-              // keep: a hosted instance never certifies anything, so the safe
+              // keep: on a hosted instance nothing ever qualified, so the good
               // tier was empty forever and every real copy sat in the demoted
-              // row. So there is no tier any more — no "安全份", no "已验证",
-              // nothing read from `certifiedBy`.
+              // row. So there is no tier any more, and nothing is read from
+              // `certifiedBy` / `kind` / `certificationEvidence` to draw a row.
               //
-              // What is left is honest: newest first, ONE row per copy with its
-              // time and a rollback button, and the one sentence that is
-              // actually true — printed on the newest copy only, because that is
-              // the one taken before THIS restart.
+              // What is left is what can be said without judging: one row per
+              // copy with its time and its own rollback button, plus the single
+              // sentence that describes WHICH copy this is — the state the host
+              // last started from. `startupCopy` is resolved from the copies' own
+              // records (`startupCopyName`), never from the row order: a sentence
+              // that followed the position would walk onto an older copy the day
+              // the Host returns them in another order.
               backupItems.map((item, index) => h(
                 'div',
                 {
@@ -7582,14 +7530,16 @@
                     t('settings.backup.rollback'),
                   ),
                 ),
-                index === 0
+                // THE ONE SENTENCE, ON THE ONE COPY IT IS TRUE OF — matched by
+                // the copy's own name, never by `index === 0`.
+                startupCopy !== null && item && item.name === startupCopy
                   ? h(
                       'div',
                       {
                         className: 'dsh-autorestart-settings__backup-note',
-                        'data-dsh-autorestart-backup': 'newest-hint',
+                        'data-dsh-autorestart-backup': 'startup-hint',
                       },
-                      t('settings.backup.newestHint'),
+                      t('settings.backup.startupHint'),
                     )
                   : null,
               )),

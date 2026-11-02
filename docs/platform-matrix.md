@@ -40,7 +40,7 @@
 | **重启**（把 DSH 自己重启起来） | ✅ 插件用一条**脱离进程树**的命令 kill + 重新 start 应用（WMI 主、`schtasks` 兜底） | ✅ 走 `restartCommand`；**没配就什么都不拉起**，只留检查点并如实报告 | ⚠️ 走 `restartCommand` + POSIX 脱离守护（`setsid`）：单测覆盖，**真实 Linux 实例未验** | ⚠️ 同左 | ⚠️ 同左 | ⚠️ 同左 | `lib/restart.js:504`（命令拼装）、`:538`（WMI）、`:871`（POSIX 脱离守护）、`:996`（Windows 调度）、`:1182`（执行 `restartCommand`）；`lib/supervisor.js:1174`。测试：`restart.test.mjs`、`restart-phase.test.mjs`、`restart-safety.test.mjs` |
 | **会话续接**（重启后接着干） | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 检查点 `lib/checkpoint.js:1047`（`beginBoot`）、`index.js:7493`（启动恢复）、`lib/lifecycle.js:73`（`bootPlan`）/`:423`（续接提示）。**前提**：宿主真的被拉起来了（桌面靠自带重启，其余靠你的 `restartCommand` / 守护）。测试：`checkpoint.test.mjs`、`lifecycle.test.mjs`、`integration.test.mjs` |
 | **重启前备份**（profile 快照） | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | `lib/backup.js:1585`（`createBackup`）、`:915`（`<stateDir>/backups/`）；默认上限 **20 份**（`lib/backup.js:96`，配置项 `index.js:734`），**不是早期文档写的 2 份**。测试：`backup.test.mjs`、`hosted-backup.test.mjs`、`backup-hygiene.test.mjs` |
-| **备份完整性把关**（半份快照不许冒充备份） | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | `lib/backup.js:575`（`backupIsComplete`：要有可读 manifest **且** 至少一个配置文件）、`:2029`（**发布前**校验，不完整就删掉、不给正式名字）、`:746`（`latestKnownGood`：还原只用被验证过能启动的那份）。测试：`backup-completeness.test.mjs`、`backup-known-good-boot.test.mjs`、`backup-identity.test.mjs` |
+| **备份完整性把关**（半份快照不许冒充备份） | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | `lib/backup.js:575`（`backupIsComplete`：要有可读 manifest **且** 至少一个配置文件）、`:2029`（**发布前**校验，不完整就删掉、不给正式名字）、`:746`（`latestKnownGood`：还原只用身份为 `known-good` 的那份 —— 即拍完之后有过一次启动成功）。测试：`backup-completeness.test.mjs`、`backup-known-good-boot.test.mjs`、`backup-identity.test.mjs` |
 | **开机清残骸** | ⚠️ 只清插件自己留下的 | ⚠️ 同左 | ⚠️ 同左 | ⚠️ 同左 | ⚠️ 同左 | ⚠️ 同左 | 启动时**撤防**会删掉残留的计划任务 / systemd unit / pending 标记，并清掉能力探测留下的一次性任务（`index.js:6468`、`lib/watchdog-disarm.js:455`/`:261`/`:223`）。启动还有一次备份目录清扫 `removeIncompleteBackups`（`index.js:2088`、`lib/backup.js:2205`），但它**按设计跳过所有 `.` 开头的目录**（`lib/backup.js:2234`），所以真正的「半份快照」`*.staging-*` 残留**不会被启动清掉**：`cleanupStaleStaging`（`lib/backup.js:2295`）已经写好，但**没有任何生产代码调用它**（只有测试调用）。脱离的后台进程也没有孤儿回收。测试：`disarm.test.mjs`、`watchdog-disarm.test.mjs`、`watchdog-probe-cleanup.test.mjs`、`backup-hygiene.test.mjs`、`backup-staging.test.mjs` |
 | **自动回滚 · 选档**（一台机器只有一个监护者） | ✅ `scheduled-task` | ✅ `scheduled-task` | ✅ `systemd-run` | ⚠️ `detached-process`（要有 `setsid`） | ✅ `systemd-run` | ⚠️ `detached-process`（要有 `setsid`） | `lib/watchdog-tier.js:110`（`pickWatchdogTier`，唯一决定档位的地方）、`:177`（`tierWithProof`）、`lib/watchdog-arbiter.js:46`（v2 / v1 只选一个）。测试：`watchdog-tier.test.mjs`、`watchdog-arbiter.test.mjs` |
 | **自动回滚 · 注册** | ✅ 一次性计划任务（建完回读校验、`IgnoreNew`、`EndBoundary` 必填） | ✅ 同左 | ✅ `systemd-run --user --on-active=<秒>s` | ⚠️ `setsid nohup sh -c 'sleep N; 看门狗'`，pid 写进 stateDir 并回读 | ✅ `systemd-run` | ⚠️ 同 `detached-process` | `lib/watchdog-schedule.js:476`（注册任务）、`:545`（删除任务）、`:576`（`systemd-run`）、`:876`（脱离进程）、`:920`（回收）。失败会先清理再重试一次并如实报告（`index.js:4830`-`4865`）。测试：`watchdog-launcher.test.mjs`、`watchdog-systemd-arm.test.mjs`、`watchdog-strict-mode.test.mjs` |
@@ -130,9 +130,9 @@ macOS 上没有任何一处代码做过真机验证；远程 SSH 无图形环境
 > （`lib/host-kind.js:60`）。只靠挂载盘认出来时，界面会明说「疑似 WSL（仅凭 /mnt/c 探测）」而不是假装确定
 > （`lib/sleep.js:186`）—— 因为一台手工挂了 C: 盘的真实 Linux 看起来一模一样。
 
-**验到什么程度**：计划层已验证（`test/sleep-plan-posix.test.mjs`：WSL 的计划必须走「关整台 Windows」那条分支、
+**验到什么程度**：计划层有单测覆盖（`test/sleep-plan-posix.test.mjs`：WSL 的计划必须走「关整台 Windows」那条分支、
 纯 Linux 的计划里不许出现任何 Windows 命令、不支持的平台命令为空且**什么都不执行**）。
-**Windows 真关电已验**；**POSIX 没有真关电** —— 用户决定不真关：为一条常识证据把所有人的会话都断掉不划算。
+**Windows 真关电在本机跑过**；**POSIX 没有真关电** —— 用户决定不真关：为一条常识证据把所有人的会话都断掉不划算。
 
 ## 六、三档调度是怎么选的
 
@@ -153,7 +153,7 @@ macOS 上没有任何一处代码做过真机验证；远程 SSH 无图形环境
 
 两个版本是**同一套规则**（`scripts/restore-profile.ps1` 与 `scripts/restore-profile.sh`）：
 
-1. 默认取 `<stateDir>/backups/` 里**最新、完整、且被验证过能启动**的那份（`lib/backup.js:746`）；
+1. 默认取 `<stateDir>/backups/` 里**最新、完整、且身份为 `known-good`** 的那份（`lib/backup.js:746`，身份 = 拍完之后有过一次启动成功）；
 2. 还原前把现在的 profile 整份挪到 `<profileDir>.broken-<UTC 时间戳>`（**不删**）；
 3. 还原后回读校验：`package.json` 能解析、`dsh.profile.bundles` 非空、
    **声明了 `dsh-autorestart` 就必须能在 `node_modules` 里读到版本号**；

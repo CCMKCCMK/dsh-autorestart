@@ -954,9 +954,11 @@ test('③ the page no longer promises a tier — the old 安全份 paragraphs ar
   // THE TWO EXPLAINING PARAGRAPHS ARE GONE (user report, 2026-11-02). They said a
   // backup has "one of two identities" and that only a "safe" copy is ever rolled
   // back — while every row below has its own rollback button. That contradiction
-  // is what made a user afraid to press the button on an older copy, so the four
-  // words of the old tier must not appear anywhere on the page.
-  for (const phrase of ['安全份', '可用于回退', '认证依据', '未认证']) {
+  // is what made a user afraid to press the button on an older copy, so every
+  // word of the old tier must not appear anywhere on the page — including the
+  // ones that only ever lived in the dictionary (the tier's label, its heading,
+  // and the certificate sentences that went with them: 认证于 / 认证判据).
+  for (const phrase of ['安全份', '可用于回退', '认证依据', '未认证', '认证于', '认证判据', '已验证', '可放心回退', '已知可用', '身份']) {
     assert.equal(
       text.includes(phrase),
       false,
@@ -1029,9 +1031,9 @@ test('the backup list speaks English too', async () => {
     'the way back is translated — never a key name, never Chinese',
   )
   assert.deepEqual(
-    backupValues(panel, 'newest-hint'),
-    ['This is the state from before this restart. If this restart caused the problem, going back to this copy fixes it; if it was already broken before the restart, this copy cannot fix it either.'],
-    'the one sentence is printed once, in English, on the newest copy',
+    backupValues(panel, 'startup-hint'),
+    ['This is the state at the most recent startup. DSH starting does not mean every plugin is healthy — a broken plugin is excluded and the host still boots. Which copy to roll back to is your call.'],
+    'the one sentence is printed once, in English, on the copy taken at the most recent startup',
   )
   assert.deepEqual(backupValues(panel, 'size'), [], 'no per-copy size row in English either')
   assert.deepEqual(backupValues(panel, 'plugins'), [], 'no per-copy plugin scope in English either')
@@ -1105,7 +1107,7 @@ test('seventeen copies are seventeen rows — the tail is never dropped', async 
     'and every one of them carries its own way back',
   )
   assert.equal(
-    backupValues(panel, 'newest-hint').length,
+    backupValues(panel, 'startup-hint').length,
     1,
     'the sentence still appears exactly once, on the newest copy',
   )
@@ -1394,7 +1396,7 @@ test('the whole backup explanation is one fold, closed by default', async () => 
   // back in.)
   const inside = new Set(walk(folds[0]).map((node) => node.props && node.props['data-dsh-autorestart-backup'])
     .filter((value) => typeof value === 'string'))
-  for (const key of ['list', 'count', 'keep', 'time', 'rollback', 'newest-hint', 'path', 'copy-path']) {
+  for (const key of ['list', 'count', 'keep', 'time', 'rollback', 'startup-hint', 'path', 'copy-path']) {
     assert.equal(inside.has(key), true, `"${key}" is inside the fold`)
   }
   for (const gone of [
@@ -1507,7 +1509,7 @@ test('hosted: the fold, the row-per-copy list and the absent version hold on a w
   assert.deepEqual(backupValues(panel, 'time'), ['2026-10-31 09:00'], 'with the local time of that copy')
   assert.deepEqual(backupValues(panel, 'rollback'), ['回退到这一份'], 'and its own way back')
   assert.deepEqual(
-    backupValues(panel, 'newest-hint').length,
+    backupValues(panel, 'startup-hint').length,
     1,
     'and the one sentence, because it is also the newest copy',
   )
@@ -1556,11 +1558,12 @@ test('every copy on disk is one row — three copies are three rows, newest firs
     ['回退到这一份', '回退到这一份', '回退到这一份'],
     'and every row carries its own way back',
   )
-  // The three fixtures carry three DIFFERENT stamps (known-good with a proof, a
-  // snapshot, an old unverified copy). The list must not react to any of them:
-  // the same row for all, plus the one sentence on the newest row only.
+  // The three fixtures carry three DIFFERENT stamps (a proven copy, a snapshot, an
+  // old unverified copy). The list must not react to any of them: the same row for
+  // all, plus one sentence on the copy whose record says it is the latest — the
+  // names are sorted, so 'startup-hint' sorts after 'rollback'.
   const expectedMarks = [
-    ['item', 'newest-hint', 'rollback', 'time'],
+    ['item', 'rollback', 'startup-hint', 'time'],
     ['item', 'rollback', 'time'],
     ['item', 'rollback', 'time'],
   ]
@@ -1576,7 +1579,7 @@ test('every copy on disk is one row — three copies are three rows, newest firs
   }
 })
 
-test('only the newest copy carries the sentence about this restart', async () => {
+test('only the copy taken at the most recent startup carries the sentence', async () => {
   const mounted = mountSettings({
     info: {
       instance: { isDesktopApp: true, platform: 'win32' },
@@ -1586,38 +1589,81 @@ test('only the newest copy carries the sentence about this restart', async () =>
   })
   const panel = await mounted.settled('dsh-autorestart')
   const hints = marked(panel, 'data-dsh-autorestart-backup').filter(
-    (node) => node.props['data-dsh-autorestart-backup'] === 'newest-hint',
+    (node) => node.props['data-dsh-autorestart-backup'] === 'startup-hint',
   )
   assert.equal(hints.length, 1, 'one sentence, never three')
   assert.equal(
     textOf(hints[0]),
-    '这是这次重启前的状态。如果问题是这次重启引起的，回到这份就能恢复；如果重启前就已经坏了，这份也修不好。',
+    '这是最近一次启动时的状态。DSH 能启动不代表插件都正常——坏掉的插件会被排除，主机照样起来。要回退到哪一份，请自己判断。',
     'verbatim, as the user worded it',
   )
-  // It belongs to the NEWEST row — the copy taken right before this restart —
-  // and to no other: on an older copy the same sentence would be a false promise.
+  // It belongs to the copy WHOSE OWN RECORD SAYS IT IS THE LATEST — the state the
+  // host last started from — and to no other. On an older copy the same sentence
+  // would be a claim about a startup it has nothing to do with.
   const items = marked(panel, 'data-dsh-autorestart-backup').filter(
     (node) => node.props['data-dsh-autorestart-backup'] === 'item',
   )
   assert.deepEqual(
     backupValues(panel, 'time'),
     ['2026-10-30 09:00', '2026-10-29 09:00', '2026-10-28 09:00'],
-    'newest first — that is what makes "the first row" mean "the newest copy"',
+    'newest first, as the Host sorts them',
   )
   assert.equal(
     walk(items[0]).some((node) => node.props
-      && node.props['data-dsh-autorestart-backup'] === 'newest-hint'),
+      && node.props['data-dsh-autorestart-backup'] === 'startup-hint'),
     true,
-    'the first row carries the sentence',
+    'the row of the copy with the latest take time carries the sentence',
   )
   for (const [index, item] of items.slice(1).entries()) {
     assert.equal(
       walk(item).some((node) => node.props
-        && node.props['data-dsh-autorestart-backup'] === 'newest-hint'),
+        && node.props['data-dsh-autorestart-backup'] === 'startup-hint'),
       false,
-      `copy ${index + 2} carries no sentence about this restart`,
+      `copy ${index + 2} carries no sentence about the most recent startup`,
     )
   }
+})
+
+test('the sentence follows the copy record, not the row it is drawn in', async () => {
+  // THE RULE THE PAGE MUST OBEY (user decision, 2026-11-02): the sentence hangs
+  // on the copy taken at the most recent startup, and that copy is found by ITS
+  // OWN RECORD — never by "the first row of the list". A page that read the
+  // position would silently move a claim about the last startup onto an older
+  // copy the day the Host returns the copies in another order.
+  //
+  // So the fixture hands them over SHUFFLED: the copy with the latest take time
+  // sits in the middle. The sentence must go with that copy and nothing else.
+  const backups = threeIdentities()
+  backups.items = [backups.items[1], backups.items[0], backups.items[2]]
+  const mounted = mountSettings({
+    info: {
+      instance: { isDesktopApp: true, platform: 'win32' },
+      supervisor: { mode: 'app', installed: false, startup: { mode: 'desktop' } },
+      backups,
+    },
+  })
+  const panel = await mounted.settled('dsh-autorestart')
+  const items = marked(panel, 'data-dsh-autorestart-backup').filter(
+    (node) => node.props['data-dsh-autorestart-backup'] === 'item',
+  )
+  assert.deepEqual(
+    backupValues(panel, 'time'),
+    ['2026-10-29 09:00', '2026-10-30 09:00', '2026-10-28 09:00'],
+    'the rows keep the order the Host sent them in — the newest copy is NOT first here',
+  )
+  const carriers = items
+    .map((item, index) => ({
+      index,
+      carries: walk(item).some((node) => node.props
+        && node.props['data-dsh-autorestart-backup'] === 'startup-hint'),
+    }))
+    .filter((entry) => entry.carries)
+    .map((entry) => entry.index)
+  assert.deepEqual(
+    carriers,
+    [1],
+    'the sentence is on row 2 — the copy whose record says 2026-10-30, not on row 1',
+  )
 })
 
 test('a copy carrying the old safe stamp is drawn like every other copy', async () => {
@@ -2160,8 +2206,8 @@ test('the confirmation names the copies it deletes and the before/after counts',
 
 test('the answer is reported as it came back, including the protected copies', () => {
   assert.match(backupLocale('zh').limitDeleted, /已删除 \{removed\} 份/, 'the real deleted count')
-  assert.match(backupLocale('zh').limitMore, /已选 \{requested\} 份，因安全份不可删除，实际保留 \{kept\} 份/,
-    'and the honest line when certified copies survive')
+  assert.match(backupLocale('zh').limitMore, /已选 \{requested\} 份，实际保留 \{kept\} 份/,
+    'and the honest line, with no reason a copy could not be deleted')
   const panel = functionBodyOfSettings()
   assert.match(panel, /answer\.removed/, 'removed comes from the response')
   assert.match(panel, /keptWillExceedRequest === true/, 'the protected case is decided by the response')

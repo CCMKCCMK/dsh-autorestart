@@ -728,7 +728,23 @@ test('④ the panel no longer writes the old tier out — and the true sentences
   // while every row on this page carries its own rollback button. A user who
   // believed that paragraph did not dare press the button on an older copy, so
   // the words must not be on the page at all: no badge, no line, no paragraph.
-  for (const word of ['安全份', '本次快照', '旧备份（未验证）', '只会回滚安全份', '认证依据', '未认证']) {
+  // The middle group left the dictionary with the certificate vocabulary: the
+  // source that "signed", the moment it was "checked" and the criterion behind it
+  // are no longer keys at all, so a page that reintroduced any of them would fail
+  // here as well.
+  for (const word of [
+    '安全份',
+    '本次快照',
+    '旧备份（未验证）',
+    '只会回滚安全份',
+    '认证依据',
+    '未认证',
+    '认证于',
+    '认证判据',
+    '已验证',
+    '可放心回退',
+    '已知可用',
+  ]) {
     assert.equal(
       text.includes(word),
       false,
