@@ -76,6 +76,8 @@ import {
 import {
   backupsRoot,
   backupPluginDirIn,
+  BACKUP_LIMIT_MAX,
+  BACKUP_LIMIT_MIN,
   CERTIFIED_BY,
   claimRollbackLock,
   manifestPluginsOf,
@@ -87,6 +89,7 @@ import {
   createBackup,
   DEFAULT_MAX_BACKUPS,
   enabledBundlesOf,
+  isRestoreEligible,
   KIND_KNOWN_GOOD,
   KIND_SNAPSHOT,
   latestKnownGood,
@@ -95,6 +98,8 @@ import {
   listBackups,
   markKnownGood,
   PLUGINS_DIR,
+  planBackupLimit,
+  pruneBackups,
   readBackupMeta,
   readManifest,
   readRollbackReport,
@@ -103,6 +108,7 @@ import {
   restoreBackup,
   ROLLBACK_LOCK_NAME,
   ROLLBACK_REPORT_NAME,
+  validateBackupLimit,
 } from './lib/backup.js'
 import {
   accessFilePath,
@@ -1221,6 +1227,21 @@ function resolveChoicePath(config) {
   const index = healthPath.lastIndexOf('/')
   const prefix = index > 0 ? healthPath.slice(0, index) : '/__dsh_autorestart'
   return `${prefix}/choice`
+}
+
+/**
+ * Resolve the backup-limit-route path: a sibling of the health route, under the
+ * same prefix (`POST /backup-limit` writes the "how many copies to keep" answer
+ * and applies it immediately).
+ *
+ * @param {object} config
+ * @returns {string}
+ */
+function resolveBackupLimitPath(config) {
+  const healthPath = resolveHealthPath(config)
+  const index = healthPath.lastIndexOf('/')
+  const prefix = index > 0 ? healthPath.slice(0, index) : '/__dsh_autorestart'
+  return `${prefix}/backup-limit`
 }
 
 /**
@@ -6591,6 +6612,14 @@ const titleOfSummary = (item) => {
       wanted.restartGraceMs = changes.restartGraceMs
       fallback.restartGraceMs = changes.restartGraceMs
     }
+    // HOW MANY COPIES TO KEEP (2026-11-02). The range is validated by the route
+    // and by `validateBackupLimit`; the value that reaches here is already a
+    // whole number inside the range, and an out-of-range value is refused with a
+    // reason instead of being written.
+    if (typeof changes.maxBackups === 'number') {
+      wanted.maxBackups = changes.maxBackups
+      fallback.maxBackups = changes.maxBackups
+    }
     const editor = resolveConfigEditor(ctx)
     if (editor !== null) {
       try {
@@ -10527,6 +10556,107 @@ function buildAnnouncementsRoute(ctx, runtime, config) {
  * for are echoed back, plus the effective `countdownSeconds` so the settings
  * page can read them back at once.
  */
+/**
+ * POST /backup-limit — HOW MANY COPIES TO KEEP, AND THE CLEANUP THAT FOLLOWS.
+ *
+ * The settings page asks a question the answer to which is a NUMBER, and the
+ * user expects the answer to take effect NOW ("确认后立即删除"). So the route
+ * does three things in order:
+ *
+ *   1. validates the number (`validateBackupLimit`, never a silent clamp);
+ *   2. persists it through the same `applyConfigChoice` path as every other
+ *      config answer, so the profile row and the running config agree;
+ *   3. prunes the backups directory IMMEDIATELY and reports what really
+ *      happened — the real `removed` list, the requested number, and how many
+ *      copies are actually kept now. A certified copy is never deleted, so the
+ *      kept count can be HIGHER than the request; `keptWillExceedRequest` says
+ *      so instead of pretending the request won.
+ *
+ * @param {object} ctx
+ * @param {object} runtime
+ * @param {object} config
+ * @returns {{ kind: string, path: string, handler: Function }}
+ */
+function buildBackupLimitRoute(ctx, runtime, config) {
+  const routePath = resolveBackupLimitPath(config)
+  return {
+    kind: 'exact',
+    path: routePath,
+    handler: (req, res) => {
+      const remote = req && req.socket ? req.socket.remoteAddress : undefined
+      const loopback = remote === undefined
+        || remote === '127.0.0.1'
+        || remote === '::1'
+        || remote === '::ffff:127.0.0.1'
+      if (!loopback && !admittedByConnection(ctx, req)) {
+        res.statusCode = 403
+        res.setHeader('content-type', 'application/json; charset=utf-8')
+        res.end('{"ok":false,"error":"loopback-only"}')
+        return
+      }
+      if (!req || req.method !== 'POST') {
+        res.statusCode = 405
+        res.setHeader('content-type', 'application/json; charset=utf-8')
+        res.setHeader('allow', 'POST')
+        res.end('{"ok":false,"error":"method-not-allowed"}')
+        return
+      }
+      void readJsonBody(req).then(async (payload) => {
+        const body = payload && typeof payload === 'object' ? payload : {}
+        const verdict = validateBackupLimit(body.maxBackups)
+        if (!verdict.ok) {
+          // NO WRITE, NO CLAMP: the caller sent something the plugin will not
+          // store, and the reason goes back so the page can say what is wrong.
+          res.statusCode = 400
+          res.setHeader('content-type', 'application/json; charset=utf-8')
+          res.setHeader('cache-control', 'no-store')
+          res.end(JSON.stringify({
+            ok: false,
+            error: 'invalid-maxBackups',
+            reason: verdict.reason,
+            min: BACKUP_LIMIT_MIN,
+            max: BACKUP_LIMIT_MAX,
+          }))
+          return
+        }
+        const applied = await runtime.applyConfigChoice({ maxBackups: verdict.value })
+        // THE CLEANUP IS PART OF THE ANSWER: the user just said "keep N", so the
+        // directory has to look like that BEFORE the page redraws.
+        const backupsDir = backupsDirFor(resolveStateDir(config))
+        const pruned = pruneBackups(backupsDir, verdict.value)
+        const items = listBackups(backupsDir).map((item) => ({
+          ...item,
+          certified: isRestoreEligible(readBackupMeta(item.dir)),
+        }))
+        const plan = planBackupLimit({ requested: verdict.value, items })
+        runtime.log.info(
+          `the copy limit is ${verdict.value}: ${pruned.removed.length} removed, ${plan.keepCount} kept`,
+        )
+        res.statusCode = 200
+        res.setHeader('content-type', 'application/json; charset=utf-8')
+        res.setHeader('cache-control', 'no-store')
+        res.end(JSON.stringify({
+          ok: true,
+          applied: applied.applied,
+          maxBackups: verdict.value,
+          removed: pruned.removed,
+          prunedReason: pruned.reason,
+          requested: plan.requested,
+          kept: plan.keepCount,
+          certifiedKept: plan.certifiedKept,
+          keptWillExceedRequest: plan.keptWillExceedRequest,
+          min: BACKUP_LIMIT_MIN,
+          max: BACKUP_LIMIT_MAX,
+        }))
+      }).catch((error) => {
+        res.statusCode = 500
+        res.setHeader('content-type', 'application/json; charset=utf-8')
+        res.end(JSON.stringify({ ok: false, error: describeError(error) }))
+      })
+    },
+  }
+}
+
 function buildChoiceRoute(ctx, runtime, config) {
   const routePath = resolveChoicePath(config)
   return {
@@ -12071,6 +12201,10 @@ function registerHealthRoute(ctx, runtime, config, sleep) {
     routes.push({ name: 'plugin-inventory', route: pluginInventoryRoute })
     // ...and what the loaded plugins stopped providing (2026-11-01).
     routes.push({ name: 'plugin-watch', route: buildPluginWatchRoute(ctx, runtime, config) });
+    // ...and the "how many copies to keep" answer, which prunes the directory
+    // immediately after it is written (2026-11-02). APPENDED for the same reason
+    // as the two routes above: the order of the earlier ones is pinned by tests.
+    routes.push({ name: 'backup-limit', route: buildBackupLimitRoute(ctx, runtime, config) });
     // One late reading per boot; the timer is unref'ed so it never holds the
     // process open.
     // Kept LOCAL on purpose: the timer belongs to this boot and nothing else
