@@ -61,6 +61,39 @@ Two safety gates protect the restart. The host checks that no conversation is bu
 helper checks the same gate over loopback immediately before it kills the process, so a turn that
 starts in between is never killed.
 
+## Supported platforms
+
+One question decides everything: **is your machine one of the four environments below?**
+
+| Your machine | Supported | What you must know |
+| --- | --- | --- |
+| **Windows desktop** (the DeepSeek Harness client) | **yes** | nothing to configure — `restartMode: app` is the default |
+| **`dsh web` on Windows** | **yes** | you must set `restartMode: command` **and** a `restartCommand` that really restarts this host |
+| **`dsh web` on WSL** | **yes** | same as above; remember the shutdown button switches off the **whole Windows machine**, not the distro |
+| **`dsh web` on Linux** | **yes** | same as above |
+
+The **WSL** and **Linux** rows come in two flavours — **with** and **without** `systemd --user`. That
+changes only *how* the automatic rollback is triggered (a systemd user timer versus a detached
+background process of the plugin's own); everything else is the same. The settings page always says
+which one your machine got, and it never promises a rollback it cannot deliver.
+
+### Out of scope — not tested, not supported
+
+These three are **not** in the supported set. The plugin may appear to run there, but nothing is
+promised: no real-machine test exists, and some abilities simply cannot be delivered.
+
+| Environment | Status | What you lose |
+| --- | --- | --- |
+| **macOS** | **not tested / not supported** | no desktop rescue shortcut; the automatic rollback degrades to a background process of the plugin's own (and on a machine without `setsid` it degrades further to *no rollback at all*); the shutdown countdown has never been verified on a real Mac |
+| **Remote SSH with no graphical session** | **not tested / not supported** | no desktop and no desktop rescue entry, so the only way back in is a `.sh` script — which means you must already be able to SSH in; the "start at login" advice starts the **host**, not your SSH session; the session resume only happens once *somebody* starts the host again |
+| **Containers** (Docker / Compose / Kubernetes) | **not tested / not supported** | no "start at login" at all (the orchestrator owns that); the automatic rollback degrades to a background process of the plugin's own (often no `setsid` in a slim image → *no rollback*); the shutdown countdown is **not** container-aware — it really tries to power off the host, so do not press it in a container; a rebuilt container may take the checkpoint and the backups with it |
+
+If you are on one of those three, install it as an experiment at your own risk, and use
+`scripts/restore-profile.sh` / `scripts/emergency-disable.sh` as your way out.
+
+The complete per-capability matrix — every ability × every environment, each cell with the
+`file:line` it rests on — is in [docs/platform-matrix.md](docs/platform-matrix.md).
+
 ## The whole thing in one page (ordinary users can stop here)
 
 ### Why a restart does not lose your work
@@ -151,16 +184,19 @@ scripts that really exist on the machine you are on.
 | a Windows login task | **partly** | on a real machine one login-triggered task was created → queried (State=Ready, the logon trigger) → deleted (no leftovers) with the system's own tools, which proves that no administrator rights are needed; **"the fallback into the startup folder when the task is refused" is pinned by unit tests only** |
 | the desktop client | **yes** | on a real machine it comes back by itself (there is a snapshot and a self-check record, no rollback was triggered, and it does not start twice); that is the client's own business, it is not part of the hosted matrix |
 | pm2 / forever | no, unit tests only | the recognition and the behaviour are pinned by unit tests |
-| container / compose | no, unit tests only | same |
+| container / compose | **no — out of scope** | see [Supported platforms](#supported-platforms): containers are **not** a supported environment |
 | `npx` / `pnpm dlx` wrapper | no, unit tests only | same |
 | started by another DSH plugin | no, unit tests only | same |
-| tmux / screen / an SSH session | no, unit tests only | same |
+| tmux / screen / an SSH session | **no — out of scope** | see [Supported platforms](#supported-platforms): a remote SSH session without a GUI is **not** a supported environment |
 | WSL started by a Windows-side process | no, unit tests only | same (it is recognised as "cannot tell", so nothing happens) |
 
-**Not tested on a real machine does not mean unsupported**: those paths are pinned by unit tests, and
-"no full install/uninstall cycle" or "unit tests only" does not mean unsupported either. If your
-environment is recognised wrongly, please send us the "startup mode + the evidence" block from the
-settings page.
+**"Unit tests only" means "not verified on a real machine", not "unsupported"** — on the four
+supported platforms those paths are pinned by unit tests, and "no full install/uninstall cycle" does
+not mean unsupported either. The three environments listed under
+[Supported platforms](#supported-platforms) (macOS, a remote SSH session without a GUI, containers)
+are a different case: they are **outside** the supported set, and the table above says so.
+If your environment is recognised wrongly, please send us the "startup mode + the evidence" block
+from the settings page.
 
 ### Report a problem
 
@@ -200,6 +236,19 @@ what it adds before you install it.
 | An agent is running a long task and DSH is restarted or crashes | The round is lost and you have to type "continue" by hand | The new process resumes the session and injects a continuation message, so the work continues without you |
 | An agent owns a durable goal (`create_goal`) that should survive a restart | The goal activation lives in the process, so after the restart it is `disarmed` and the automatic continuation stops | The plugin re-arms the goal at boot and the goal round driver starts the next round right away |
 | An agent wants to install or upgrade a plugin, but a restart would cut the work short | You either wait or take the risk | Call `continuum_restart`: it waits until every agent is idle and the session continues by itself afterwards |
+
+## Host version requirement
+
+**Requires DSH ≥ `0.1.6-alpha.2`.**
+
+Since `0.1.6-alpha.2` the host handles "a plugin did not come up" in two different ways:
+
+- **Ordinary plugins** (your own, or installed from npm) that fail to load **do not block startup**: the host boots anyway, logs `warning: N entry did not activate`, and leaves the other plugins running. That log line is exactly what this plugin reads to show "these features did not come up this time".
+- **Required plugins** (the host's own parts, e.g. the web server) that fail **still fail the startup**: the log says `startup failed: N required plugins did not activate`. That is the case the watchdog handles — restore a verified backup, then bring the host back up.
+
+On `0.1.6-alpha.1` and older there is no such distinction: any failing plugin throws and the host does not come up at all, so the signal this plugin depends on does not exist there.
+
+**How this was established (stated plainly)**: by reading DSH's official `@deepseek-ai/dsh-app-boot` package release by release (`0.1.0-rc.2` / `0.1.3-alpha.2` / `0.1.5-rc.3` / `0.1.6-alpha.1` / `0.1.6-alpha.2` / `0.1.7-rc.2` / `0.2.0-rc.1` / `0.2.1-rc.3` / `0.2.2-alpha.2`); the boundary falls at `0.1.6-alpha.2`. The official DSH release notes do **not** state this: the `0.1.6-alpha.2` entry only says "Group startup errors and pending services, and save full diagnostics to a log file". So this is a source-level finding plus a local measurement, not an official declaration.
 
 ## Install
 
@@ -354,9 +403,9 @@ show up in the Plugin Manager and in the config editor.
 | `maxSessions` | `4` | Maximum number of sessions resumed per boot. |
 | `maxResumeAttempts` | `2` | Maximum resume attempts per session, counted across boots, so a bad session cannot loop forever. |
 | `deferPollMs` | `3000` | Poll interval while waiting for the conversations to go idle. |
-| `deferSoftMs` | `300000` | Soft deadline: warn when the conversations are still busy after this long. |
-| `deferHardMs` | `900000` | Hard deadline: warn after this long. The restart is only forced when `forceRestartWhenBusy` is enabled. |
-| `deferPolicy` | `auto` | `auto` = after the hard deadline, follow `forceRestartWhenBusy` (by default keep waiting). `wait` = wait forever. |
+| `deferSoftMs` | `300000` | **Deprecated — read but completely ignored.** A pending restart has no deadline. Kept only so existing configuration files stay valid. |
+| `deferHardMs` | `900000` | **Deprecated — read but completely ignored.** A pending restart never gives up. Kept only so existing configuration files stay valid. |
+| `deferPolicy` | `auto` | Kept for configuration compatibility. Waiting is the same under every value: a pending restart waits for the idle gate, with no deadline. |
 | `forceRestartWhenBusy` | `false` | Whether a restart may be forced while a conversation is still running. The default `false` never interrupts a session: the plugin waits until the other conversations finish. |
 | `restartMode` | `app` | `app` = restart the DeepSeek Harness desktop app. `command` = run `restartCommand`. |
 | `restartCommand` | `''` | Custom restart command. Supports the `{pid}`, `{ppid}` and `{app}` placeholders. |
@@ -426,7 +475,7 @@ delayed work of the other plugins — and it is the **only** such window:
 for the restart gate. That is right while the message is about to be picked up — the agent claims
 it within a second or two — but it is a deadlock when nobody ever claims it. The real case was a
 fresh, empty conversation in the UI with one unclaimed message in its inbox: the gate stayed
-closed, the hard deadline only logged a warning, and the restart never happened.
+closed and the restart never happened.
 
 **The upper bound.** `queuedGraceMs` (default **60000** ms) is how long an unclaimed message may
 hold the restart back:
@@ -486,10 +535,13 @@ Both `…/health` and `…/health?state=1` carry `restartPhase` (stage, bilingua
 line next to the restart settings — the pill is only there while a restart is pending, the settings
 line is always there.
 
-### What you see while the restart waits a long time
+### What you see while the restart waits
 
-When the hard deadline (`deferHardMs`) is over and a conversation is still running, the plugin does
-not pretend that everything is fine — and it does not give up either:
+A restart waits for one thing only: **every conversation finishing its work**. There is no deadline
+and nothing expires — it keeps waiting for as long as that takes, and only two things end it: the
+gate opens (the restart runs) or you withdraw the request.
+
+The wait is visible from the first second, not after some threshold:
 
 - **The request is kept.** The pending restart stays pending, the requester stays checkpointed, and
   the restart fires as soon as the gate is quiet again. Nothing is cancelled behind your back.
@@ -500,7 +552,8 @@ not pretend that everything is fine — and it does not give up either:
   `<session>` keeps holding it" (「已等 17 分：`<会话>`一直占着」).
 
 A conversation is never killed to make the restart happen: `forceRestartWhenBusy` stays off by
-default, and this plugin never turns it on.
+default, and this plugin never turns it on. When it IS turned on, it restarts over a running
+conversation — it interrupts it. That is a choice about interrupting work, not a deadline.
 
 ### What the quiet window measures
 
@@ -720,17 +773,6 @@ Be clear about the window, because the whole thing is a **window**:
   with a report that names the attempts;
 - `watchdogEnabled: false` (and a machine whose tier is `none`) means no
   automatic rollback at all, and the settings page says so.
-
-**The sentry resident watchman was removed (2026-11-01, user decision: it
-conflicts with "off means off", it is no longer maintained).** This repository
-used to carry an **unwired standby** for the window outside a restart (0
-processes, plus a profile emptied by the official `sanitizeProfile`):
-`lib/sentry.js`, `lib/sentry-install.js`, `supervisor/sentry.js`, its two tests
-and `docs/sentry.md`. It registered no tool and installed nothing by itself —
-but a resident watchman is exactly what "off means off" forbids: once automatic
-rollback is switched off, nothing may quietly bring the host back. The whole
-standby has been **deleted** and is no longer maintained. The paragraph above
-therefore still holds — and there is now **no standby left to wire in**.
 
 ### A plugin that did not load: the REPORTED kind of failure
 
@@ -1090,9 +1132,9 @@ once, in the same composer dock, as a small card:
   and records it on `POST /announcements` (`{ feature }`). The `version` in that answer is the feature
   version — the same number that `SLEEP_FEATURE_VERSION` holds.
 
-## 0.9.0: what is backed up, the three signals, and the edge of the watchdog
+## 0.8.6: what is backed up, the three signals, and the edge of the watchdog
 
-> This chapter covers the 0.9.0 release notes. The Chinese original of the same chapter is in
+> This chapter covers the 0.8.6 release notes. The Chinese original of the same chapter is in
 > [docs/README.zh.md](docs/README.zh.md). It only answers the four questions an ordinary user asks:
 > **what is backed up, how many signal layers there are, what the watchdog can save, and what to do in
 > which order when something is off.** Implementation details live in the sections above.
@@ -1101,7 +1143,7 @@ once, in the same composer dock, as a small card:
 
 | | In the backup | Why |
 |---|---|---|
-| **Backed up** | the profile configuration (`cordis.patch.yml`, `package.json`, `pnpm-lock.yaml`) **plus the plugins you wrote yourself and installed as a link (`link:`)** — their contents are kept separately in `node_modules-link/<name>/` | the plugins you write have **no definite source and no definite version**: delete one and nothing can fetch it again, so a backup is the only way |
+| **Backed up** | the profile configuration (`cordis.patch.yml`, `package.json`, `pnpm-lock.yaml`) **plus the plugins you wrote yourself and installed as a link (`link:`)** — their contents are kept separately in `node_modules-link/<name>/` — **never their `.git`** (history is rebuildable from its remote, and it was the bulk of every copy: one linked plugin, 962 files / ~74 MB). A sweep also removes directories holding neither a manifest nor a configuration file, at most 32 dirs / 2 GB per pass, and reports every removal. An incomplete copy never carries a backup's name at all: it is written as `.staging-<stamp>` and renamed only once its manifest and configuration are on disk, so an interruption leaves a staging directory instead of something that looks restorable. **The boot sweep does not remove those `.staging-*` leftovers** (it skips every dot-named directory on purpose, so it never deletes a copy that is being written right now) — they are simply never listed and never restored from, and removing them by hand is safe | the plugins you write have **no definite source and no definite version**: delete one and nothing can fetch it again, so a backup is the only way |
 | **Not backed up** | **third-party plugins** (installed from npm) | they **do have a definite source and version**: `pnpm-lock.yaml` pins every package's version and integrity hash, so reinstalling brings back **the version from the backup, not the latest one** — a backup would be redundant, and reinstalling is more reliable than a copy |
 
 - Measured (from 2026-11-01 the slim backup is the default): one backup went from 308 MB to about 100 MB.
@@ -1165,6 +1207,20 @@ against)` — there is no "broken" state.
 - **Every attempt reaches the disk**: `<stateDir>/last-watchdog-report.json` — which tier, how many attempts,
   and per attempt the restore / cookie clear / relaunch / ready, plus why it stopped. A report that never
   reaches the disk is a report that never happened.
+- **A restart that goes FINE writes its ending too**: when the new host comes up and the watchdog stands
+  down, the report is updated to say so (`result`/`stage`/`outcome: 'disarmed'`, `hostReady`, `disarmed`,
+  `disarmedAt`, and a `disarm` block). Before that, the file stayed at `armed` forever for a restart that
+  had already finished — while `health` correctly answered `ready:true`. The old fields are kept
+  untouched, and `previousResult` still says what the file said before (usually `armed`).
+- **The capability probe's tasks are cleaned up**: proving that this machine can create a one-off task
+  means creating one — and deleting it as the probe's last step, which a crash leaves behind (two were
+  found on a real machine). The boot disarm now removes every leftover task whose name starts with this
+  plugin's own probe prefix (`dsh-autorestart-capability-probe-`) and **never** matches anything else;
+  the name reported for a root-folder task carries a leading `\` (`schtasks` prints `\task-name`), so one
+  leading backslash is stripped before comparing — and a name that still contains a `\` afterwards is a task
+  inside a folder and is refused, never deleted;
+  what it removed (and what it could not) is written into the disarm record and the log, and a refusal
+  never prevents the host from coming up.
 
 ### 5. The watchdog's blind spots (say them out loud)
 

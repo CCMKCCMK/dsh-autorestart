@@ -32,6 +32,38 @@
 | Agent 有一个持久 goal（`create_goal`）跨重启 | goal 的 activation 是进程内的，重启后变回 `disarmed`，自动续跑停止 | 启动时重新 `goals.resume()`，goal round driver 立刻开始下一轮 |
 | Agent 想装/升级插件但"重启必打断" | 只能等或赌 | 调 `continuum_restart`：等所有 agent idle（当前这一轮跑完）再重启，回来自己接着做 |
 
+## 支持范围（Supported platforms）
+
+一句话判断：**你这台机器是不是下面四类之一？**
+
+| 你的机器 | 是否支持 | 你需要知道什么 |
+| --- | --- | --- |
+| **Windows 桌面**（DeepSeek Harness 客户端） | **支持** | 不用配任何东西 —— `restartMode: app` 就是默认值 |
+| **Windows 上的 `dsh web`** | **支持** | 必须自己设 `restartMode: command`，**并且**给一条真能重启这个宿主的 `restartCommand` |
+| **WSL 上的 `dsh web`** | **支持** | 同上；注意那个关机按钮关的是**整台 Windows**，不是那个 WSL 发行版 |
+| **Linux 上的 `dsh web`** | **支持** | 同上 |
+
+后两行各有两种形态：**有** `systemd --user` 和**没有**。这只影响**自动回滚用哪种机制**
+（systemd user 定时器，还是插件自己的脱离进程），其它能力一样。设置页永远会告诉你这台机器
+拿到的是哪一种，也绝不会承诺一个它给不了的自动回滚。
+
+### 范围外：未实测 / 不支持
+
+下面三类**不在**支持范围内。插件装上去可能「看着能跑」，但没有任何承诺：没有真机验证，
+有些能力根本给不了。
+
+| 环境 | 状态 | 你会失去什么 |
+| --- | --- | --- |
+| **macOS** | **未实测 / 不支持** | 没有桌面救援快捷方式；自动回滚退化成插件自己的后台进程（机器上没有 `setsid` 时进一步退化成**完全没有自动回滚**）；关机倒数从未在真 Mac 上验过 |
+| **远程 SSH 无图形环境** | **未实测 / 不支持** | 没有桌面、没有桌面救援入口，唯一出路是 `.sh` 脚本 —— 也就是说你得先能 SSH 上去；「开机自启建议」拉起的是**宿主**，不是你的 SSH 会话；会话续接只在**有人**把宿主重新拉起来之后才发生 |
+| **容器**（Docker / Compose / Kubernetes） | **未实测 / 不支持** | 没有「开机自启」这回事（由编排器负责）；自动回滚退化成插件自己的后台进程（精简镜像里常常没有 `setsid` → **没有自动回滚**）；关机倒数**不认识容器** —— 它真的会去关这台主机，所以别在容器里按；容器重建后检查点与备份可能一起消失 |
+
+如果你就在这三类环境里：当实验装、风险自负；出问题请用 `scripts/restore-profile.sh` /
+`scripts/emergency-disable.sh` 自救。
+
+完整的能力矩阵（每种能力 × 每个环境，每一格都带它依据的 `文件:行号`）见
+[platform-matrix.md](platform-matrix.md)。
+
 ## 三分钟看懂（普通用户读这一节就够）
 
 ### 重启为什么不会丢活
@@ -110,7 +142,7 @@
 
 适合：经常因为装插件、升级、应用崩溃而丢掉正在进行的长任务，希望重启后自动接续的人。
 
-不适合：无法接受应用窗口关闭再重开的人；非 Windows 桌面且未配置 restartMode 为 command 的 web 部署（重启功能不可用）；正在跑关键任务的 profile（建议先在测试 profile 验证）。
+不适合：无法接受应用窗口关闭再重开的人；web 部署但没配 `restartMode: command` + `restartCommand`（重启功能不可用）；**macOS、远程 SSH 无图形环境、容器**（见上面「[支持范围](#支持范围supported-platforms)」：未实测、不支持）；正在跑关键任务的 profile（建议先在测试 profile 验证）。
 
 > **包名说明**：原先的包名在公共 npm registry（npmjs.com）上已被其他作者占用，因此本包更名为 **dsh-autorestart**。
 
@@ -208,9 +240,6 @@ session resume on boot, durable-goal re-arm, and an agent-callable idle-aware gr
 - **窗口之外没有任何人看着。** 凌晨被系统杀掉的宿主、手动双击启动即崩的客户端、早上来了发现 0 个进程 —— 这些时候**没有看门狗会把它拉回来**：插件本身已经随着宿主死了，也没有任何一次性项被注册过。这种情况只剩 `scripts/restore-profile.cmd`（自己双击）能用；要是连 profile 都被官方清空了，那就什么都没有；
 - 看门狗只**还原一份快照 + 把宿主拉起来**，它修不了宿主自己的 bug：每次都因为同一个原因死的宿主，最后就是 `failed` 加一份写明试了几次的报告；
 - `watchdogEnabled: false`、或者这台机器没有档位（`none`），就**完全没有自动回滚**，设置页会明说。
-
-> **守夜人（sentry）已移除（2026-11-01，用户拍板：与「关就是关」冲突，不再维护）。**
-> 这个仓库里曾有一份**未接线的**常驻守夜人备用件（`lib/sentry.js`、`lib/sentry-install.js`、`supervisor/sentry.js`、`docs/sentry.md` 和它的两份测试）：它不注册工具、不会自动安装、也不在这条流程里。既然「关就是关」——用户关掉自动回滚之后就不该有任何东西在背后悄悄把宿主拉回来——这份常驻方案与那条拍板正面冲突，已经**整份删掉**，不再维护。上面「窗口之外没有人看着」那段因此仍然成立，而且现在**也没有任何备用件**可以临时接上去。
 
 ### 报错型故障：插件没加载成功时，只提示，不自动修
 
@@ -368,6 +397,19 @@ agent/status(running) ──► 写 checkpoint（<DSH_HOME>\storages\dsh-autores
 - **续接消息是普通 user message**，`source.kind='continuum'`（非 human authority）、内容明确标记
   `<continuum_resume>`，模型能看到完整历史后自行判断中断点。
 
+## 对宿主版本的要求
+
+**需要 DSH ≥ `0.1.6-alpha.2`。**
+
+从 `0.1.6-alpha.2` 起，宿主把「有插件没起来」分成两类处理：
+
+- **普通插件**（你自己写的、从 npm 装进来的）加载失败**不会阻断启动**：宿主照常起来，只记一条 `warning: N entry did not activate`，其余插件继续运行。本插件的「这些功能这次没起来」提示，读的就是这条日志。
+- **必需插件**（宿主自己的零件，例如网页服务）加载失败**仍然会让启动失败**：日志是 `startup failed: N required plugins did not activate`。看门狗负责的正是这一种 —— 宿主起不来时，用一份验证过的备份还原，再把宿主拉起来。
+
+`0.1.6-alpha.1` 及更早的版本没有这个区分：任何一个插件加载失败都会直接抛错、宿主起不来，本插件依赖的那条检测信号在那类宿主上根本不存在。
+
+**这条结论是怎么来的（如实说明）**：逐版核对 DSH 官方 npm 包 `@deepseek-ai/dsh-app-boot` 的实现得出，对比了 `0.1.0-rc.2` / `0.1.3-alpha.2` / `0.1.5-rc.3` / `0.1.6-alpha.1` / `0.1.6-alpha.2` / `0.1.7-rc.2` / `0.2.0-rc.1` / `0.2.1-rc.3` / `0.2.2-alpha.2`，分界落在 `0.1.6-alpha.2`。**DSH 官方发布说明里没有一条明写这件事** —— `0.1.6-alpha.2` 的相关条目只说「启动失败时分类显示错误和等待中的服务，并将完整诊断保存到日志文件」。所以这不是官方声明，是源码核对加本机实测。
+
 ## 安装
 
 当前版本：**0.8.6**。
@@ -434,10 +476,10 @@ dsh plugin --profile desktop add C:\path\to\dsh-autorestart
 | `maxSessions` | `4` | 一次启动最多恢复几个会话 |
 | `maxResumeAttempts` | `2` | 每个会话最多尝试恢复几次（跨启动累计，防重启循环） |
 | `deferPollMs` | `3000` | 等 idle 的轮询间隔 |
-| `deferSoftMs` | `300000` | 软期限：还在忙就告警 |
-| `deferHardMs` | `900000` | 硬期限：超过后告警；只有 `forceRestartWhenBusy` 打开时才强制重启 |
-| `deferPolicy` | `auto` | `auto` = 硬期限后按 `forceRestartWhenBusy` 决定（默认继续等）；`wait` = 一直等 |
-| `forceRestartWhenBusy` | `false` | 硬期限到了但还有会话在跑时是否强制重启；默认 `false` = **不打断任何会话**，一直等到其他会话结束 |
+| `deferSoftMs` | `300000` | **已弃用——读入但完全无效。** 重启等待没有截止时间；仅为兼容旧配置文件保留 |
+| `deferHardMs` | `900000` | **已弃用——读入但完全无效。** 重启等待不会放弃；仅为兼容旧配置文件保留 |
+| `deferPolicy` | `auto` | 仅为兼容旧配置保留：无论取什么值，等待行为都一样——一直等闸门放行，没有截止时间 |
+| `forceRestartWhenBusy` | `false` | 是否允许**打断正在运行的会话**强行重启；默认 `false` = 不打断任何会话，一直等到其他会话结束。这不是截止时间 |
 | `restartMode` | `app` | `app` = 重启 DeepSeek Harness 桌面应用；`command` = 跑 `restartCommand` |
 | `restartCommand` | `''` | 自定义重启命令，支持 `{pid}` `{ppid}` `{app}` 占位符 |
 | `relaunchDelaySeconds` | `2` | 脱离的 helper 在杀掉应用**之前**等几秒（`ping -n 3`，约 2 秒） |
@@ -488,9 +530,11 @@ dsh plugin --profile desktop add C:\path\to\dsh-autorestart
 - **`0` 就是「和以前一样」**：`queuedGraceMs: 0` 时，没人认领的消息永远挡着重启，和 0.6.2 之前完全一致。
 - **在哪看**：`GET /health?state=1`、`GET /health?gate=1`、`continuum_status` 都会报 `queuedGraceMs`。
 
-### 长期等待的时候，用户看到什么
+### 等待的时候，用户看到什么
 
-硬期限（`deferHardMs`）到了、还有会话在跑的时候，插件**不再装作「一切正常，只是在等一会儿」**，但也**不会放弃**：
+重启只等一件事：**所有会话把活干完**。没有截止时间、没有任何东西会过期——等多久都等；只有两种情况会结束它：闸门放行（重启执行），或者你自己撤回请求。
+
+等待从第一秒就看得见（不是过了某个阈值才肯说）：
 
 - **请求留着**：待重启仍然是待重启，请求方的会话仍然记在检查点里，闸门一 quiet 就照常重启。**不会在用户背后把请求悄悄丢掉**（不 cancel、不 releaseRequesters）。
 - **等待变得看得见**：日志每分钟最多一条（不是每 3 秒刷屏）——「已等待 17 分钟，XXX 一直占着；可以取消或等它收工」；`GET /health?state=1` 里多一个 `longWait` 对象（`since` / `reason` / `blockedBy`）。
@@ -597,16 +641,16 @@ restart gate: action=wait reason=agents-busy-within-soft-window busyCount=1 quie
 
 **浮层不会悬停，也不说假话**：重启被新会话打断时，浮层立刻从「正在重启…」换成「**有新会话在跑，重启已暂缓**」，第二行小字「等它结束会自动继续 · 已等 N 个会话」——这时候说「正在重启」就是假话。宿主每 350ms 复查一次空闲门，那句假话最多只存在一个心跳；备份一结束、进入「正在重启」阶段之前也会当场复查一次，被挡就在同一次 tick 退回等待。阶段超过 15 秒无更新视为过期，不再显示，胶囊仍显示等待数。
 
-## 0.9.0：备份了什么、三层信号能说明什么、守夜人的边界（中文）
+## 0.8.6：备份了什么、三层信号能说明什么、自动救援的边界（中文）
 
-> 本章是 0.9.0 发版口径的中文原文，英文对照见 [README.md](../README.md)。它只回答普通用户会问的
-> 四个问题：**备份什么、信号有几层、守夜人能救什么、出事之后按什么顺序做**。实现细节在上面各节。
+> 本章是 0.8.6 发版口径的中文原文，英文对照见 [README.md](../README.md)。它只回答普通用户会问的
+> 四个问题：**备份什么、信号有几层、自动救援能救什么、出事之后按什么顺序做**。实现细节在上面各节。
 
 ### ① 备份什么、不备份什么
 
 | | 进不进备份 | 为什么 |
 |---|---|---|
-| **备份** | profile 配置（`cordis.patch.yml` / `package.json` / `pnpm-lock.yaml`）+ **你自己开发的、以链接（`link:`）方式安装的插件**（内容另存在 `node_modules-link/<name>/`） | 自己写的插件**没有确定的来源和版本**：删掉就找不回来，只能靠备份 |
+| **备份** | profile 配置（`cordis.patch.yml` / `package.json` / `pnpm-lock.yaml`）+ **你自己开发的、以链接（`link:`）方式安装的插件**（内容另存在 `node_modules-link/<name>/`；**不含 `.git`** —— 历史能从远端重建，而它才是体积主因：单个链接插件就 962 个文件 / 约 74 MB。另外每轮会清掉「既无 manifest 又无配置文件」的空壳目录，单次上限 32 个 / 2 GB，清掉了什么都会写进日志与返回结果。不完整的备份**根本不会挂上正式名字**：先写成 `.staging-<stamp>`，只有 manifest 与配置都落盘后才改名，所以任何中断只留下一个暂存目录，而不是一个「看起来能还原」的目录；**这类 `.staging-*` 残留不会被启动清扫掉**（启动清扫按设计跳过所有 `.` 开头的目录，以免删到正在写入的那一份），它们既不会被列出、也不会被拿来还原，手动删掉是安全的；而老版本留在盘上那些「长得像备份、其实没有 manifest / 配置」的目录，启动时会被扫掉 | 自己写的插件**没有确定的来源和版本**：删掉就找不回来，只能靠备份 |
 | **不备份** | **第三方插件**（从 npm 装的） | 第三方**有确定的来源和版本**：`pnpm-lock.yaml` 把每个包的版本和完整性哈希都钉住了，重装装回来的是**备份时那个版本，不是最新版**——所以备份是多余的，重装比备份可靠 |
 
 - 实测（2026-11-01 起，精简备份是默认行为）：一次备份从 308 MB 降到约 100 MB。
@@ -647,7 +691,7 @@ restart gate: action=wait reason=agents-busy-within-soft-window busyCount=1 quie
 **不许写「插件坏了」**：跟备份不一样，可能只是你刚改过、或者升级过。设置页每行的状态字只有
 `正常` / `跟备份不一样` / `备份里没有` / `没装` / `没法判断（没有可比对的备份）`，没有「坏」这个状态。
 
-### ④ 守夜人（watchdog）：它做什么
+### ④ 自动救援（看门狗）：它做什么
 
 - **可配置**：`watchdogEnabled`，**默认开**；关掉之后新版本起不来就要自己处理。
 - **只在一个窗口里值班**：这次重启是**本插件**发起的。宿主被换掉之后，它等新实例、问**新实例自己的**
@@ -659,8 +703,18 @@ restart gate: action=wait reason=agents-busy-within-soft-window busyCount=1 quie
   （起没起来 / 有没有实例活着 / health 答不答）。
 - **每次尝试都落盘**：`<stateDir>/last-watchdog-report.json` —— 哪一档、试了几次、每轮的
   还原 / 清 cookie / 拉起 / ready、以及为什么停。没写进盘的报告等于没发生。
+- **顺顺利利的重启也要写结局**：新宿主起来了、看门狗撤防了，报告会被补写成这个结局
+  （`result` / `stage` / `outcome: 'disarmed'`、`hostReady`、`disarmed`、`disarmedAt`，以及一段
+  `disarm` 明细）。在这之前，报告会一直停在 `armed`——一次早就结束了的重启，却写着自己还在待命，
+  而 health 明明答的是 `ready:true`。原有字段一个不动，`previousResult` 还留着"它之前说的是什么"。
+- **能力探测留下的计划任务会被清掉**：要证明这台机器能建一次性计划任务，就得真建一个——探测的最后
+  一步是删掉它，而崩溃正好会把它留下（真机上就翻到 2 个）。现在开机撤防会清掉所有名字以本插件自己
+  探测前缀（`dsh-autorestart-capability-probe-`）开头的任务，**绝不匹配别的任务**；根目录下的任务在
+  `schtasks` 输出里名字前面会带一个 `\`（形如 `\任务名`），所以比对前先剥掉**一个**前导反斜杠——剥完
+  还带 `\` 的说明它在子文件夹里，一律拒绝、绝不删除；清了哪些、哪些没
+  清掉，都写进撤防记录与日志，清不掉也绝不影响宿主起来。
 
-### ⑤ 守夜人的盲区（必须明说，别指望错）
+### ⑤ 自动救援的盲区（必须明说，别指望错）
 
 **它能救的**：**插件自己出了问题、导致 DSH 起不来** —— 还原一份快照，再把宿主拉起来。
 
@@ -1058,10 +1112,12 @@ aborts the plugin logs an error and schedules one ungated restart instead of
 retrying forever. Even that ungated fallback re-checks the same gate before
 anything is scheduled, so a busy conversation is never killed.
 
-The hard deadline (deferHardMs) only warns: it forces a restart over a running
-conversation only when forceRestartWhenBusy is enabled; by default it waits for
-the other conversations, because a restart must never kill a conversation that is
-still working.
+A restart waits until every conversation is idle, with NO deadline: nothing ends
+the request except the gate opening or the user withdrawing it. The only setting
+that can act on busy conversations is forceRestartWhenBusy — it restarts over a
+running conversation, i.e. it interrupts it (off by default), because a restart
+must never kill a conversation that is still working unless the user asked for
+exactly that.
 
 Inspect the live verdict with continuum_status (gateAllow, quietForMs, blockedBy)
 or by requesting the health path with ?gate=1.
@@ -1143,6 +1199,9 @@ or by requesting the health path with ?gate=1.
 - `parkedGoals` 与 `continuum_status` 上报的列表一致：本插件停泊过的每个 goal 的 `sessionId`、`goalId`、`parkedAt`、`resumedAt`（以及派生的 `resumed`）。
 
 ## 平台与部署
+
+> 本节讲**怎么配**；**哪些环境被支持、哪些不支持**看上面「支持范围」那一节，
+> 每种能力 × 每个环境的完整矩阵（带 `文件:行号`）见 [platform-matrix.md](platform-matrix.md)。
 
 | 部署形态 | `restartMode` | 怎么重启 |
 | --- | --- | --- |
