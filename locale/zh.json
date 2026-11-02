@@ -271,7 +271,12 @@
       "rollbackConfirmNo": "取消",
       "rollbackBusy": "正在回退…",
       "rollbackDone": "已回退，正在重启…",
-      "rollbackFailed": "回退没成功：{message}"
+      "rollbackFailed": "回退没成功：{message}",
+      "maxEffective": "最多保留 {n} 份（在插件配置里改）",
+      "footprint": "实际占用 {size}，当前 {n} 份",
+      "purpose": "每次重启前自动拍的本地插件完整备份，最多保留 {n} 份，出问题可自行选择一份回档。",
+      "kindsLocal": "链接安装（自己写的）和本地化过的插件（目录里有 .git）都已完整备份，可以回档。",
+      "kindsThirdParty": "第三方插件由插件作者维护，有异常建议重装"
     },
     "backupPlugins": {
       "label": "备份包含已安装插件",

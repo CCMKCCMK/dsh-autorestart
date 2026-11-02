@@ -271,7 +271,12 @@
       "rollbackConfirmNo": "Cancel",
       "rollbackBusy": "Rolling back…",
       "rollbackDone": "Rolled back — restarting…",
-      "rollbackFailed": "The rollback did not work: {message}"
+      "rollbackFailed": "The rollback did not work: {message}",
+      "maxEffective": "At most {n} copies are kept (change it in the plugin config)",
+      "footprint": "Using {size} on disk, {n} copies right now",
+      "purpose": "A complete backup of the local plugins, taken before every restart; at most {n} copies are kept, and you can roll back to any one you pick.",
+      "kindsLocal": "Both linked plugins (written by hand) and localized ones (their directory has a .git) are in the copy in full, so they can be rolled back.",
+      "kindsThirdParty": "Third-party plugins are maintained by their authors; if something is wrong, reinstall them."
     },
     "backupPlugins": {
       "label": "Include the installed plugins in the backup",

@@ -384,6 +384,11 @@
     // "everything is fine".
     'settings.backup.multiProfile': '检测到多个 profile，备份和回滚已暂停：它不知道该备份哪一个。解决办法：启动时指定 DSH_PROFILE，或者只保留一个 profile。',
     'settings.backup.keep': '最多保留 {n} 份，超出自动删最旧的那份。',
+    'settings.backup.maxEffective': '最多保留 {n} 份（在插件配置里改）',
+    'settings.backup.footprint': '实际占用 {size}，当前 {n} 份',
+    'settings.backup.purpose': '每次重启前自动拍的本地插件完整备份，最多保留 {n} 份，出问题可自行选择一份回档。',
+    'settings.backup.kindsLocal': '链接安装（自己写的）和本地化过的插件（目录里有 .git）都已完整备份，可以回档。',
+    'settings.backup.kindsThirdParty': '第三方插件由插件作者维护，有异常建议重装',
     'settings.backup.empty': '还没有备份；每次重启前会自动生成一份。',
     'settings.backup.path': '存放路径',
     'settings.backup.copyPath': '复制路径',
@@ -875,6 +880,11 @@
     'settings.backup.sectionNote': 'Contains: a plugin will not start? Put it back to the previous version',
     'settings.backup.multiProfile': 'More than one profile was found, so backups and rollbacks are paused: it cannot tell which one to back up. Fix it by starting with DSH_PROFILE set, or by keeping a single profile.',
     'settings.backup.keep': 'At most {n} copies are kept; the oldest one is deleted when there are more.',
+    'settings.backup.maxEffective': 'At most {n} copies are kept (change it in the plugin config)',
+    'settings.backup.footprint': 'Using {size} on disk, {n} copies right now',
+    'settings.backup.purpose': 'A complete backup of the local plugins, taken before every restart; at most {n} copies are kept, and you can roll back to any one you pick.',
+    'settings.backup.kindsLocal': 'Both linked plugins (written by hand) and localized ones (their directory has a .git) are in the copy in full, so they can be rolled back.',
+    'settings.backup.kindsThirdParty': 'Third-party plugins are maintained by their authors; if something is wrong, reinstall them.',
     'settings.backup.empty': 'No backup yet; one is written before every restart.',
     'settings.backup.path': 'Where they live',
     'settings.backup.copyPath': 'Copy the path',
@@ -7304,6 +7314,46 @@
                 'span',
                 { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-backup': 'keep' },
                 fill(t('settings.backup.keep'), { n: backupsInfo.max }),
+              ),
+              // THE EFFECTIVE VALUE, NOT AN INPUT (user decision, 2026-11-02).
+              //
+              // The number is `backups.max`, i.e. the maxBackups the host itself
+              // wrote into the config. The plugin-config form is where it is
+              // edited; this page only reports it, and says so — a number with no
+              // hint reads like a setting that refuses to change.
+              h(
+                'span',
+                { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-backup': 'max-effective' },
+                fill(t('settings.backup.maxEffective'), { n: backupsInfo.max }),
+              ),
+              // HOW MUCH DISK IT TAKES, next to how many copies there are: those
+              // two numbers together answer "is this costing me 2 MB or 2 GB".
+              h(
+                'span',
+                { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-backup': 'footprint' },
+                fill(t('settings.backup.footprint'), {
+                  size: formatBackupSize(
+                    backupItems.reduce((total, item) => total + (Number(item && item.bytes) || 0), 0),
+                  ),
+                  n: backupItems.length,
+                }),
+              ),
+              // WHAT THE FOLDER IS FOR, and what it holds — the two questions the
+              // old page answered only by implication.
+              h(
+                'span',
+                { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-backup': 'purpose' },
+                fill(t('settings.backup.purpose'), { n: backupsInfo.max }),
+              ),
+              h(
+                'span',
+                { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-backup': 'kinds-local' },
+                t('settings.backup.kindsLocal'),
+              ),
+              h(
+                'span',
+                { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-backup': 'kinds-third-party' },
+                t('settings.backup.kindsThirdParty'),
               ),
               // WHAT THE TWO IDENTITIES MEAN (user decision, 2026-10-30): the
               // words on the rows below are useless without the rule behind

@@ -237,7 +237,7 @@ test('an older copy without the field is read by scanning, not by believing a co
     includePlugins: true,
     plugins: [{ name: 'listed-plugin', version: '1.0.0', install: 'link' }],
   }), 'utf8')
-  assert.deepEqual(manifestPluginsOf(backupDir), [{ name: 'listed-plugin', version: '1.0.0', install: 'link' }])
+  assert.deepEqual(manifestPluginsOf(backupDir), [{ name: 'listed-plugin', version: '1.0.0', install: 'link', source: 'link' }])
 })
 
 test('the page tells "in the backup" from "not in the backup" — dsh-codekg really is in there', () => {
@@ -354,4 +354,31 @@ test('without .git an npm plugin is published-as-is even when its files differ',
     false,
     'so it is not copied',
   )
+})
+
+// ---------------------------------------------------------------------------
+// THE NORMALISED PLUGIN LIST KEEPS ITS SOURCE (user decision, 2026-11-02).
+//
+// The page reads the normalised list, not the raw manifest (it cannot read
+// files). If that projection drops source, the page cannot tell a link from a
+// localized npm plugin any more, and the three-way wording becomes a lie.
+// ---------------------------------------------------------------------------
+
+test('manifestPluginsOf keeps source, so the page can tell the three kinds apart', async (t) => {
+  const root = tempRoot(t)
+  const profileDir = makeProfile(root) // contains the link 'dsh-linked'
+  const dir = path.join(profileDir, PLUGINS_DIR, 'dsh-mine')
+  fs.mkdirSync(path.join(dir, '.git'), { recursive: true })
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'dsh-mine', version: '1.4.0' }), 'utf8')
+  fs.writeFileSync(path.join(dir, 'index.js'), 'export const mine = 1' + String.fromCharCode(10), 'utf8')
+
+  const result = await createBackup({ profileDir, backupsDir: path.join(root, 'backups') })
+  assert.equal(result.ok, true, result.error || '')
+
+  const plugins = manifestPluginsOf(result.dir)
+  assert.ok(Array.isArray(plugins), 'the list is there')
+  const byName = new Map(plugins.map((entry) => [entry.name, entry]))
+  assert.equal(byName.get('dsh-linked').source, 'link', 'a link is projected as a link')
+  assert.equal(byName.get('dsh-mine').source, 'localized', 'a localized npm plugin keeps its source')
+  assert.equal(byName.get('dsh-mine').install, 'npm', 'and its install kind')
 })
