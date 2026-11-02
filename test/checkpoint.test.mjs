@@ -19,6 +19,7 @@ import {
   readState,
   recoverableSessions,
   requestRestart,
+  setDisarmedGoal,
   setGoal,
   setPhase,
   writeState,
@@ -397,4 +398,87 @@ test('pruneSessions drops stale finished entries by age but keeps active ones', 
 
   pruneSessions(state, { now: T, maxAgeMs: 100 });
   assert.deepEqual(Object.keys(state.sessions).sort(), ['active', 'fresh']);
+});
+
+/* ------------------------------------------------------------------ *
+ * WHAT A RELOAD MUST NOT THROW AWAY (2026-11-02).
+ *
+ * `normalizeState` rebuilds the document from a whitelist, so a field the
+ * plugin WRITES but the whitelist does not know is silently dropped on the next
+ * boot — the record exists, but the answer cannot be read any more. That is
+ * exactly what happened to `disarmedGoals[sid].reason` (written since the
+ * restart-queued disarm, and reported as 0 hits in a real state.json).
+ * ------------------------------------------------------------------ */
+
+test('the reason a goal was disarmed survives a reload, and nothing is "repaired"', (t) => {
+  const dir = tempDir(t);
+  const file = path.join(dir, 'state.json');
+  const state = createEmptyState(T);
+  setDisarmedGoal(state, 'sess-goal', { goalId: 'goal-1', disarmedAt: T });
+  // Exactly what the write side does after `setDisarmedGoal`.
+  state.disarmedGoals['sess-goal'].reason = 'restart-queued';
+  writeState(file, state, T);
+
+  const read = readState(file, T + 10);
+  const record = read.state.disarmedGoals['sess-goal'];
+  assert.ok(record, 'the record itself is still there');
+  assert.equal(record.goalId, 'goal-1');
+  assert.equal(record.disarmedAt, T);
+  assert.equal(
+    record.reason,
+    'restart-queued',
+    'WHY the goal was disarmed is still readable after a reload',
+  );
+  assert.equal(read.repaired, false, 'a known field must not mark the whole state as repaired');
+  assert.equal(read.corrupt, false);
+});
+
+test('a record from before the reason existed still loads (no forced migration)', (t) => {
+  const dir = tempDir(t);
+  const file = path.join(dir, 'state.json');
+  const legacy = {
+    ...createEmptyState(T),
+    disarmedGoals: { 'sess-old': { goalId: 'goal-0', disarmedAt: T, resumedAt: null } },
+  };
+  fs.writeFileSync(file, JSON.stringify(legacy), 'utf8');
+
+  const read = readState(file, T + 10);
+  const record = read.state.disarmedGoals['sess-old'];
+  assert.equal(record.goalId, 'goal-0');
+  assert.equal(record.reason, null, 'a record with no reason is readable and has no reason');
+  assert.equal(read.repaired, false, 'an older record is still a valid record');
+});
+
+test('a truly unknown field is still dropped (the whitelist was not widened blindly)', (t) => {
+  const dir = tempDir(t);
+  const file = path.join(dir, 'state.json');
+  const dirty = {
+    ...createEmptyState(T),
+    disarmedGoals: {
+      'sess-goal': { goalId: 'goal-1', disarmedAt: T, reason: 'restart-queued', hacker: 'nope' },
+    },
+  };
+  fs.writeFileSync(file, JSON.stringify(dirty), 'utf8');
+
+  const read = readState(file, T + 10);
+  const record = read.state.disarmedGoals['sess-goal'];
+  assert.equal(record.reason, 'restart-queued', 'the known field is kept');
+  assert.equal('hacker' in record, false, 'the unknown field is gone');
+  assert.equal(read.repaired, true, 'and dropping it is honestly reported as a repair');
+});
+
+test('a reason that is not a string is dropped, and that IS a repair', (t) => {
+  const dir = tempDir(t);
+  const file = path.join(dir, 'state.json');
+  const broken = {
+    ...createEmptyState(T),
+    disarmedGoals: { 'sess-goal': { goalId: 'goal-1', disarmedAt: T, reason: 42 } },
+  };
+  fs.writeFileSync(file, JSON.stringify(broken), 'utf8');
+
+  const read = readState(file, T + 10);
+  const record = read.state.disarmedGoals['sess-goal'];
+  assert.equal(record.goalId, 'goal-1', 'the rest of the record survives');
+  assert.equal(record.reason, null, 'an unreadable reason is not passed on as if it were one');
+  assert.equal(read.repaired, true);
 });
