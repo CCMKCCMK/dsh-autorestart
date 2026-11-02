@@ -178,6 +178,14 @@
       "report": "Report a problem",
       "rescue": "If DSH will not start"
     },
+    "restartBanner": {
+      "title": "This machine has no restart capability right now: this plugin will not restart, and will not take a backup before a restart. Press \"Set it up for me\" and I derive and write it — and that can be undone.",
+      "fix": "Set it up for me"
+    },
+    "plugins": {
+      "builtinNote": "The other {n} plugins are built-in: DSH ships them, so no backup is needed.",
+      "thirdPartyNote": "The other {n} plugins are third-party: we did NOT back them up, so reinstall them if something goes wrong."
+    },
     "seconds": {
       "label": "Shutdown countdown seconds",
       "immediate": "No countdown (switch off right away)",
@@ -191,10 +199,15 @@
       "immediate": "Do not wait (restart right away)"
     },
     "backup": {
+      "details": "Details",
+      "section": "What is backed up, and the manual backup steps",
+      "recovery": "A plugin will not start? Put that one back to its previous version",
       "label": "Backup before a restart",
-      "hint": "Take a snapshot of the current configuration before every restart, so a host that cannot boot again is rolled back automatically.",
+      "hint": "Saved automatically before every restart, so a host that cannot boot again can be rolled back. What it holds: your settings (always); plugins you wrote yourself and linked to their source directory (their files are copied too); plugins installed from the internet (only which ones and which version are recorded, the files are not copied, reinstall them from that list if something goes wrong).",
       "list": "What is backed up right now",
-      "count": "{n} copies right now",
+      "count": "{n} copies right now, {m} can be rolled back to",
+      "sectionNote": "Contains: a plugin will not start? Put it back to the previous version",
+      "multiProfile": "More than one profile was found, so backups and rollbacks are paused: it cannot tell which one to back up. Fix it by starting with DSH_PROFILE set, or by keeping a single profile.",
       "keep": "At most {n} copies are kept; the oldest one is deleted when there are more.",
       "empty": "No backup yet; one is written before every restart.",
       "path": "Where they live",
@@ -244,6 +257,10 @@
       },
       "evidenceHint": "\"Certified by\" says WHY a copy counts as safe: all four startup checks passed, the health probe answered in command mode, it is the first-install seed, or a human confirmed a manual rollback. \"Not certified\" means there is no evidence at all — such a copy is never treated as a safe one. When a boot had to be rescued by the watchdog, the evidence records that too, so a later selector can refuse that copy.",
       "version": "version {v}",
+      "fallback": {
+        "seed": "There is also a first-install seed copy (settings only, not verified, used only when the copy above is unavailable), {time}, {size}",
+        "other": "There is also an unverified copy (never restored automatically, used only when the copy above is unavailable), {time}, {size}"
+      },
       "identityHint": "A backup has one of two identities: ① “known good” — the copy a boot has proven; when something breaks, only a known-good copy is rolled back, and the first install creates one automatically. ② “this restart's snapshot” — taken right before every restart and not proven yet; old backups (unverified) and that snapshot are never rolled back automatically. At most {n} copies are kept together (the oldest goes first; a known-good copy is never deleted). A manual rollback asks for confirmation first, then restarts automatically.",
       "rollback": "Roll back to this copy",
       "rollbackConfirmTitle": "Roll back to this copy?",
@@ -333,10 +350,14 @@
       "copyFailed": "The copy failed — please select the path above by hand",
       "reveal": "Open the folder",
       "which": "Which one: the whole environment is broken (a changed configuration, another plugin, a bad upgrade) → \"Back to the last good state\"; only this plugin is suspect → \"Take this plugin out only\".",
-      "warning": "Important: these two scripts are for when DSH does not come up. Using \"Back to the last good state\" while DSH is running overwrites the configuration you are working with right now.",
+      "warning": "Important: this desktop entry and the two scripts above are for when DSH does not come up. Do not click it while DSH is running — \"Back to the last good state\" overwrites the configuration you are working with right now.",
       "shortcut": "Put a shortcut on the desktop",
       "shortcutDone": "It is on the desktop",
       "noDesktop": "This machine has no desktop directory, so no shortcut can be placed (the paths are above — copy them by hand).",
+      "noDesktopPlatform": "The web / server version has no desktop, so there is no one-click entry here; use the two .sh scripts above.",
+      "shortcutScope": "It can only put the WHOLE environment back to the last good state — it cannot take one plugin out; for that, use \"A plugin will not start\" above.",
+      "shortcutBlocked": "A system policy does not allow creating the shortcut (a group policy or a permission limit). Copy the script path below and put it on the desktop by hand:",
+      "shortcutWriteFailed": "The shortcut was not written: {message}. Copy the script path below and put it on the desktop by hand:",
       "shortcutFailed": "The shortcut was not placed: {message}",
       "revealFailed": "The folder did not open: {message}",
       "rollbackOk": "Automatic rollback: available (a host that does not come up after a restart goes back to the last good state)",
@@ -363,6 +384,7 @@
       "windows-startup": "Windows startup folder",
       "systemd-user": "systemd user service",
       "systemd-system": "systemd system service",
+      "linux-no-systemd": "Linux without systemd",
       "wsl-systemd": "systemd inside WSL",
       "wsl-no-systemd": "WSL without systemd",
       "container": "a container",
@@ -432,9 +454,12 @@
     "failed": "{plugin} was not restored: {reason}",
     "noBackup": "There is no usable backup on this machine; it has to be handled by hand."
   },
-  "watchdog.title": "Turn on \"Watchman\"?",
-  "watchdog.explain": "When the app restarts, it watches the version that just came up. If that version never comes up (about 3 minutes), it restores a backup that has been verified to work, then starts the app again. If it has no such backup, it will not guess: it tells you there is no trusted restore point and asks you to handle it manually. If it did anything, it leaves a record of what it tried and how it went.",
-  "watchdog.warnOff": "With it off, if a new version fails to start, you will have to handle it manually.",
+  "watchdog.title": "If a restart fails, it can rescue you automatically",
+  "watchdog.explain": "This plugin ships with an automatic rescue: when a newly restarted version never comes up (about 3 minutes), it puts a verified working backup back and starts the program again, so you do not have to do it yourself. **It is on by default — it came with the plugin.** If it has no trusted backup, it will not guess: it tells you there is no trusted restore point and asks you to handle it manually. If it did anything, it leaves a record of what it tried and how it went.",
+  "watchdog.whereOff": "If you do not want it, turn it off on the settings page — with it off, a new version that does not start has to be handled by hand.",
+  "watchdog.gotIt": "Got it",
+  "watchdog.noticeSaved": "That is the only notice; it will not appear again.",
+  "watchdog.warnOff": "With it off, a new version that does not start has to be handled by hand.",
   "watchdog.keepOn": "Keep it on (recommended)",
   "watchdog.turnOff": "No, I will handle it",
   "watchdog.savedOn": "The watchdog is on: the next restart is protected.",

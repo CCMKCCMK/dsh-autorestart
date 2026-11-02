@@ -192,8 +192,8 @@
     panelParkedGoal: '会话 {session} · {goal}',
     panelWaiting: '已等待 {duration}',
     panelResume: '重启后本会话会自动继续进度',
-    // The long wait: the restart passed the hard deadline while a conversation
-    // was still running. The capsule is ONE clipped line of 22px: it holds a
+    // The long wait: the restart is still waiting while a conversation runs on.
+    // There is no deadline and nothing expires. The capsule is ONE clipped line: it holds a
     // number and a duration, NEVER a name. Every name goes into the tooltip,
     // where there is room for all of them.
     longWaitPill: ' · 已等 {duration} · {n} 项任务在跑',
@@ -291,9 +291,14 @@
     'settings.restartGrace.value': '{n} 秒',
     'settings.restartGrace.immediate': '不等（立即重启）',
     'settings.backup.label': '重启前备份',
-    'settings.backup.hint': '每次重启前先快照一次当前配置；万一重启后起不来，能自动回退。',
+    'settings.backup.details': '详情',
+    'settings.backup.section': '备份说明及手动备份操作',
+    'settings.backup.recovery': '某个插件起不来？退回它的上一个版本',
+    'settings.backup.hint': '重启前自动存一份，重启后起不来时能退回去。存的是：你的设置（一定）；你自己写的、直接链接到源码目录的插件（连文件一起拷）；从网上下载装的插件（只记下装过哪些、什么版本，不拷文件，真出事时按清单重装）。',
     'settings.backupPlugins.label': '备份包含已安装插件',
     'settings.backupPlugins.hint': '关闭后只备份 DSH 自身状态，不含 profile 里的插件目录。',
+    'settings.restartBanner.title': '这台机器现在还没有重启能力：本插件不会重启，也不会在重启前备份。点一下「帮我配好」，我自动推导并写入；配错了可以撤销。',
+    'settings.restartBanner.fix': '帮我配好',
     'settings.groups.supervisor': '开机自启',
     'settings.supervisor.status': '当前由',
     'settings.supervisor.installed': '插件守护',
@@ -353,6 +358,7 @@
   'settings.autostartKind.systemd-system': 'systemd 系统服务',
   'settings.autostartKind.wsl-systemd': 'WSL 里的 systemd',
   'settings.autostartKind.wsl-no-systemd': 'WSL（没有 systemd）',
+  'settings.autostartKind.linux-no-systemd': 'Linux（没有 systemd）',
   'settings.autostartKind.container': '容器',
   'settings.autostartKind.desktop': '桌面版自带重启',
   'settings.autostartKind.unknown': '认不出',
@@ -368,7 +374,15 @@
     'meta.description': '让 DeepSeek Harness 重启后接着干活：落盘的检查点、启动时重新武装 goal 或给一条续接提示，以及一次等人闲下来的优雅重启。',
     'text.missing': '（这条文案还没写）',
     'settings.backup.list': '现在备份了什么',
-    'settings.backup.count': '当前 {n} 份',
+    'settings.backup.count': '当前 {n} 份，可用于回退的 {m} 份',
+    // THE FOLD SAYS WHAT IS INSIDE IT (user decision, 2026-11-02): with the
+    // block collapsed, "某个插件起不来" was invisible — and that is the entry a
+    // user needs on the day a plugin breaks.
+    'settings.backup.sectionNote': '内含：某个插件起不来？退回上一个版本',
+    // MORE THAN ONE PROFILE (2026-11-02): the host cannot tell which profile to
+    // back up, so backups and rollbacks stop. Saying nothing would look like
+    // "everything is fine".
+    'settings.backup.multiProfile': '检测到多个 profile，备份和回滚已暂停：它不知道该备份哪一个。解决办法：启动时指定 DSH_PROFILE，或者只保留一个 profile。',
     'settings.backup.keep': '最多保留 {n} 份，超出自动删最旧的那份。',
     'settings.backup.empty': '还没有备份；每次重启前会自动生成一份。',
     'settings.backup.path': '存放路径',
@@ -386,6 +400,13 @@
     'settings.backup.kind.snapshot': '本次快照',
     'settings.backup.kind.unknown': '旧备份（未验证）',
     'settings.backup.version': '版本 {v}',
+    // THE ONE LINE A COPY GETS WHEN IT IS NOT THE ONE (user decision,
+    // 2026-11-02): a copy automatic recovery would never use is still listed,
+    // but as a sentence with its time and its size — never as a card with a
+    // button next to it. Two wordings, because a seed and a restart snapshot are
+    // two different things to promise about.
+    'settings.backup.fallback.seed': '另有一份首装备份（只含设置、未验证，仅在前一份不可用时才用），{time}，{size}',
+    'settings.backup.fallback.other': '另有一份未验证的备份（不会被自动还原，仅在前一份不可用时才用），{time}，{size}',
     // WHY THIS COPY COUNTS AS SAFE (2026-11-01, strict mode). The label alone
     // ("safe copy") was the thing that lied in the incident: it never said WHO
     // checked WHAT. Every row therefore names its evidence, and a copy nobody
@@ -413,10 +434,10 @@
     'settings.backup.scope.slim': '精简份（配置 + 手装插件）',
     'settings.backup.scopeMissing': '（没有记录）',
     'settings.backup.interventionLabel': '这次启动有没有被系统介入',
-    'settings.backup.intervention.true': '有（守夜人还原过）',
+    'settings.backup.intervention.true': '有（自动救援动过手）',
     'settings.backup.intervention.false': '没有',
     'settings.backup.intervention.unknown': '没有记录',
-    'settings.backup.evidenceHint': '「认证依据」说的是这一份凭什么算安全：四项启动自检全过、命令模式探活通过、首装种子、还是人工回滚后确认。「未认证」就是没有任何证据——它不会被当成安全份。一旦这次启动被守夜人还原过，认证证据里会记下「有介入」，下一阶段的选择器可以据此不用它。',
+    'settings.backup.evidenceHint': '「认证依据」说的是这一份凭什么算安全：四项启动自检全过、命令模式探活通过、首装种子、还是人工回滚后确认。「未认证」就是没有任何证据——它不会被当成安全份。一旦这次启动是被自动救援还原的，认证证据里会记下「有介入」，下一阶段的选择器可以据此不用它。',
     'settings.backup.identityHint': '备份有两种身份：①「安全份」——启动成功后验证过的那一份，出问题只会回滚安全份；第一次安装时会自动生成一份。②「本次快照」——每次重启前刚拍的，还没验证过；旧备份（未验证）和它都不会被自动回滚。两类合计最多保留 {n} 份，超出删最旧的那份（安全份不会被删）。手动回退会先二次确认，然后会自动重启。',
     // THE MANUAL ROLLBACK (user decision, 2026-10-30): the user may know better
     // than "the newest proven copy", so ANY copy can be restored — but only
@@ -431,8 +452,8 @@
     'settings.backup.rollbackBusy': '正在回退…',
     'settings.backup.rollbackDone': '已回退，正在重启…',
     'settings.backup.rollbackFailed': '回退没成功：{message}',
-    'settings.groups.report': '报告问题',
-    'settings.groups.rescue': '出事了怎么办',
+    'settings.groups.report': '遇到问题',
+    'settings.groups.rescue': '桌面救援入口',
     'settings.rescue.hint': 'DSH 打不开的时候，用下面这两个脚本救自己（都不用 DSH 跑起来）。',
     'settings.rescue.restoreProfile': '回到上一次好状态',
     'settings.rescue.emergencyDisable': '只把这个插件摘掉',
@@ -442,14 +463,14 @@
     'settings.rescue.copyFailed': '复制失败，请手动选中上面的路径',
     'settings.rescue.reveal': '打开所在文件夹',
     'settings.rescue.which': '怎么选：整个环境坏了（改了配置、装了别的插件、升级崩了）→ 用「回到上一次好状态」；只怀疑这个插件 → 用「只把这个插件摘掉」。',
-    'settings.rescue.warning': '重要：这两个脚本是在 DSH 打不开的时候用的。DSH 正开着的时候用「回到上一次好状态」，会把你现在正在用的配置覆盖掉。',
+    'settings.rescue.warning': '重要：这个桌面入口和上面两个脚本，都只在你打不开 DSH 的时候用；DSH 正常开着的时候不要点它——用「回到上一次好状态」会把你现在正在用的配置覆盖掉。',
     'settings.rescue.rollbackOk': '自动回滚：可用（重启后起不来会自动回到上一个好状态）',
     'settings.rescue.rollbackBlocked': '自动回滚：**不可用** —— 这台电脑不允许创建计划任务。**会丢失：重启后 DSH 起不来时不会自动恢复**；出问题时请双击「出事了怎么办」里的还原脚本。',
     'settings.rescue.rollbackUnknown': '自动回滚：还不知道（这台机器的能力还没检查过）',
     'settings.rescue.watchdogTier': '看门狗的触发方式：{tier}',
     'settings.rescue.watchdogLast': '上一次看门狗的结果：{result}',
-    'settings.rescue.watchdogStrict': "上一次守夜人没有动手：没有可信任的还原点（没有一份备份既被验证过、又没被系统介入过）。请手动处理。",
-    'settings.rescue.watchdogRestoredFrom': "上一次守夜人还原的这一份：{dir}",
+    'settings.rescue.watchdogStrict': "上一次自动救援没有动手：没有可信任的还原点（没有一份备份既被验证过、又没被系统介入过）。请手动处理。",
+    'settings.rescue.watchdogRestoredFrom': "上一次自动救援还原的这一份：{dir}",
     'settings.rescue.tierScheduledTask': 'Windows 计划任务',
     'settings.rescue.tierSystemdRun': 'systemd 定时器',
     'settings.rescue.tierDetachedProcess': '自建后台进程',
@@ -457,6 +478,10 @@
     'settings.rescue.shortcut': '在桌面放一个快捷方式',
     'settings.rescue.shortcutDone': '已在桌面',
     'settings.rescue.noDesktop': '这台机器上没有桌面目录，所以放不了快捷方式（脚本的路径在上面，可以手动复制过去）。',
+    'settings.rescue.noDesktopPlatform': '网页版 / 服务器版没有桌面，所以没有这个一键入口；请用上面两个 .sh 脚本。',
+    'settings.rescue.shortcutScope': '它只能把整个环境退回上一次好状态，不能只摘掉某一个插件；只想摘某个插件，请用上面「某个插件起不来」。',
+    'settings.rescue.shortcutBlocked': '系统策略不允许创建快捷方式（比如组策略或权限限制）。把下面的脚本路径复制出来，手动放到桌面：',
+    'settings.rescue.shortcutWriteFailed': '快捷方式没写成功：{message}。把下面的脚本路径复制出来，手动放到桌面：',
     'settings.rescue.shortcutFailed': '快捷方式没放成：{message}',
     'settings.rescue.revealFailed': '文件夹没打开：{message}',
     'settings.report.label': '遇到问题了？',
@@ -547,7 +572,14 @@
         'settings.notInstalled': "没装上",
         'settings.unknown': "没法判断（没有可比对的备份）",
         'settings.restore': "恢复",
-        'settings.thirdParty': "这个插件不是你自己开发的，没法从备份恢复，需要重新安装。",
+        // THE TWO SENTENCES THAT REPLACED THE PER-PLUGIN THIRD-PARTY LINE (user
+    // correction, 2026-11-02). The old copy said "the backup holds only its name
+    // and version", which reads as "there is something in there" — and there is
+    // nothing: third-party plugins are NOT backed up. Built-in ones are shipped
+    // with DSH, so they need no backup and must not be reinstalled.
+    'settings.plugins.builtinNote': '另有 {n} 个内置插件：DSH 自带，不需要备份',
+    'settings.plugins.thirdPartyNote': '另有 {n} 个第三方插件：我们没有备份它们，真出事时需要重新安装',
+    'settings.thirdParty': "这个插件不是你自己开发的，没法从备份恢复，需要重新安装。",
         'settings.version': "版本 {version}",
     'pluginFailure.dismiss': "知道了",
     'pluginFailure.dismissLabel': "关掉这个提示（这次启动不再显示，下次启动会重新出现）",
@@ -568,14 +600,17 @@
     'pluginFailure.restored': "已经把 {plugin} 恢复到备份版本（备份时间 {at}）。",
     'pluginFailure.failed': "{plugin} 恢复没有完成：{reason}",
     'pluginFailure.noBackup': "这台机器没有可用备份，只能手动处理。",
-    'watchdog.title': "要不要开着「守夜人」？",
-    'watchdog.explain': "重启时它会在后台盯着新启动的这一版。如果新版一直起不来，它会自动把上一次的备份恢复回来，再把程序重新拉起来，你就不用自己去救。",
+    'watchdog.title': "重启失败时，会自动帮你救回来",
+    'watchdog.explain': "这个插件自带自动救援：重启之后新版本一直起不来时，它会拿一份验证过能用的备份帮你恢复，再把程序重新拉起来，你就不用自己去救。它默认就是开着的。",
+    'watchdog.whereOff': "不想要的话，到设置页把「自动救援」的开关关掉就行——关掉之后，新版本起不来就只能手动处理了。",
+    'watchdog.gotIt': "知道了",
+    'watchdog.noticeSaved': "好的，就这一条提示，以后不会再弹了。",
     'watchdog.warnOff': "关掉之后，万一新版本起不来，就只能手动处理了。",
     'watchdog.keepOn': "开着（推荐）",
     'watchdog.turnOff': "不要，我自己处理",
-    'watchdog.savedOn': "守夜人已开启，下次重启会保护你。",
-    'watchdog.savedOff': "守夜人已关闭，下次重启不会自动恢复。",
-    'watchdog.saveFailed': "没能保存你的选择，守夜人的设置没有变。请再点一次，或到设置页里改。",
+    'watchdog.savedOn': "已开启：下次重启如果起不来，会自动帮你救回来。",
+    'watchdog.savedOff': "已关闭：下次重启如果起不来，不会自动救。",
+    'watchdog.saveFailed': "没能保存你的选择，设置没有变。请再点一次，或到设置页里改。",
     // THE COPY OF THE COMPOSER ROW. It is one SHORT line and never a sentence:
     // the long stage sentence was clipped away there (user report,
     // 2026-10-29). While the gate waits the pill keeps its own composed line
@@ -646,8 +681,8 @@
     panelParkedGoal: 'session {session} · {goal}',
     panelWaiting: 'Waiting for {duration}',
     panelResume: 'This session resumes its progress automatically after the restart.',
-    // The long wait: the restart passed the hard deadline while a conversation
-    // was still running. The capsule is ONE clipped line of 22px: it holds a
+    // The long wait: the restart is still waiting while a conversation runs on.
+    // There is no deadline and nothing expires. The capsule is ONE clipped line: it holds a
     // number and a duration, NEVER a name. Every name goes into the tooltip,
     // where there is room for all of them.
     longWaitPill: ' · waiting for {duration} · {n} task(s) running',
@@ -744,11 +779,15 @@
     'settings.restartGrace.value': '{n} seconds',
     'settings.restartGrace.immediate': 'Do not wait (restart right away)',
     'settings.backup.label': 'Backup before a restart',
-    'settings.backup.hint': 'Take a snapshot of the current configuration before every restart, so a host that cannot boot again is rolled back automatically.',
+    'settings.backup.details': 'Details',
+    'settings.backup.section': 'What is backed up, and the manual backup steps',
+    'settings.backup.recovery': 'A plugin will not start? Put that one back to its previous version',
+    'settings.backup.hint': 'A copy is taken before every restart, so a host that cannot boot again is rolled back. What it holds: your settings (always); plugins you wrote and linked from a source directory (copied file by file); plugins downloaded from the internet (only which ones and which version are recorded — never copied; they are reinstalled from that list).',
     'settings.backupPlugins.label': 'Include the installed plugins in the backup',
     'settings.backupPlugins.hint': 'Off: only the state of DSH itself is backed up — the plugin directory of the profile is left out.',
-    'settings.groups.supervisor': 'Start at login',
-    'settings.supervisor.status': 'Started by',
+    'settings.restartBanner.title': 'This machine has no restart capability right now: this plugin will not restart, and will not take a backup before a restart. Press "Set it up for me" and I derive and write it — and that can be undone.',
+    'settings.restartBanner.fix': 'Set it up for me',
+    'settings.groups.supervisor': 'Start at login',    'settings.supervisor.status': 'Started by',
     'settings.supervisor.installed': 'the supervisor of this plugin',
     'settings.supervisor.external': 'your own way',
     'settings.supervisor.unknown': 'nobody knows',
@@ -806,6 +845,7 @@
   'settings.autostartKind.systemd-system': 'systemd system service',
   'settings.autostartKind.wsl-systemd': 'systemd inside WSL',
   'settings.autostartKind.wsl-no-systemd': 'WSL without systemd',
+  'settings.autostartKind.linux-no-systemd': 'Linux without systemd',
   'settings.autostartKind.container': 'a container',
   'settings.autostartKind.desktop': 'the desktop app itself',
   'settings.autostartKind.unknown': 'cannot tell',
@@ -821,7 +861,9 @@
     'meta.description': 'Keeps agent work alive across a DeepSeek Harness restart: a durable checkpoint, goal re-arm or a continuation message on boot, and an idle-aware graceful restart the agent can request itself.',
     'text.missing': '(this text is missing yet)',
     'settings.backup.list': 'What is backed up right now',
-    'settings.backup.count': '{n} copies right now',
+    'settings.backup.count': '{n} copies right now, {m} can be rolled back to',
+    'settings.backup.sectionNote': 'Contains: a plugin will not start? Put it back to the previous version',
+    'settings.backup.multiProfile': 'More than one profile was found, so backups and rollbacks are paused: it cannot tell which one to back up. Fix it by starting with DSH_PROFILE set, or by keeping a single profile.',
     'settings.backup.keep': 'At most {n} copies are kept; the oldest one is deleted when there are more.',
     'settings.backup.empty': 'No backup yet; one is written before every restart.',
     'settings.backup.path': 'Where they live',
@@ -839,6 +881,11 @@
     'settings.backup.kind.snapshot': "This restart's snapshot",
     'settings.backup.kind.unknown': 'Old backup (unverified)',
     'settings.backup.version': 'version {v}',
+    // THE ONE LINE A COPY GETS WHEN IT IS NOT THE ONE (user decision,
+    // 2026-11-02): listed, but as a sentence with its time and its size — never
+    // as a card with a button next to it.
+    'settings.backup.fallback.seed': 'There is also a first-install seed copy (settings only, not verified, used only when the copy above is unavailable), {time}, {size}',
+    'settings.backup.fallback.other': 'There is also an unverified copy (never restored automatically, used only when the copy above is unavailable), {time}, {size}',
     // WHY THIS COPY COUNTS AS SAFE (2026-11-01, strict mode). The label alone
     // ("known good") was the thing that lied in the incident: it never said WHO
     // checked WHAT. Every row therefore names its evidence, and a copy nobody
@@ -882,8 +929,8 @@
     'settings.backup.rollbackBusy': 'Rolling back…',
     'settings.backup.rollbackDone': 'Rolled back — restarting…',
     'settings.backup.rollbackFailed': 'The rollback did not work: {message}',
-    'settings.groups.report': 'Report a problem',
-    'settings.groups.rescue': 'If DSH will not start',
+    'settings.groups.report': 'Something is wrong',
+    'settings.groups.rescue': 'Desktop rescue',
     'settings.rescue.hint': 'When DSH does not come up, these two scripts rescue it for you (neither of them needs DSH running).',
     'settings.rescue.restoreProfile': 'Back to the last good state',
     'settings.rescue.emergencyDisable': 'Take this plugin out only',
@@ -893,7 +940,7 @@
     'settings.rescue.copyFailed': 'The copy failed — please select the path above by hand',
     'settings.rescue.reveal': 'Open the folder',
     'settings.rescue.which': 'Which one: the whole environment is broken (a changed configuration, another plugin, a bad upgrade) → "Back to the last good state"; only this plugin is suspect → "Take this plugin out only".',
-    'settings.rescue.warning': 'Important: these two scripts are for when DSH does not come up. Using "Back to the last good state" while DSH is running overwrites the configuration you are working with right now.',
+    'settings.rescue.warning': 'Important: this desktop entry and the two scripts above are for when DSH does not come up. Do not click it while DSH is running — "Back to the last good state" overwrites the configuration you are working with right now.',
     'settings.rescue.rollbackOk': 'Automatic rollback: available (a host that does not come up after a restart goes back to the last good state)',
     'settings.rescue.rollbackBlocked': 'Automatic rollback: **not available** — this computer does not allow creating scheduled tasks. **What you lose: DSH will NOT recover by itself when it does not come up after a restart**; when it breaks, double-click the restore script in "If DSH will not start".',
     'settings.rescue.rollbackUnknown': 'Automatic rollback: not known yet (this machine has not been checked)',
@@ -908,6 +955,10 @@
     'settings.rescue.shortcut': 'Put a shortcut on the desktop',
     'settings.rescue.shortcutDone': 'It is on the desktop',
     'settings.rescue.noDesktop': 'This machine has no desktop directory, so no shortcut can be placed (the paths are above — copy them by hand).',
+    'settings.rescue.noDesktopPlatform': 'The web / server version has no desktop, so there is no one-click entry here; use the two .sh scripts above.',
+    'settings.rescue.shortcutScope': 'It can only put the WHOLE environment back to the last good state — it cannot take one plugin out; for that, use "A plugin will not start" above.',
+    'settings.rescue.shortcutBlocked': 'A system policy does not allow creating the shortcut (a group policy or a permission limit). Copy the script path below and put it on the desktop by hand:',
+    'settings.rescue.shortcutWriteFailed': 'The shortcut was not written: {message}. Copy the script path below and put it on the desktop by hand:',
     'settings.rescue.shortcutFailed': 'The shortcut was not placed: {message}',
     'settings.rescue.revealFailed': 'The folder did not open: {message}',
     'settings.report.label': 'Something wrong?',
@@ -999,7 +1050,9 @@
         'settings.notInstalled': "Not installed",
         'settings.unknown': "Cannot tell (nothing to compare against)",
         'settings.restore': "Restore",
-        'settings.thirdParty': "You did not write this plugin yourself, so it cannot be restored from the backup - it has to be reinstalled.",
+        'settings.plugins.builtinNote': 'The other {n} plugins are built-in: DSH ships them, so no backup is needed.',
+    'settings.plugins.thirdPartyNote': 'The other {n} plugins are third-party: we did NOT back them up, so reinstall them if something goes wrong.',
+    'settings.thirdParty': "You did not write this plugin yourself, so it cannot be restored from the backup - it has to be reinstalled.",
         'settings.version': "version {version}",
     'pluginFailure.dismiss': "Got it",
     'pluginFailure.dismissLabel': "Hide this for now (it comes back on the next start)",
@@ -1020,8 +1073,11 @@
     'pluginFailure.restored': "{plugin} was put back to the backup version (backup taken {at}).",
     'pluginFailure.failed': "{plugin} was not restored: {reason}",
     'pluginFailure.noBackup': "There is no usable backup on this machine; it has to be handled by hand.",
-    'watchdog.title': "Should the watchdog stay on?",
-    'watchdog.explain': "During a restart it watches the new version in the background. If the new version never comes up, it puts the last backup back and starts the program again, so you do not have to rescue it yourself.",
+    'watchdog.title': "If a restart fails, it can rescue you automatically",
+    'watchdog.explain': "This plugin ships with an automatic rescue: if a newly restarted version never comes up, it puts the last verified backup back and starts the program again, so you do not have to rescue it yourself. It is on by default.",
+    'watchdog.whereOff': "If you do not want it, turn it off on the settings page — with it off, a new version that does not start has to be handled by hand.",
+    'watchdog.gotIt': "Got it",
+    'watchdog.noticeSaved': "That is the only notice; it will not appear again.",
     'watchdog.warnOff': "With it off, a new version that does not start has to be handled by hand.",
     'watchdog.keepOn': "Keep it on (recommended)",
     'watchdog.turnOff': "No, I will handle it",
@@ -1857,8 +1913,8 @@
   /**
    * The note of a LONG wait.
    *
-   * The Host says that the pending restart passed the hard deadline while a
-   * conversation was still running. That is not "a little longer" any more, so
+   * The Host says that the pending restart is still waiting while a conversation
+   * runs on (there is no deadline). That is not "a little longer", so
    * the bubble says it out loud: how long the restart has been waiting and who
    * holds it. The note is empty when there is no long wait.
    *
@@ -2295,21 +2351,98 @@
   }
 
   /**
+   * THE SOURCES THAT CAN PROVE A BOOT (user decision, 2026-11-02).
+   *
+   * `seed` is deliberately NOT one of them: the first-install seed is a copy
+   * taken BEFORE anything was proven, and a boot that was merely restored from
+   * it is not a proof of it either. Only these three sign with a criterion that
+   * can be re-checked — and only together with `fingerprint-match` below does
+   * the interface dare to call a copy "安全份".
+   */
+  const SAFE_CERTIFIED_BY = Object.freeze(['full-checks', 'command-probe', 'manual-rollback'])
+
+  /**
+   * IS THIS THE ONE COPY AUTOMATIC RECOVERY WOULD USE? — the single question the
+   * panel exists to answer, and therefore the question that must have exactly
+   * ONE answer on screen.
+   *
+   * BOTH halves are read from the Host, and both are required: a source that
+   * proved a boot AND the criterion that can be re-checked. `kind:
+   * 'known-good'` is NOT consulted: in the 2026-11-01 incident that label was
+   * written by an older stamp nobody could verify, and the seed carries it too
+   * from the day it is created — which is exactly how a never-proven copy ended
+   * up reading "安全份" on the settings page.
+   *
+   * @param {object|null|undefined} item one backup of the state payload
+   * @returns {boolean}
+   */
+  function isSafeBackup(item) {
+    if (!item) return false
+    if (!SAFE_CERTIFIED_BY.includes(item.certifiedBy)) return false
+    return item.certificationEvidence === 'fingerprint-match'
+  }
+
+  /**
    * WHAT A COPY IS — the identity word of the interface.
    *
-   * Only a copy a boot has PROVEN may be rolled back to ("安全份" / known-good).
-   * The snapshot of a restart is not proven yet ("本次快照"), and a copy without
-   * an identity file was written before the identity layer ("旧备份（未验证）").
-   * An unknown word is shown as unproven on purpose: never claim more than the
-   * copy itself says.
+   * Only a copy `isSafeBackup` accepts may read "安全份". Everything else says
+   * what it really is: the snapshot of a restart ("本次快照") was not proven
+   * yet, the first-install seed (`seed`) was never proven at all, and a copy
+   * whose stamp cannot be re-checked — or that has no identity file — was
+   * written before the current rule ("旧备份（未验证）"). An unfamiliar answer is
+   * shown as unproven on purpose: never claim more than the copy itself says.
    *
-   * @param {string|null|undefined} kind
-   * @returns {'known-good'|'snapshot'|'unknown'}
+   * @param {object|null|undefined} item one backup of the state payload
+   * @returns {'known-good'|'snapshot'|'seed'|'unknown'}
    */
-  function backupKindKey(kind) {
-    if (kind === 'known-good') return 'known-good'
+  function backupKindKey(item) {
+    const kind = item && item.kind
     if (kind === 'snapshot') return 'snapshot'
+    if (isSafeBackup(item)) return 'known-good'
+    if (item && item.certifiedBy === 'seed') return 'seed'
     return 'unknown'
+  }
+
+  /**
+   * The words of one identity.
+   *
+   * The seed is the only identity that has no `settings.backup.kind.*` entry of
+   * its own — and it does not need one: `settings.backup.certified.seed` already
+   * says exactly what a seed is ("首装种子（还没验证过）" / "first-install seed (not
+   * proven yet)"). Reusing that text keeps ONE wording for one fact instead of a
+   * second key that could drift away from it.
+   *
+   * @param {(key: string) => string} t
+   * @param {object|null|undefined} item
+   * @returns {string}
+   */
+  function backupKindText(t, item) {
+    const key = backupKindKey(item)
+    if (key === 'seed') return t('settings.backup.certified.seed')
+    return t('settings.backup.kind.' + key)
+  }
+
+  /**
+   * THE ONE LINE a copy gets when it is NOT the one automatic recovery would
+   * use (user decision, 2026-11-02).
+   *
+   * Why a line and not a card: the page must answer "which copy saves me?"
+   * with exactly one card. Everything else is still LISTED — hiding it would
+   * hide the disk usage and the fact that a fallback exists — but as one small
+   * line that says what it is, when it was taken and how big it is, and carries
+   * no button at all: restoring something that was never proven must not be one
+   * click away from a user who came here to be safe.
+   *
+   * @param {(key: string) => string} t
+   * @param {object|null|undefined} item
+   * @returns {string}
+   */
+  function backupFallbackText(t, item) {
+    const seed = Boolean(item && item.certifiedBy === 'seed')
+    return fillTemplate(t('settings.backup.fallback.' + (seed ? 'seed' : 'other')), {
+      time: formatBackupTime(item && item.atLocal),
+      size: formatBackupSize(item && item.bytes),
+    })
   }
 
   /**
@@ -3847,8 +3980,8 @@
         // waiting for the quiet window — not for a conversation.
         const gateReason = info && typeof info.reason === 'string' ? info.reason : ''
 
-        // The long wait: the Host says that the restart passed the hard
-        // deadline while a conversation was still running. The capsule shows one
+        // The long wait: the Host says that the restart is still waiting while a
+        // conversation runs on. The capsule shows one
         // more line about it — how long it has been waiting and how many tasks
         // are running.
         const longWait = formatLongWaitNoteParts(info, t)
@@ -5529,6 +5662,143 @@
         '  gap:8px;',
         '  align-items:baseline;',
         '}',
+        // EVERY COPY THAT IS NOT THE ONE (user decision, 2026-11-02): one small
+        // line each, clearly quieter than the card above it, with no button.
+        '.dsh-autorestart-settings__backup-other{',
+        '  display:flex;',
+        '  flex-wrap:wrap;',
+        '  gap:6px;',
+        '  margin-top:8px;',
+        '  align-items:baseline;',
+        '}',
+        // THE PER-PLUGIN RECOVERY: a plain list of one row per plugin, the name
+        // in monospace so a package name is recognisable at a glance.
+        '.dsh-autorestart-settings__plugins{',
+        '  display:flex;',
+        '  flex-direction:column;',
+        '  gap:6px;',
+        '  margin:0;',
+        '  padding:0;',
+        '  list-style:none;',
+        '}',
+        '.dsh-autorestart-settings__plugin-row{',
+        '  display:grid;',
+        '  grid-template-columns:1fr auto auto;',
+        '  align-items:center;',
+        '  gap:10px;',
+        '  padding:6px 8px;',
+        '  border-radius:8px;',
+        '  background:var(--dsw-alias-bg-layer-2,rgba(0,0,0,0.04));',
+        '}',
+        '.dsh-autorestart-settings__plugin-name{',
+        '  font-family:monospace;',
+        '  font-size:12px;',
+        '  word-break:break-all;',
+        '}',
+        '.dsh-autorestart-settings__plugin-status{',
+        '  font-size:12px;',
+        '  color:var(--dsw-alias-label-secondary);',
+        '  white-space:nowrap;',
+        '}',
+        '.dsh-autorestart-settings__plugin-hint{',
+        '  grid-column:1 / -1;',
+        '  font-size:11px;',
+        '  line-height:1.4;',
+        '  color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));',
+        '}',
+        // A HOST THAT CANNOT RESTART (user decision, 2026-11-02): a permanent
+        // strip at the top of the page. It borrows the error colour of the host
+        // theme, so it reads as a warning in both light and dark themes.
+        '.dsh-autorestart-settings__banner{',
+        '  display:flex;',
+        '  flex-direction:column;',
+        '  gap:8px;',
+        '  margin:0 0 12px;',
+        '  padding:10px 12px;',
+        '  border:1px solid var(--dsw-alias-state-error-border,var(--dsw-alias-border-l1));',
+        '  border-left:3px solid var(--dsw-alias-state-error-fg,#c62828);',
+        '  border-radius:8px;',
+        '  background:var(--dsw-alias-bg-layer-1);',
+        '}',
+        '.dsh-autorestart-settings__banner-text{',
+        '  color:var(--dsw-alias-label-primary);',
+        '  font-size:13px;',
+        '  line-height:19px;',
+        '}',
+        '.dsh-autorestart-settings__banner-actions{display:flex;flex-wrap:wrap;gap:8px;}',
+        '.dsh-autorestart-settings__banner-note,.dsh-autorestart-settings__card-note{',
+        '  color:var(--dsw-alias-state-error-fg,var(--dsw-alias-label-secondary));',
+        '  font-size:12px;',
+        '  line-height:18px;',
+        '}',
+        // THE ONE-TIME CARD: the same shape as the install prompt, so the user
+        // recognises "a question, then it is gone".
+        '.dsh-autorestart-settings__card{',
+        '  display:flex;',
+        '  flex-direction:column;',
+        '  gap:8px;',
+        '  margin:0 0 12px;',
+        '  padding:14px 16px;',
+        '  border:1px solid var(--dsw-alias-border-l1);',
+        '  border-radius:12px;',
+        '  background:var(--dsw-alias-bg-layer-1);',
+        '  box-shadow:0 8px 24px color-mix(in srgb, var(--dsw-alias-bg-mask-3) 20%, transparent);',
+        '}',
+        '.dsh-autorestart-settings__card-title{',
+        '  margin:0;',
+        '  font-size:14px;',
+        '  font-weight:600;',
+        '  line-height:20px;',
+        '  color:var(--dsw-alias-label-primary);',
+        '}',
+        '.dsh-autorestart-settings__card-actions{display:flex;flex-wrap:wrap;gap:8px;}',
+        // THE LINE UNDER THE FOLD TITLE: small, secondary, never a substitute for
+        // the title itself.
+        '.dsh-autorestart-settings__summary-note{',
+        '  display:block;',
+        '  margin-top:2px;',
+        '  font-size:12px;',
+        '  line-height:16px;',
+        '  font-weight:400;',
+        '  color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));',
+        '}',
+        // ONE RESCUE SCRIPT: its name, its real path, and a copy button — the
+        // path is the only thing that helps when the host will not start.
+        '.dsh-autorestart-settings__rescue-path{',
+        '  display:flex;',
+        '  flex-wrap:wrap;',
+        '  gap:8px;',
+        '  align-items:baseline;',
+        '  padding:6px 0;',
+        '}',
+        // THE DESKTOP ENTRY, DRAWN AS IT WILL LOOK (user report, 2026-11-02):
+        // a tile with DSH on it and the file name next to it, so "what am I
+        // looking for on my desktop?" is answered before the button is pressed.
+        '.dsh-autorestart-settings__shortcut{',
+        '  display:flex;',
+        '  align-items:center;',
+        '  gap:8px;',
+        '}',
+        '.dsh-autorestart-settings__shortcut-icon{',
+        '  display:inline-flex;',
+        '  align-items:center;',
+        '  justify-content:center;',
+        '  width:26px;',
+        '  height:26px;',
+        '  flex:none;',
+        '  border-radius:6px;',
+        '  background:var(--dsw-alias-brand-primary,#4d6bfe);',
+        '  color:#fff;',
+        '  font-size:9px;',
+        '  font-weight:700;',
+        '  letter-spacing:.02em;',
+        '}',
+        '.dsh-autorestart-settings__shortcut-name{',
+        '  font-size:12.5px;',
+        '  line-height:18px;',
+        '  color:var(--dsw-alias-label-primary);',
+        '  word-break:break-all;',
+        '}',
         // THE SECOND CONFIRMATION of a manual rollback: a block that stands
         // apart from the list, because it is a question, not a fact.
         '.dsh-autorestart-settings__confirm{',
@@ -6051,6 +6321,36 @@
         // a fresh page starts closed, so nobody leaves technical text open by
         // accident.
         const [detailsOpen, setDetailsOpen] = useState(false)
+        // The two folds of the BACKUP group (user decision, 2026-11-02): the long
+        // explanation and the per-copy technical rows are collapsed by default,
+        // while every switch stays visible. Both use the neutral label
+        // `settings.backup.details` (added with the user's approval).
+        const [backupDetailsOpen, setBackupDetailsOpen] = useState(false)
+        const [backupListDetailsOpen, setBackupListDetailsOpen] = useState(false)
+        // THE WHOLE BACKUP BLOCK IS ONE FOLD (user decision, 2026-11-02): the
+        // four switches stay visible, everything that only EXPLAINS the backups
+        // (the count, the rules, the copy cards, the path and the per-plugin
+        // recovery) lives behind `settings.backup.section`. Closed by default —
+        // except on a boot the watchdog had to rescue, where the one copy that
+        // matters must not be hidden (see the fold below).
+        const [backupSectionOpen, setBackupSectionOpen] = useState(false)
+        // The RESCUE script paths on Windows: behind 详情, because the desktop
+        // entry is the main door there (audit finding G1, 2026-11-02). Never
+        // folded on the other platforms and never folded when there is no
+        // desktop entry to press.
+        const [rescuePathsOpen, setRescuePathsOpen] = useState(false)
+        // THE ONE-TIME "this host cannot restart" CARD (user decision,
+        // 2026-11-02). `restartCardPending` is the Host's answer ("read once per
+        // host"), `restartCardDone` only hides it in this session right after
+        // the click, and `restartFixNote` carries the reason of a failed
+        // attempt. Nothing is ever written without the click.
+        const [restartCardPending, setRestartCardPending] = useState(false)
+        const [restartCardDone, setRestartCardDone] = useState(false)
+        const [restartFixNote, setRestartFixNote] = useState('')
+        // The command this page just wrote ('' = none). It hides the strip at
+        // once and shows what is configured NOW, instead of waiting for the next
+        // health poll — the user clicked a button and must see the result.
+        const [restartApplied, setRestartApplied] = useState('')
         // THE MANUAL ROLLBACK (user decision, 2026-10-30). Asking is a STATE,
         // not a `window.confirm`: the card has to say WHICH copy, that the
         // current state is replaced, and that a restart follows. `null` = nobody
@@ -6063,6 +6363,14 @@
         // THIS panel (it is not a window overlay), so it is read here and
         // drawn here.
         const saveNotice = useSaveNotice()
+        // THE PER-PLUGIN RECOVERY LIVES HERE NOW (user report, 2026-11-02).
+        //
+        // It used to exist only inside the floating card of this plugin, and the
+        // card's "不用管" is remembered for that boot — so a user who dismissed it
+        // could never find "只恢复 X" again. The very same state and the very
+        // same calls are mounted in the backup fold below; the card keeps its
+        // copy untouched (dismissing it still only closes the card).
+        const pluginRecovery = usePluginRecovery(info)
 
         // The receipt lives exactly as long as this panel is on screen: a page
         // that is closed (or reopened) never shows a "Saved" of an earlier
@@ -6147,6 +6455,43 @@
         const restartInfo = info && typeof info === 'object' && info.restart && typeof info.restart === 'object'
           ? info.restart
           : { mode: '', command: '', written: false, canRevert: false, previous: null }
+        // CAN THIS HOST RESTART AT ALL? (user report, 2026-11-02)
+        //
+        // A hosted `dsh web` with no `command` restart mode is a host this
+        // plugin cannot restart and will not back up before a restart — i.e. it
+        // does nothing for the user. That used to be silent: the page looked
+        // perfectly healthy. Both halves are required (`mode: 'command'` AND a
+        // command), and the desktop app is never told this: it relaunches
+        // itself.
+        const restartModeValue = typeof restartInfo.mode === 'string' ? restartInfo.mode : ''
+        const restartCommandValue = typeof restartInfo.command === 'string' ? restartInfo.command : ''
+        const restartCapable = restartModeValue === 'command' && restartCommandValue.trim() !== ''
+        // Only a Host that TOLD us about its restart settings can be accused of
+        // having none: an older build (or the very first paint, before the state
+        // arrived) must not produce a red strip.
+        const restartKnown = Boolean(info && typeof info === 'object' && info.restart && typeof info.restart === 'object')
+        const restartMissing = restartKnown && hostIsDesktop !== true && !restartCapable && restartApplied === ''
+        // WHICH PROFILE WOULD BE BACKED UP (2026-11-02): the Host resolves it,
+        // and `dir: null` means "more than one profile matched / none did" — so
+        // backups and rollbacks are paused. The browser cannot look at the disk,
+        // so this is only a DISPLAY of the Host's answer; when the Host does not
+        // send it (older builds), nothing is claimed.
+        const profileInfo = (() => {
+          const source = info && typeof info === 'object' ? info.profile : null
+          if (source && typeof source === 'object') return source
+          if (typeof source === 'string') return { dir: source }
+          const flat = info && typeof info === 'object' ? info.profileDir : null
+          if (flat && typeof flat === 'object') return flat
+          if (typeof flat === 'string') return { dir: flat }
+          const fromRestart = info && typeof info === 'object' && info.lastRestart
+            && typeof info.lastRestart === 'object' && info.lastRestart.snapshot
+            && typeof info.lastRestart.snapshot === 'object'
+            ? info.lastRestart.snapshot.profile
+            : null
+          return fromRestart && typeof fromRestart === 'object' ? fromRestart : null
+        })()
+        const profileUnknown = profileInfo !== null
+          && (profileInfo.dir === null || profileInfo.dir === undefined || String(profileInfo.dir) === '')
         // THE BACKUPS ON DISK: the count, the local time, the size, whether the
         // plugins are in it and where it lives. The Host reads the directory.
         const backupsInfo = info && typeof info === 'object' && info.backups && typeof info.backups === 'object'
@@ -6161,6 +6506,26 @@
           : {}
         // Where a desktop shortcut could go ('' = there is no desktop here).
         const rescueDesktop = typeof rescueKit.desktopDir === 'string' ? rescueKit.desktopDir.trim() : ''
+        // WHICH PLATFORM the rescue kit was resolved for, so the page can SAY
+        // "there is no desktop on a hosted web / server install" instead of
+        // hiding the whole block (user report, 2026-11-02).
+        const rescuePlatform = typeof rescueKit.platform === 'string' ? rescueKit.platform : ''
+        const rescueIsWindows = rescuePlatform === 'win32'
+        // The file name of the shortcut on the desktop (a `.lnk` since
+        // 2026-11-02 — the host names it, so page and disk cannot disagree).
+        const rescueShortcutName = typeof rescueKit.shortcutName === 'string' && rescueKit.shortcutName !== ''
+          ? rescueKit.shortcutName
+          : 'DSH 出事了双击这里.lnk'
+        // The icon the shortcut carries (DSH's own executable); '' = no icon.
+        const rescueIconPath = typeof rescueKit.iconPath === 'string' ? rescueKit.iconPath.trim() : ''
+        // ONE SOURCE FOR THE ICON (user decision, 2026-11-02): the desktop `.lnk`
+        // and this tile must come from the SAME host answer, and both must say
+        // the same thing when there is none. The name travels with the path so
+        // the page can prove which file it used — it never invents an icon.
+        const rescueIconName = typeof rescueKit.iconName === 'string' && rescueKit.iconName !== ''
+          ? rescueKit.iconName
+          : (rescueIconPath === '' ? '' : rescueIconPath.split(/[\\/]/).pop())
+        const rescueIconAvailable = rescueKit.iconAvailable === true || rescueIconPath !== ''
         // Whether it is already there (then the button says so).
         const rescueShortcutExists = rescueKit.shortcutExists === true
         // WHAT THIS MACHINE CAN DO: the automatic rollback needs a watchdog,
@@ -6208,6 +6573,21 @@
             // The Host will ask again next time — no harm.
           })
         }, [schedulerNotice])
+        // IS THE ONE-TIME "cannot restart" CARD STILL UNREAD? (2026-11-02)
+        //
+        // Same ledger as the feature announcement (same route, same key style,
+        // same "answered once per host" rule) — the card is a reminder, not a
+        // new mechanism.
+        useEffect(() => {
+          if (!restartMissing) return undefined
+          let alive = true
+          void (async () => {
+            const pending = await fetchAnnouncements().catch(() => [])
+            if (!alive) return
+            setRestartCardPending(pending.some((entry) => entry.feature === ANNOUNCED_RESTART))
+          })()
+          return () => { alive = false }
+        }, [restartMissing])
         const supervisorPending = supervisorStatus !== null
           && supervisorStatus.detail !== null
           && typeof supervisorStatus.detail === 'object'
@@ -6284,6 +6664,81 @@
           } finally {
             setBusy(false)
           }
+        }
+
+        /**
+         * THE ONE-CLICK REPAIR of a host that cannot restart (user decision,
+         * 2026-11-02 — option A).
+         *
+         * THREE STEPS, and the click is the only reason anything is written:
+         *   1. `dry-run`: the Host derives the command that starts this host
+         *      again and validates it. NOTHING is written;
+         *   2. `apply` with `confirmed: true`: NOW the command is written into
+         *      the profile configuration (the Host refuses without it);
+         *   3. the announcement is marked as read, so the card does not come
+         *      back, and the undo stays available (`revert`).
+         *
+         * A failure is never silent: the Host's own reason is shown in the
+         * user's words, and the manual path (the supervisor group's
+         * "derive / use this command") stays where it is.
+         */
+        const fixRestartCommand = async () => {
+          if (busy) return
+          setBusy(true)
+          setError('')
+          setRestartFixNote('')
+          try {
+            const dryResponse = await fetch(supervisorUrlFor(info), {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ action: 'dry-run' }),
+            })
+            const dryBody = await dryResponse.json().catch(() => null)
+            const plan = dryBody && typeof dryBody === 'object' && dryBody.plan && typeof dryBody.plan === 'object'
+              ? dryBody.plan
+              : null
+            if (!dryResponse.ok || !plan || plan.ok !== true) {
+              const reason = plan && typeof plan.reason === 'string' ? plan.reason.trim() : ''
+              setRestartFixNote(reason === ''
+                ? t('settings.supervisor.noCommand')
+                : t('settings.supervisor.reason.' + reason))
+              return
+            }
+            const applyResponse = await fetch(supervisorUrlFor(info), {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ action: 'apply', confirmed: true }),
+            })
+            const applied = await applyResponse.json().catch(() => null)
+            if (!applyResponse.ok || !applied || typeof applied !== 'object' || applied.ok !== true) {
+              const message = applied && typeof applied === 'object' && applied.error
+                ? String(applied.error)
+                : String(applyResponse.status)
+              setRestartFixNote(fill(t('supervisor.error'), { message }))
+              return
+            }
+            await acknowledgeAnnouncement(ANNOUNCED_RESTART).catch(() => {})
+            setRestartCardPending(false)
+            setRestartCardDone(true)
+            // WHAT IS CONFIGURED NOW, straight from the Host's answer (never
+            // from what we hoped it wrote).
+            const written = applied.writes && typeof applied.writes === 'object'
+              && typeof applied.writes.restartCommand === 'string'
+              ? applied.writes.restartCommand
+              : ''
+            setRestartApplied(written === '' ? t('settings.supervisor.noCommand') : written)
+          } catch (failure) {
+            setRestartFixNote(fill(t('supervisor.error'), { message: describeError(failure) }))
+          } finally {
+            setBusy(false)
+          }
+        }
+
+        /** "Later": the card does not come back (the strip stays). */
+        const dismissRestartCard = () => {
+          setRestartCardPending(false)
+          setRestartCardDone(true)
+          void acknowledgeAnnouncement(ANNOUNCED_RESTART).catch(() => {})
         }
 
         /**
@@ -6450,11 +6905,29 @@
          *
          * ONLY because the user pressed the button: the settings page never
          * writes anything to the desktop by itself.
+         *
+         * THE FAILURE IS CLASSIFIED (2026-11-02): "the shortcut was not placed"
+         * is not enough — a policy that forbids it, a desktop that does not
+         * exist and a write that broke are three different situations, and only
+         * one of them is worth trying again. All three fall back to the manual
+         * way, and the page says so with the real script path.
          */
         const createRescueShortcut = async () => {
           if (busy) return
           setBusy(true)
           setRescueNote('')
+          const manual = typeof rescueKit.restoreProfile === 'string' ? rescueKit.restoreProfile.trim() : ''
+          const failureText = (kind, message) => {
+            const kindKey = kind === 'no-desktop'
+              ? 'settings.rescue.noDesktop'
+              : kind === 'blocked'
+                ? 'settings.rescue.shortcutBlocked'
+                : 'settings.rescue.shortcutWriteFailed'
+            const head = kindKey === 'settings.rescue.shortcutWriteFailed'
+              ? fill(t(kindKey), { message })
+              : t(kindKey)
+            return manual === '' ? head : head + ' ' + manual
+          }
           try {
             const response = await fetch(rescueUrlFor(info), {
               method: 'POST',
@@ -6463,8 +6936,9 @@
             })
             const body = await response.json().catch(() => null)
             if (!response.ok) {
+              const kind = body && typeof body === 'object' && typeof body.errorKind === 'string' ? body.errorKind : ''
               const message = body && typeof body === 'object' && body.error ? body.error : String(response.status)
-              setRescueNote(fill(t('settings.rescue.shortcutFailed'), { message }))
+              setRescueNote(kind === '' ? fill(t('settings.rescue.shortcutFailed'), { message }) : failureText(kind, message))
               return
             }
             setRescueNote(t('settings.rescue.shortcutDone'))
@@ -6509,6 +6983,115 @@
           // settings section), so it can not float over the conversation area
           // again — and it stays visible while the settings are scrolled.
           saveNoticeBar(t, saveNotice),
+          // ③ THE RESULT OF THE CLICK: the command that is configured NOW. It is
+          // shown where the strip was, so "it worked" is visible without opening
+          // a fold and without waiting for the next poll.
+          restartApplied !== ''
+            ? h(
+                'div',
+                { className: 'dsh-autorestart-settings__field', 'data-dsh-autorestart-restart-fixed': 'true' },
+                h(
+                  'span',
+                  { className: 'dsh-autorestart-settings__label', 'data-dsh-autorestart-restart-fixed': 'label' },
+                  t('settings.supervisor.command'),
+                ),
+                h(
+                  'code',
+                  { className: 'dsh-autorestart-settings__value', 'data-dsh-autorestart-restart-fixed': 'command' },
+                  restartApplied,
+                ),
+              )
+            : null,
+          // ① A HOST THAT CANNOT RESTART, SAID AT THE TOP OF THE PAGE (user
+          // decision, 2026-11-02 — option A).
+          //
+          // Without a `command` restart mode the plugin does nothing at all, and
+          // that used to look exactly like a healthy install. The strip stays
+          // while it is true, and it carries the ONE action that fixes it. It
+          // never writes anything by itself: the button is the confirmation.
+          restartMissing
+            ? h(
+                'div',
+                {
+                  className: 'dsh-autorestart-settings__banner',
+                  role: 'status',
+                  'data-dsh-autorestart-restart-missing': 'true',
+                },
+                h(
+                  'span',
+                  { className: 'dsh-autorestart-settings__banner-text', 'data-dsh-autorestart-restart-missing': 'text' },
+                  t('settings.restartBanner.title'),
+                ),
+                h(
+                  'div',
+                  { className: 'dsh-autorestart-settings__banner-actions' },
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      className: 'dsh-autorestart-settings__button',
+                      disabled: busy,
+                      'data-dsh-autorestart-restart-missing': 'fix',
+                      onClick: () => void fixRestartCommand(),
+                    },
+                    t('settings.restartBanner.fix'),
+                  ),
+                ),
+                restartFixNote === ''
+                  ? null
+                  : h(
+                      'span',
+                      { className: 'dsh-autorestart-settings__banner-note', 'data-dsh-autorestart-restart-missing': 'note' },
+                      restartFixNote,
+                    ),
+              )
+            : null,
+          // ② THE ONE-TIME CARD: same ledger as the feature announcement, so it
+          // is shown once per host and never again after the user answered it.
+          restartMissing && restartCardPending && !restartCardDone
+            ? h(
+                'div',
+                { className: 'dsh-autorestart-settings__card', 'data-dsh-autorestart-restart-card': 'true' },
+                h(
+                  'h3',
+                  { className: 'dsh-autorestart-settings__card-title', 'data-dsh-autorestart-restart-card': 'title' },
+                  t('settings.restartBanner.title'),
+                ),
+                h(
+                  'div',
+                  { className: 'dsh-autorestart-settings__card-actions' },
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      className: 'dsh-autorestart-settings__button',
+                      disabled: busy,
+                      'data-dsh-autorestart-restart-card': 'fix',
+                      onClick: () => void fixRestartCommand(),
+                    },
+                    t('settings.restartBanner.fix'),
+                  ),
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      className: 'dsh-autorestart-settings__button',
+                      disabled: busy,
+                      'data-dsh-autorestart-restart-card': 'later',
+                      onClick: () => dismissRestartCard(),
+                    },
+                    t('supervisor.later'),
+                  ),
+                ),
+                restartFixNote === ''
+                  ? null
+                  : h(
+                      'span',
+                      { className: 'dsh-autorestart-settings__card-note', 'data-dsh-autorestart-restart-card': 'note' },
+                      restartFixNote,
+                    ),
+              )
+            : null,
           // The panel is split into two titled groups: the RESTART settings
           // come first, the SHUTDOWN settings after them. The two situations
           // are different, so they do not share one flat list.
@@ -6591,7 +7174,26 @@
                   },
                 },
               ),
-              h('span', { className: 'dsh-autorestart-settings__hint' }, t('settings.backup.hint')),
+              // THE EXPLANATION IS FOLDED (user decision, 2026-11-02): the switch
+              // above stays on screen — only the words fold.
+              h(
+                'details',
+                {
+                  className: 'dsh-autorestart-settings__details',
+                  'data-dsh-autorestart-backup': 'details',
+                  onToggle: (event) => {
+                    setBackupDetailsOpen(Boolean(event && event.target ? event.target.open : false))
+                  },
+                },
+                h('summary', { className: 'dsh-autorestart-settings__summary' }, t('settings.backup.details')),
+                backupDetailsOpen
+                  ? h(
+                    'span',
+                    { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-backup': 'content-hint' },
+                    t('settings.backup.hint'),
+                  )
+                  : null,
+              ),
             ),
             h(
               'label',
@@ -6616,22 +7218,86 @@
               ),
               h('span', { className: 'dsh-autorestart-settings__hint' }, t('settings.backupPlugins.hint')),
             ),
-            // WHAT IS BACKED UP RIGHT NOW. The Host reads the directory (the
-            // browser cannot see the disk), so the numbers are real: the count,
-            // the local time of every copy, its size and whether the plugins
-            // are in it.
-            h(
-              'div',
-              { className: 'dsh-autorestart-settings__field', 'data-dsh-autorestart-backup': 'list' },
+            // MORE THAN ONE PROFILE = NO BACKUPS AT ALL (2026-11-02): the Host
+            // cannot tell which profile to copy, so backups and rollbacks are
+            // paused. That is a fact about the whole block, so it sits ABOVE
+            // the fold — and it is only ever shown when the Host actually said
+            // so (`dir: null`); the browser never guesses.
+            profileUnknown
+              ? h(
+                  'div',
+                  { className: 'dsh-autorestart-settings__field', 'data-dsh-autorestart-backup': 'multi-profile' },
+                  h(
+                    'span',
+                    { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-backup': 'multi-profile-text' },
+                    t('settings.backup.multiProfile'),
+                  ),
+                )
+              : null,
+            // WHAT IS BACKED UP RIGHT NOW — one FOLD (user decision, 2026-11-02).
+            //
+            // The words that only EXPLAIN the backups (the count, the rules, the
+            // copy list, the path and the per-plugin recovery) made the page
+            // long enough that the switches were pushed out of sight. They are
+            // all behind `settings.backup.section` now, closed by default — but
+            // NOT closed on a boot the watchdog had to rescue: an intervention
+            // is the one fact that must not be hidden, so the fold opens itself
+            // and says so on its summary.
+            (() => {
+              const anyIntervened = backupItems.some((item) => Boolean(item && item.intervention === true))
+              const sectionOpen = backupSectionOpen || anyIntervened
+              return h(
+                'details',
+                {
+                  className: 'dsh-autorestart-settings__details',
+                  'data-dsh-autorestart-backup': 'section',
+                  ...(sectionOpen ? { open: true } : {}),
+                  onToggle: (event) => {
+                    setBackupSectionOpen(Boolean(event && event.target ? event.target.open : false))
+                  },
+                },
+                h(
+                  'summary',
+                  {
+                    className: 'dsh-autorestart-settings__summary',
+                    'data-dsh-autorestart-backup': 'section-summary',
+                  },
+                  anyIntervened
+                    ? t('settings.backup.section') + ' · ' + t('settings.backup.intervention.true')
+                    : t('settings.backup.section'),
+                  // THE FOLD SAYS WHAT IS INSIDE IT (user decision,
+                  // 2026-11-02): collapsed by default, so the single-plugin
+                  // rollback was invisible to anyone who did not open it.
+                  h(
+                    'span',
+                    { className: 'dsh-autorestart-settings__summary-note', 'data-dsh-autorestart-backup': 'section-note' },
+                    t('settings.backup.sectionNote'),
+                  ),
+                ),
+                // THE CONTENT IS ALWAYS IN THE TREE (only `<details>` hides it):
+                // the panel is a few dozen nodes, and rendering them once keeps
+                // the fold from re-mounting the buttons (and their state) every
+                // time somebody opens it.
+                h(
+                  'div',
+                  { className: 'dsh-autorestart-settings__field', 'data-dsh-autorestart-backup': 'list' },
               h(
                 'span',
                 { className: 'dsh-autorestart-settings__label' },
                 t('settings.backup.list'),
               ),
+              // HOW MANY ARE USABLE, not just how many are on disk (user
+              // decision, 2026-11-02): the question the page answers is "what
+              // saves me if something breaks", and that is the number of copies
+              // automatic recovery would actually pick. The total stays, because
+              // the retention limit is about the total.
               h(
                 'span',
                 { className: 'dsh-autorestart-settings__value', 'data-dsh-autorestart-backup': 'count' },
-                fill(t('settings.backup.count'), { n: backupItems.length }),
+                fill(t('settings.backup.count'), {
+                  n: backupItems.length,
+                  m: backupItems.filter((item) => isSafeBackup(item)).length,
+                }),
               ),
               h(
                 'span',
@@ -6661,7 +7327,12 @@
                     t('settings.backup.empty'),
                   )
                 : null,
-              backupItems.map((item, index) => h(
+              // A FULL CARD ONLY FOR THE ONE COPY THAT WOULD BE USED (user
+              // decision, 2026-11-02). Everything else is demoted to one small
+              // line below, because a page that draws three equal cards makes
+              // the user choose — and the whole point of this block is that the
+              // choice is not theirs to make.
+              backupItems.filter((item) => isSafeBackup(item)).map((item, index) => h(
                 'div',
                 {
                   className: 'dsh-autorestart-settings__backup',
@@ -6684,24 +7355,42 @@
                       className: 'dsh-autorestart-settings__backup-badge',
                       'data-dsh-autorestart-backup': 'kind',
                     },
-                    t('settings.backup.kind.' + backupKindKey(item && item.kind)),
+                    backupKindText(t, item),
                   ),
-                  backupVersionOf(item) === ''
-                    ? null
-                    : h(
-                      'span',
-                      {
-                        className: 'dsh-autorestart-settings__backup-note',
-                        'data-dsh-autorestart-backup': 'version',
-                      },
-                      fill(t('settings.backup.version'), { v: backupVersionOf(item) }),
-                    ),
+                  // THE PLUGIN VERSION IS GONE ON PURPOSE (user report,
+                  // 2026-11-02): "版本 0.8.7" on a card the user is about to
+                  // restore from reads like a downgrade notice, and it says
+                  // nothing about whether the copy is safe. `settings.backup.version`
+                  // stays in the dictionaries (nothing else uses it) so an older
+                  // build never shows a key, but no card prints it any more.
                 ),
-                // WHY THIS COPY COUNTS AS SAFE (2026-11-01, strict mode). The
-                // identity above says "safe copy"; this row says WHAT backed
-                // that, and "not certified" is said out loud instead of being
-                // left to the reader. An old copy has no evidence, and the row
-                // shows exactly that — never a blank that could be read as OK.
+                // THE TECHNICAL ROWS ARE FOLDED (user decision, 2026-11-02) — but
+                // NEVER when this boot was rescued: an intervention is the one
+                // thing that must not be hidden, so that copy opens itself and
+                // says so on the summary.
+                (() => {
+                  const itemIntervened = Boolean(item && item.intervention === true)
+                  const listOpen = backupListDetailsOpen || itemIntervened
+                  return h(
+                    'details',
+                    {
+                      className: 'dsh-autorestart-settings__details',
+                      'data-dsh-autorestart-backup': 'list-details',
+                      ...(listOpen ? { open: true } : {}),
+                      onToggle: (event) => {
+                        setBackupListDetailsOpen(Boolean(event && event.target ? event.target.open : false))
+                      },
+                    },
+                    h(
+                      'summary',
+                      { className: 'dsh-autorestart-settings__summary', 'data-dsh-autorestart-backup': 'list-summary' },
+                      itemIntervened
+                        ? t('settings.backup.details') + ' · ' + t('settings.backup.intervention.true')
+                        : t('settings.backup.details'),
+                    ),
+                    listOpen ? h(
+                      'div',
+                      { className: 'dsh-autorestart-settings__backup-detail' },
                 h(
                   'div',
                   { className: 'dsh-autorestart-settings__backup-row' },
@@ -6808,6 +7497,9 @@
                     t('settings.backup.intervention.' + backupInterventionKey(item && item.intervention)),
                   ),
                 ),
+                    ) : null,
+                  )
+                })(),
                 // WHEN it was taken. No timezone offset: what is shown is
                 // already the local clock of the machine that took the copy.
                 h(
@@ -6871,6 +7563,28 @@
                     },
                     t('settings.backup.rollback'),
                   ),
+                ),
+              )),
+              // EVERY OTHER COPY IS ONE SMALL LINE, WITH NO BUTTON (user
+              // decision, 2026-11-02). It stays visible — hiding it would hide
+              // the disk usage and the fact that a fallback exists — but it is
+              // not drawn as an equal card: the page must answer "which copy
+              // saves me?" with exactly one card, and a snapshot or a seed is
+              // never the answer.
+              backupItems.filter((item) => !isSafeBackup(item)).map((item, index) => h(
+                'div',
+                {
+                  className: 'dsh-autorestart-settings__backup-other',
+                  'data-dsh-autorestart-backup': 'other',
+                  key: 'backup-other-' + index,
+                },
+                h(
+                  'span',
+                  {
+                    className: 'dsh-autorestart-settings__backup-note',
+                    'data-dsh-autorestart-backup': 'other-line',
+                  },
+                  backupFallbackText(t, item),
                 ),
               )),
               // THE SECOND CONFIRMATION OF A MANUAL ROLLBACK (user decision,
@@ -6974,7 +7688,15 @@
                           pathNote,
                         ),
                   ),
-            ),
+              // THE PLUGIN RECOVERY LIVES IN THIS FOLD (user report,
+              // 2026-11-02): "the floating card's 不用管 made it unfindable".
+              // The very same state and the very same route calls as the card —
+              // one implementation (`usePluginRecovery`), mounted here so it is
+              // reachable long after the card was dismissed.
+              ...pluginRecoveryItems(t, pluginRecovery),
+              ),
+                )
+              })(),
           ),
           h(
             'div',
@@ -7014,8 +7736,10 @@
             ),
           ),
           // The SUPERVISOR group: who starts this host, and whether the restart
-          // can work at all.
-          h(
+          // can work at all. HIDDEN ON THE DESKTOP APP (user decision, 2026-11-02):
+          // the desktop client relaunches itself, so there is no supervisor to
+          // install and nothing in this group can be acted on.
+          hostIsDesktop === true ? null : h(
             'div',
             {
               className: 'dsh-autorestart-settings__group',
@@ -7327,71 +8051,165 @@
               { className: 'dsh-autorestart-settings__group-title' },
               t('settings.groups.rescue'),
             ),
+            // The rescue group says ONE plain thing (user decision, 2026-11-02):
+            // whether the automatic rollback can work here. The script paths,
+            // "which one do I pick" and the overwrite warning are gone — a
+            // worried user needs a status line and a button, not a manual.
+            // THE TWO SCRIPTS THEMSELVES (audit finding G1, 2026-11-02).
+            //
+            // The page used to say "use the two .sh scripts above" while
+            // rendering NOTHING — the worst possible dead end, because the user
+            // reading it is exactly the one whose host will not start. The paths
+            // come from the Host (the browser never guesses them) and each one
+            // has a copy button.
+            //
+            // On Windows the desktop entry is the main door, so the paths sit
+            // behind 详情 — but they unfold themselves when there is no desktop
+            // entry to use instead. On every other platform there IS no desktop
+            // entry, so the paths are never folded: they are the only way.
+            rescuePaths.length === 0
+              ? null
+              : (() => {
+                const list = h(
+                  'div',
+                  { className: 'dsh-autorestart-settings__field', 'data-dsh-autorestart-rescue': 'paths' },
+                  h(
+                    'span',
+                    { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-rescue': 'paths-hint' },
+                    t('settings.rescue.hint'),
+                  ),
+                  rescuePaths.map((entry) => h(
+                    'div',
+                    { key: 'rescue-path-' + entry.key, className: 'dsh-autorestart-settings__rescue-path' },
+                    h('span', {
+                      className: 'dsh-autorestart-settings__label',
+                      'data-dsh-autorestart-rescue': 'path-label',
+                    }, entry.key === 'restoreProfile' ? t('settings.rescue.restoreProfile') : t('settings.rescue.emergencyDisable')),
+                    h('code', {
+                      className: 'dsh-autorestart-settings__value',
+                      'data-dsh-autorestart-rescue': 'path',
+                      'data-rescue-key': entry.key,
+                    }, entry.path),
+                    h('button', {
+                      type: 'button',
+                      className: 'dsh-autorestart-settings__button',
+                      disabled: busy,
+                      'data-dsh-autorestart-rescue': 'copy-path',
+                      'data-rescue-key': entry.key,
+                      onClick: () => void copyRescuePath(entry.path),
+                    }, t('settings.rescue.copyPath')),
+                  )),
+                )
+                if (rescueIsWindows === false) return list
+                const pathsOpen = rescuePathsOpen || rescueDesktop === ''
+                return h(
+                  'details',
+                  {
+                    className: 'dsh-autorestart-settings__details',
+                    'data-dsh-autorestart-rescue': 'paths-details',
+                    ...(pathsOpen ? { open: true } : {}),
+                    onToggle: (event) => setRescuePathsOpen(Boolean(event && event.target ? event.target.open : false)),
+                  },
+                  h(
+                    'summary',
+                    { className: 'dsh-autorestart-settings__summary', 'data-dsh-autorestart-rescue': 'paths-summary' },
+                    t('settings.rescue.path'),
+                  ),
+                  list,
+                )
+              })(),
+            // THE DESKTOP ENTRY, SHOWN AS IT WILL LOOK (user report, 2026-11-02):
+            // the user could not find the shortcut (the desktop directory was
+            // guessed, so a moved desktop was simply not where the plugin
+            // wrote), and could not recognise it (a `.cmd` cannot carry an icon,
+            // so it sat there as a blank white page). It is a `.lnk` with DSH's
+            // icon now, and this block shows the icon and the file name BEFORE
+            // the button — so "what am I looking for on the desktop?" is
+            // answered on screen.
             h(
               'div',
-              { className: 'dsh-autorestart-settings__field' },
+              { className: 'dsh-autorestart-settings__field', 'data-dsh-autorestart-rescue': 'shortcut-block' },
+              h(
+                'div',
+                { className: 'dsh-autorestart-settings__shortcut' },
+                h(
+                  'span',
+                  {
+                    className: 'dsh-autorestart-settings__shortcut-icon',
+                    'data-dsh-autorestart-rescue': 'shortcut-icon',
+                    // WHICH FILE THIS ICON IS: the same one the `.lnk` gets, or
+                    // nothing at all — never a made-up picture.
+                    'data-icon-source': rescueIconName,
+                    'data-icon-available': rescueIconAvailable ? 'true' : 'false',
+                    'aria-hidden': 'true',
+                    title: rescueIconPath,
+                  },
+                  'DSH',
+                ),
+                h(
+                  'span',
+                  {
+                    className: 'dsh-autorestart-settings__shortcut-name',
+                    'data-dsh-autorestart-rescue': 'shortcut-name',
+                  },
+                  rescueShortcutName,
+                ),
+              ),
+              // The button lives only where it can work: a Windows machine with a
+              // desktop. Everywhere else the block still explains itself below
+              // instead of leaving an empty gap.
+              rescueIsWindows && rescueDesktop !== ''
+                ? h(
+                    'button',
+                    {
+                      type: 'button',
+                      className: 'dsh-autorestart-settings__button',
+                      disabled: busy,
+                      'data-dsh-autorestart-rescue': 'shortcut',
+                      onClick: () => void createRescueShortcut(),
+                    },
+                    rescueShortcutExists ? t('settings.rescue.shortcutDone') : t('settings.rescue.shortcut'),
+                  )
+                : null,
+              rescueNote === ''
+                ? null
+                : h(
+                    'span',
+                    { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-rescue': 'note' },
+                    rescueNote,
+                  ),
+              // REMINDER ONE: this is for a host that does NOT start. Using it
+              // while DSH runs overwrites the configuration in use.
               h(
                 'span',
-                { className: 'dsh-autorestart-settings__hint' },
-                t('settings.rescue.hint'),
-              ),
-            ),
-            rescuePaths.map((entry) => h(
-              'div',
-              {
-                className: 'dsh-autorestart-settings__field',
-                'data-dsh-autorestart-rescue': entry.key,
-              },
-              h(
-                'span',
-                { className: 'dsh-autorestart-settings__label' },
-                t(entry.key === 'restoreProfile' ? 'settings.rescue.restoreProfile' : 'settings.rescue.emergencyDisable'),
-              ),
-              h(
-                'code',
-                { className: 'dsh-autorestart-settings__value', 'data-dsh-autorestart-rescue': 'path' },
-                entry.path,
-              ),
-              h(
-                'button',
-                {
-                  type: 'button',
-                  className: 'dsh-autorestart-settings__button',
-                  disabled: busy,
-                  'data-dsh-autorestart-rescue': 'copy-path',
-                  onClick: () => void copyRescuePath(entry.path),
-                },
-                t('settings.rescue.copyPath'),
-              ),
-              h(
-                'button',
-                {
-                  type: 'button',
-                  className: 'dsh-autorestart-settings__button',
-                  disabled: busy,
-                  'data-dsh-autorestart-rescue': 'reveal',
-                  onClick: () => void revealRescueFolder(),
-                },
-                t('settings.rescue.reveal'),
-              ),
-            )),
-            h(
-              'div',
-              { className: 'dsh-autorestart-settings__field' },
-              h(
-                'span',
-                { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-rescue': 'which' },
-                t('settings.rescue.which'),
-              ),
-            ),
-            h(
-              'div',
-              { className: 'dsh-autorestart-settings__field' },
-              h(
-                'span',
-                { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-rescue': 'warning' },
+                { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-rescue': 'shortcut-when' },
                 t('settings.rescue.warning'),
               ),
+              // REMINDER TWO: it puts the WHOLE environment back. Taking one
+              // plugin out is a different button, and the wrong one here costs
+              // the user their working configuration.
+              h(
+                'span',
+                { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-rescue': 'shortcut-scope' },
+                t('settings.rescue.shortcutScope'),
+              ),
+              // NO DESKTOP AT ALL: said out loud, per platform. A hosted web /
+              // server install has no desktop by design, so the sentence names
+              // the scripts to use instead of hiding the whole block.
+              rescueIsWindows === false
+                ? h(
+                    'span',
+                    { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-rescue': 'no-desktop-platform' },
+                    t('settings.rescue.noDesktopPlatform'),
+                  )
+                : null,
+              rescueIsWindows && rescueDesktop === ''
+                ? h(
+                    'span',
+                    { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-rescue': 'no-desktop' },
+                    t('settings.rescue.noDesktop'),
+                  )
+                : null,
             ),
             // WHAT THIS MACHINE CAN DO: the automatic rollback (and what is
             // lost when the machine refuses a watchdog).
@@ -7440,39 +8258,8 @@
                 )
               : null,
             // The desktop shortcut is a BUTTON, never a side effect: loading
-            // this page writes nothing to the desktop.
-            rescueDesktop === ''
-              ? h(
-                  'div',
-                  { className: 'dsh-autorestart-settings__field' },
-                  h(
-                    'span',
-                    { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-rescue': 'no-desktop' },
-                    t('settings.rescue.noDesktop'),
-                  ),
-                )
-              : h(
-                  'div',
-                  { className: 'dsh-autorestart-settings__field' },
-                  h(
-                    'button',
-                    {
-                      type: 'button',
-                      className: 'dsh-autorestart-settings__button',
-                      disabled: busy,
-                      'data-dsh-autorestart-rescue': 'shortcut',
-                      onClick: () => void createRescueShortcut(),
-                    },
-                    rescueShortcutExists ? t('settings.rescue.shortcutDone') : t('settings.rescue.shortcut'),
-                  ),
-                  rescueNote === ''
-                    ? null
-                    : h(
-                        'span',
-                        { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-rescue': 'note' },
-                        rescueNote,
-                      ),
-                ),
+            // this page writes nothing to the desktop. That button now lives in
+            // the block above, together with the icon and the two reminders.
           ),
           // "REPORT A PROBLEM": copy the diagnostics and open a pre-filled
           // issue page. The email is the way out when there is no GitHub
@@ -8268,6 +9055,11 @@
       // features, but only this one has a card here.
       const ANNOUNCED_FEATURE = 'sleep'
 
+      // A HOST THAT CANNOT RESTART (2026-11-02): its own one-time card, in the
+      // same announcement ledger as the feature above — same route, same
+      // "answered once per host" rule, no second mechanism.
+      const ANNOUNCED_RESTART = 'restart-command'
+
       /**
        * The announcements the user has not seen yet.
        *
@@ -8609,20 +9401,24 @@
         if (info === null || info === undefined || info.watchdogAsk !== true) return null
 
         const answer = (keepOn) => {
+          // THE BUTTON NO LONGER ANSWERS A QUESTION, IT ACKNOWLEDGES A NOTICE
+          // (2026-11-01, user decision): the watchdog ships with the plugin, so
+          // "should it stay on?" was a choice the user does not actually have.
+          // The single button records "the user was told" and nothing else.
           if (busy !== '') return
-          setBusy(keepOn === true ? 'on' : 'off')
+          setBusy('notify')
           void (async () => {
             // "SAVED" IS A PROMISE, NOT A GUESS. The request is a success only
             // when the host really answered 2xx: a 400 or a dead connection means
             // NOTHING was written, and saying "saved" then would leave the user
-            // believing a choice that does not exist on disk.
+            // believing a record that does not exist on disk.
             let saved = false
             try {
               const response = await fetch(choiceUrlFor(info), {
                 method: 'POST',
                 headers: { 'content-type': 'application/json' },
                 body: JSON.stringify({
-                  watchdog: keepOn === true,
+                  watchdogNotified: true,
                   askedForPluginVersion: typeof info.pluginVersion === 'string' ? info.pluginVersion : '',
                 }),
               })
@@ -8630,7 +9426,7 @@
             } catch {
               saved = false
             }
-            setAnswered(saved === true ? (keepOn === true ? 'on' : 'off') : 'failed')
+            setAnswered(saved === true ? 'notified' : 'failed')
             setBusy('')
           })()
         }
@@ -8664,29 +9460,23 @@
         const rows = []
         rows.push(h('p', { className: 'dsh-autorestart-announcement__note', key: 'title' }, t('watchdog.title')))
         rows.push(h('p', { className: 'dsh-autorestart-announcement__line', key: 'explain' }, t('watchdog.explain')))
-        rows.push(h('p', { className: 'dsh-autorestart-announcement__note', key: 'warn' }, t('watchdog.warnOff')))
+        rows.push(h('p', { className: 'dsh-autorestart-announcement__note', key: 'off' }, t('watchdog.whereOff')))
         if (answered !== null) {
           rows.push(h('p', {
             className: 'dsh-autorestart-announcement__note',
             key: 'saved',
-          }, t(answered === 'failed'
-            ? 'watchdog.saveFailed'
-            : (answered === 'on' ? 'watchdog.savedOn' : 'watchdog.savedOff'))))
+          }, t(answered === 'failed' ? 'watchdog.saveFailed' : 'watchdog.noticeSaved')))
         }
+        // ONE BUTTON, BECAUSE THERE IS NO CHOICE TO MAKE: the watchdog ships with
+        // the plugin. Turning it off is a settings-page decision, not a question
+        // asked once at install time.
         rows.push(h('button', {
           type: 'button',
           className: 'dsh-autorestart-announcement__cta',
-          key: 'keep',
+          key: 'got-it',
           disabled: busy !== '',
           onClick: () => answer(true),
-        }, t('watchdog.keepOn')))
-        rows.push(h('button', {
-          type: 'button',
-          className: 'dsh-autorestart-announcement__cta',
-          key: 'off',
-          disabled: busy !== '',
-          onClick: () => answer(false),
-        }, t('watchdog.turnOff')))
+        }, t('watchdog.gotIt')))
         rows.push(overlayHint(t('watchdog.hint')))
         return overlayCard('watchdog-ask', t('watchdog.title'), () => setAnswered('dismissed'), rows)
       }
@@ -8822,6 +9612,207 @@
         unknown: 'settings.unknown',
       }
 
+      /**
+       * The inventory rows of that route's answer, whichever wrapper it used.
+       *
+       * This lives INSIDE this closure on purpose: the pure model in the second
+       * module reads the same three wrappers, but it is registered on
+       * `globalThis` and only the exported helpers are reachable from here.
+       */
+      function pluginInventoryRows(inventory) {
+        if (inventory === null || typeof inventory !== 'object') return []
+        if (Array.isArray(inventory.plugins)) return inventory.plugins
+        if (Array.isArray(inventory.items)) return inventory.items
+        if (Array.isArray(inventory.entries)) return inventory.entries
+        return []
+      }
+
+      /**
+       * THE STATE OF "put one plugin back to its previous version".
+       *
+       * ONE implementation, mounted twice: inside the backup fold of the settings
+       * section (where a user looks after dismissing the floating card) and on
+       * the plugin's own config page. Nothing talks to the inventory route until
+       * the user presses the button, and "check now" really re-requests it.
+       *
+       * @param {object|null} info the shared state payload (it carries the routes)
+       * @returns {{rows: Array<object>|null, checking: boolean, restoring: string, note: string, load: Function, restore: Function}}
+       */
+      function usePluginRecovery(info) {
+        const [rows, setRows] = useState(null)
+        const [checking, setChecking] = useState(false)
+        const [restoring, setRestoring] = useState('')
+        const [note, setNote] = useState('')
+        const t = makeTranslate(translate)
+
+        const load = () => {
+          setChecking(true)
+          setNote('')
+          void (async () => {
+            try {
+              const response = await fetch(pluginInventoryUrlFor(info), {
+                method: 'GET',
+                headers: { accept: 'application/json' },
+              })
+              if (!response.ok) throw new Error('HTTP ' + response.status)
+              const body = await response.json()
+              setRows(pluginInventoryRows(body))
+            } catch (failure) {
+              setRows([])
+              setNote(describeError(failure))
+            } finally {
+              setChecking(false)
+            }
+          })()
+        }
+
+        const restore = (plugin) => {
+          if (restoring !== '') return
+          setRestoring(plugin)
+          setNote('')
+          void (async () => {
+            try {
+              const restored = await restorePluginOnce(plugin)
+              setNote(restored && restored.ok !== true
+                ? fillTemplate(t('pluginFailure.failed'), { plugin, reason: '' })
+                : fillTemplate(t('pluginFailure.restored'), { plugin, at: '' }))
+              load()
+            } catch (failure) {
+              setNote(fillTemplate(t('pluginFailure.failed'), { plugin, reason: describeError(failure) }))
+            } finally {
+              setRestoring('')
+            }
+          })()
+        }
+
+        return { rows, checking, restoring, note, load, restore }
+      }
+
+      /**
+       * THE WORDS AND ROWS of that block (pure: it draws, it changes nothing).
+       *
+       * A plugin the user wrote themselves gets "只恢复 X" — we hold its files.
+       * A third-party plugin gets the sentence `settings.thirdParty` and NO
+       * button: there is nothing in the backup to put back, and a button would
+       * promise something the backup cannot keep.
+       *
+       * @param {(key: string) => string} t
+       * @param {object} recovery the value of `usePluginRecovery`
+       * @returns {Array<object>} the nodes of the block, in order
+       */
+      function pluginRecoveryItems(t, recovery) {
+        const items = []
+        items.push(h('span', {
+          className: 'dsh-autorestart-settings__label',
+          'data-dsh-autorestart-recovery': 'title',
+        }, t('settings.backup.recovery')))
+        items.push(h('button', {
+          type: 'button',
+          className: 'dsh-autorestart-settings__button',
+          disabled: recovery.checking === true,
+          'data-dsh-autorestart-recovery': 'check',
+          onClick: () => { if (recovery.checking !== true) recovery.load() },
+        }, recovery.checking === true ? t('settings.checking') : t('settings.checkNow')))
+        if (recovery.note !== '') {
+          items.push(h('span', {
+            className: 'dsh-autorestart-settings__hint',
+            'data-dsh-autorestart-recovery': 'note',
+          }, recovery.note))
+        }
+        const rows = Array.isArray(recovery.rows) ? recovery.rows : null
+        if (rows === null || rows.length === 0) {
+          items.push(h('span', {
+            className: 'dsh-autorestart-settings__hint',
+            'data-dsh-autorestart-recovery': 'empty',
+          }, t('settings.empty')))
+          return items
+        }
+        // ONLY THE PLUGINS WE ACTUALLY HOLD FILES FOR ARE LISTED ONE BY ONE (user
+        // decision, 2026-11-02). The rest are merged into two sentences, and
+        // those two sentences say the OPPOSITE things the user needs to know:
+        //   - built-in plugins ship with DSH: nothing to back up, do not reinstall;
+        //   - third-party plugins are NOT in the backup at all: reinstall them.
+        // Saying "the backup holds only their name and version" was wrong — it
+        // implied the backup had something, and on this machine it held nothing.
+        const installOf = (row) => {
+          const install = row && typeof row.install === 'string' ? row.install : ''
+          if (install !== '') return install
+          // An older Host does not send `install`: fall back to the one bit it
+          // does send, so nothing silently disappears from the page.
+          return row && row.linked === true ? 'link' : 'npm'
+        }
+        // WHICH ROWS ARE LISTED ONE BY ONE. The rule is "the ones we can actually
+        // put back", because that is the only list that is useful AND true:
+        //   - a hand-written / linked plugin  -> listed, with 只恢复 X;
+        //   - a plugin whose files ARE in the copy (an older install shape) ->
+        //     also listed: merging it into "we did not back them up" would be a
+        //     lie about a copy that holds it (the dsh-codekg report, 2026-11-02);
+        //   - everything else -> one sentence per kind, below.
+        const hasCopy = (row) => {
+          const status = row && typeof row.status === 'string' ? row.status : ''
+          return status === 'same' || status === 'different'
+        }
+        const mine = rows.filter((row) => installOf(row) === 'link' || hasCopy(row))
+        const builtinCount = rows.filter((row) => installOf(row) === 'builtin' && !hasCopy(row)).length
+        const thirdPartyCount = rows.filter((row) => installOf(row) === 'npm' && !hasCopy(row)).length
+        if (mine.length === 0) {
+          items.push(h('span', {
+            className: 'dsh-autorestart-settings__hint',
+            'data-dsh-autorestart-recovery': 'none-of-yours',
+          }, t('settings.empty')))
+        } else {
+          items.push(h('ul', {
+            className: 'dsh-autorestart-settings__plugins',
+            'data-dsh-autorestart-recovery': 'list',
+          }, mine.map((row, index) => {
+            const name = row && typeof row.name === 'string' ? row.name : ''
+            const status = row && typeof row.status === 'string' ? row.status : 'unknown'
+            const version = row && typeof row.version === 'string' ? row.version : ''
+            const cells = [
+              h('span', {
+                key: 'name',
+                className: 'dsh-autorestart-settings__plugin-name',
+                'data-dsh-autorestart-recovery': 'name',
+              }, name),
+              h('span', {
+                key: 'status',
+                className: 'dsh-autorestart-settings__plugin-status',
+                'data-dsh-autorestart-recovery': 'status',
+              }, t(SETTINGS_STATUS_KEY[status] || 'settings.unknown')),
+            ]
+            if (status !== 'same') {
+              cells.push(h('button', {
+                type: 'button',
+                key: 'restore',
+                className: 'dsh-autorestart-settings__button',
+                disabled: recovery.restoring !== '',
+                'data-dsh-autorestart-recovery': 'restore',
+                'data-plugin': name,
+                onClick: () => recovery.restore(name),
+              }, fillTemplate(t('pluginFailure.restore'), { plugin: name })))
+            }
+            return h('li', {
+              key: 'plugin-' + index + '-' + name,
+              className: 'dsh-autorestart-settings__plugin-row',
+              'data-dsh-autorestart-recovery': 'row',
+            }, cells)
+          })))
+        }
+        if (builtinCount > 0) {
+          items.push(h('span', {
+            className: 'dsh-autorestart-settings__hint',
+            'data-dsh-autorestart-recovery': 'builtin',
+          }, fillTemplate(t('settings.plugins.builtinNote'), { n: builtinCount })))
+        }
+        if (thirdPartyCount > 0) {
+          items.push(h('span', {
+            className: 'dsh-autorestart-settings__hint',
+            'data-dsh-autorestart-recovery': 'third-party',
+          }, fillTemplate(t('settings.plugins.thirdPartyNote'), { n: thirdPartyCount })))
+        }
+        return items
+      }
+
       const SETTINGS_STYLE = {
         section: {
           display: 'flex',
@@ -8896,101 +9887,18 @@
        */
       function SettingsPanel() {
         const info = useSharedInfo(true)
-        const [rows, setRows] = useState(null)
-        const [checking, setChecking] = useState(false)
-        const [busy, setBusy] = useState('')
-        const [note, setNote] = useState('')
-
-        const load = () => {
-          setChecking(true)
-          setNote('')
-          void (async () => {
-            try {
-              const response = await fetch(pluginInventoryUrlFor(info), {
-                method: 'GET',
-                headers: { accept: 'application/json' },
-              })
-              if (!response.ok) throw new Error('HTTP ' + response.status)
-              const body = await response.json()
-              setRows(pluginFailureInventoryRows(body))
-            } catch (failure) {
-              setRows([])
-              setNote(describeError(failure))
-            } finally {
-              setChecking(false)
-            }
-          })()
-        }
-
-        const restore = (plugin) => {
-          if (busy !== '') return
-          setBusy(plugin)
-          setNote('')
-          void (async () => {
-            try {
-              const restored = await restorePluginOnce(plugin)
-              setNote(restored && restored.ok !== true
-                ? fill(t('pluginFailure.failed'), { plugin, reason: '' })
-                : fill(t('pluginFailure.restored'), { plugin, at: '' }))
-              load()
-            } catch (failure) {
-              setNote(fill(t('pluginFailure.failed'), { plugin, reason: describeError(failure) }))
-            } finally {
-              setBusy('')
-            }
-          })()
-        }
+        // THE BLOCK ITSELF IS SHARED (user report, 2026-11-02): the settings
+        // section of this plugin mounts exactly this one inside its backup fold,
+        // so "只恢复 X" has ONE implementation and cannot drift apart between the
+        // two places. Nothing talks to the inventory route until the button is
+        // pressed, and "check now" really re-requests the route.
+        const recovery = usePluginRecovery(info)
+        const t = makeTranslate(translate)
 
         const items = []
         items.push(h('strong', { key: 'settings-title' }, 'dsh-autorestart'))
         items.push(h('p', { key: 'settings-description', style: SETTINGS_STYLE.description }, t('settings.description')))
-        items.push(h('button', {
-          type: 'button',
-          key: 'settings-check',
-          disabled: checking,
-          onClick: () => { if (!checking) load() },
-          style: SETTINGS_STYLE.button,
-        }, checking ? t('settings.checking') : t('settings.checkNow')))
-
-        if (note !== '') items.push(h('p', { key: 'settings-note', style: SETTINGS_STYLE.note }, note))
-
-        if (rows === null || rows.length === 0) {
-          items.push(h('p', { key: 'settings-empty', style: SETTINGS_STYLE.description }, t('settings.empty')))
-        } else {
-          const list = rows.map((row, index) => {
-            const name = row && typeof row.name === 'string' ? row.name : ''
-            const status = row && typeof row.status === 'string' ? row.status : 'unknown'
-            const linked = row && row.linked === true
-            const version = row && typeof row.version === 'string' ? row.version : ''
-            const statusKey = SETTINGS_STATUS_KEY[status] || 'settings.unknown'
-            const cells = [
-              h('span', { key: 'name', style: SETTINGS_STYLE.name }, name),
-              h('span', { key: 'status', style: SETTINGS_STYLE.status }, t(statusKey)),
-            ]
-            if (linked && status !== 'same') {
-              cells.push(h('button', {
-                type: 'button',
-                key: 'restore',
-                disabled: busy !== '',
-                onClick: () => restore(name),
-                style: SETTINGS_STYLE.restoreButton,
-              }, t('settings.restore')))
-            } else {
-              cells.push(h('span', { key: 'noop' }, ''))
-            }
-            if (linked !== true && status !== 'same') {
-              // THIRD-PARTY: a hint, and deliberately NO button. We cannot put
-              // back a plugin the user did not write, so a button would promise
-              // something we cannot keep.
-              cells.push(h('span', { key: 'hint', style: SETTINGS_STYLE.hint },
-                version === ''
-                  ? t('settings.thirdParty')
-                  : t('settings.thirdParty') + ' ' + fill(t('settings.version'), { version })))
-            }
-            return h('li', { key: 'row-' + index + '-' + name, style: SETTINGS_STYLE.row }, cells)
-          })
-          items.push(h('ul', { key: 'settings-list', style: SETTINGS_STYLE.list }, list))
-        }
+        items.push(...pluginRecoveryItems(t, recovery))
 
         return h('section', { 'data-dsh-autorestart-settings': 'dsh-autorestart', style: SETTINGS_STYLE.section }, items)
       }
