@@ -165,6 +165,42 @@ test('the hosted mode snapshots the profile before the restart command runs', as
   assert.equal(manifest.includePlugins, true)
 })
 
+test('a snapshot that did NOT complete stops the restart instead of restarting into nothing', async (t) => {
+  const { base } = fixture(t, 'cancelled')
+  const state = stateDir(base, 'cancelled')
+  const fake = fakeContext()
+  const commands = []
+  const runtime = createRuntime(fake.ctx, hostedConfig(state.file), {
+    env: { isDesktopApp: false, appExePath: null },
+    // THE COPY DID NOT COMPLETE (user report, 2026-11-02): the restart used to
+    // carry on anyway, which is how a machine ended up with a directory that had
+    // copied the whole plugin tree but never wrote its manifest — a "backup" that
+    // restores nothing. A restart into that void is worse than no restart.
+    snapshot: () => ({ cancelled: true, backup: null }),
+    runCommand: ({ command }) => {
+      commands.push(command)
+      return { ok: true, command, pid: null }
+    },
+    armWatchdog: () => ({ ok: false, tier: 'none', reason: 'the test forces the fallback' }),
+    probeInstance: async () => ({ ok: true, reason: 'the new instance answered' }),
+  })
+  requestRestartNow(runtime)
+
+  await runtime.executeRestart()
+
+  assert.deepEqual(commands, [], 'the restart command must NOT run without a finished copy')
+  assert.ok(
+    fake.logs.some((entry) => entry.level === 'warn' && entry.text.includes('cancelled while the snapshot')),
+    'and it says why it stopped: ' + JSON.stringify(fake.logs.map((entry) => entry.text)),
+  )
+  // NOTHING claims a backup name either: a half-written copy is not a rollback point.
+  const backups = path.join(state.dir, 'backups')
+  const published = fs.existsSync(backups)
+    ? fs.readdirSync(backups).filter((name) => name.startsWith('.') !== true)
+    : []
+  assert.deepEqual(published, [], 'no directory carries a backup name after an unfinished copy')
+})
+
 test('the hosted mode takes no snapshot when backupOnRestart is false', async (t) => {
   const { base } = fixture(t, 'no-backup')
   const state = stateDir(base, 'no-backup')
