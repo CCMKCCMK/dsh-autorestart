@@ -57,178 +57,136 @@ test('client.js publishes the model builder for the tests', () => {
 // ① both blocks are merged, and each keeps its own meaning
 // ---------------------------------------------------------------------------
 
-test('the two sources become two separate blocks', () => {
+// ---------------------------------------------------------------------------
+// WHICH PLUGINS DID NOT COME UP (user decision, 2026-11-02).
+//
+// The card reports exactly one thing: a plugin PACKAGE that loaded on the
+// previous start and does not load now. It reports NOTHING for:
+//   * a file difference from the backup (an upgrade, our own edits),
+//   * a few capabilities disappearing while the package still loads,
+//   * a plugin the user removed from the bundles.
+// ---------------------------------------------------------------------------
+
+test('① a plugin that was upgraded (files differ) but loads fine does NOT open the card', () => {
   const result = build({
-    watch: watchPayload({ tools: ['codekg_query'], packages: ['@deepseek-ai/dsh-vault#host'] }),
+    watch: watchPayload(),
     inventory: inventoryPayload([
-      { name: 'dsh-cost-meter', status: 'different', version: '1.2.3', changeCount: 4 },
+      { name: 'dsh-upgraded', status: 'different', version: '1.9.0', changeCount: 12 },
       { name: 'dsh-steady', status: 'same', version: '1.0.0' },
     ]),
   })
-
-  assert.equal(result.certain.length, 2, 'two functions did not come up')
-  assert.deepEqual(
-    result.certain.map((entry) => entry.name).sort(),
-    ['@deepseek-ai/dsh-vault', 'codekg'],
-    'a tool name is folded to its owner, a package keeps its name',
-  )
-  // The two blocks are separate: a clue is NOT a certainty.
-  assert.equal(result.clues.length, 1, 'only the `different` row is a clue')
-  assert.equal(result.clues[0].name, 'dsh-cost-meter')
-  assert.equal(result.clues[0].source, 'inventory')
-  // A `same` row is not a clue.
-  assert.equal(result.clues.some((entry) => entry.name === 'dsh-steady'), false)
+  assert.equal(result, null, 'a file difference is not a failure and must not raise the card')
 })
 
-test('a clue never leaks into the certain block, and vice versa', () => {
+test('② a declared plugin that did not load this time IS listed', () => {
   const result = build({
-    watch: watchPayload({ tools: ['release_board_publish'] }),
-    inventory: inventoryPayload([{ name: 'dsh-other', status: 'different', version: '9.9.9' }]),
+    watch: watchPayload({ packages: ['dsh-cost-meter@1.2.3'] }),
+    inventory: inventoryPayload([
+      { name: 'dsh-cost-meter', status: 'different', version: '1.2.3' },
+    ]),
   })
-  assert.deepEqual(result.certain.map((entry) => entry.name), ['release'])
-  assert.deepEqual(result.clues.map((entry) => entry.name), ['dsh-other'])
+  assert.notEqual(result, null, 'a plugin that did not come up is worth the card')
+  assert.deepEqual(result.certain.map((entry) => entry.name), ['dsh-cost-meter'])
+  assert.equal(result.certain[0].source, 'packages', 'the evidence is the package that disappeared')
+  assert.deepEqual(result.certain[0].lostTools, [], 'no tool evidence was given, and none is invented')
 })
 
-// ---------------------------------------------------------------------------
-// ② nothing to report -> no panel at all
-// ---------------------------------------------------------------------------
-
-test('with nothing to report the model is null, not an empty shell', () => {
-  assert.equal(build({ watch: watchPayload(), inventory: inventoryPayload([]) }), null)
-  assert.equal(build({ watch: watchPayload(), inventory: inventoryPayload([{ name: 'x', status: 'same' }]) }), null)
-  assert.equal(build({}), null)
-})
-
-// ---------------------------------------------------------------------------
-// ③ clientModules can NEVER name a plugin
-// ---------------------------------------------------------------------------
-
-test('clientModules becomes a count and never a list entry', () => {
-  // The real machine reports four module names here, not plugin names.
+test('③ a plugin the user REMOVED from the bundles does not open the card', () => {
   const result = build({
-    watch: watchPayload({ tools: ['codekg_query'], clientModules: ['batches', 'entries', 'release'] }),
-    inventory: inventoryPayload([]),
+    watch: watchPayload({ packages: ['dsh-gone'] }),
+    inventory: inventoryPayload([{ name: 'dsh-gone', status: 'not-installed' }]),
   })
+  assert.equal(result, null, 'it is not in the profile any more: that already happened, it is not a failure')
+})
 
+test('a FEW capabilities disappearing while the plugin still loads does not open the card', () => {
+  const result = build({
+    // Only tools are gone: the package itself came up, so this is an upgrade
+    // that renamed or dropped a tool — not a plugin the user has to revive.
+    watch: watchPayload({ tools: ['cost_meter_query', 'cost_meter_reset'] }),
+    inventory: inventoryPayload([{ name: 'cost-meter', status: 'same', version: '1.2.3' }]),
+  })
+  assert.equal(result, null, 'a partial capability loss is not "the plugin did not come up"')
+})
+
+test('a vanished tool is EVIDENCE on the package that did not come up, never its own entry', () => {
+  const result = build({
+    watch: watchPayload({ packages: ['dsh-cost-meter@1.2.3'], tools: ['dsh-cost-meter_query'] }),
+    inventory: inventoryPayload([{ name: 'dsh-cost-meter', status: 'different', version: '1.2.3' }]),
+  })
+  assert.deepEqual(result.certain.map((entry) => entry.name), ['dsh-cost-meter'], 'one entry, named by the package')
+  assert.deepEqual(result.certain[0].lostTools, ['dsh-cost-meter_query'], 'and the tool rides along as evidence')
+})
+
+test('clientModules stays a COUNT: a module name is not a plugin to go and look for', () => {
+  const result = build({
+    watch: watchPayload({ packages: ['dsh-cost-meter'], clientModules: ['batches', 'timeline', 'sidebar'] }),
+    inventory: inventoryPayload([{ name: 'dsh-cost-meter', status: 'different' }]),
+  })
   assert.equal(result.uiBlindSpot, 3, 'three interface modules did not appear')
-  const allNames = [...result.certain, ...result.clues].map((entry) => entry.name)
-  for (const moduleName of ['batches', 'entries', 'release']) {
-    assert.equal(allNames.includes(moduleName), false, moduleName + ' must never be listed as a plugin')
-  }
+  assert.deepEqual(result.certain.map((entry) => entry.name), ['dsh-cost-meter'])
 })
 
-test('interface modules alone are still worth a panel, but only as a number', () => {
+test('interface modules alone are still no panel: the count has nothing to name', () => {
   const result = build({ watch: watchPayload({ clientModules: ['batches'] }), inventory: inventoryPayload([]) })
-  // No certain item and no clue -> no panel, but the blind spot is recorded on
-  // whatever the caller does get. (A blind spot alone must not raise an alarm:
-  // the module may just not be loaded yet.)
-  assert.equal(result, null, 'a blind spot alone is not news')
-  const withReal = build({
-    watch: watchPayload({ tools: ['a_b'], clientModules: ['batches'] }),
-    inventory: inventoryPayload([]),
-  })
-  assert.equal(withReal.uiBlindSpot, 1)
+  assert.equal(result, null, 'a blind spot without a plugin name is not a card')
 })
 
-// ---------------------------------------------------------------------------
-// ④⑤ the action depends on who wrote the plugin
-// ---------------------------------------------------------------------------
-
-test('a third-party plugin gets a hint with the exact version, never a restore', () => {
+test('a third-party plugin gets a reinstall hint, not a restore button', () => {
   const result = build({
-    watch: watchPayload(),
-    inventory: inventoryPayload([{ name: '@scope/third-party', status: 'different', version: '2.4.6' }]),
-    profile: 'demo',
+    watch: watchPayload({ packages: ['dsh-cost-meter@1.2.3'] }),
+    inventory: inventoryPayload([{ name: 'dsh-cost-meter', status: 'not-installed', version: '1.2.3' }]),
   })
-  const clue = result.clues[0]
-  assert.equal(clue.kind, 'third-party')
-  assert.equal(clue.action.type, 'hint')
-  assert.notEqual(clue.action.type, 'restore')
-  assert.equal(clue.action.command, 'dsh plugin --profile demo add @scope/third-party@2.4.6')
-})
-
-test('a hand-written (link) plugin gets the restore action', () => {
-  const result = build({
-    watch: watchPayload(),
-    inventory: inventoryPayload([{ name: 'my-own-plugin', status: 'different', version: '0.1.0', kind: 'link' }]),
-  })
-  const clue = result.clues[0]
-  assert.equal(clue.kind, 'linked')
-  assert.equal(clue.action.type, 'restore')
-  assert.equal(clue.action.command, undefined, 'a restore carries no install command')
-})
-
-// ---------------------------------------------------------------------------
-// ⑥ no version -> no invented command
-// ---------------------------------------------------------------------------
-
-test('without a version there is no command, only a note', () => {
-  const result = build({
-    watch: watchPayload(),
-    inventory: inventoryPayload([{ name: 'dsh-unknown', status: 'different' }]),
-  })
-  const clue = result.clues[0]
-  assert.equal(clue.action.type, 'hint')
-  assert.equal(clue.action.command, null, 'no version means no command - never a guess')
-  assert.equal(typeof clue.action.note, 'string')
-  assert.ok(clue.action.note.length > 0, 'and the note says why')
+  // The inventory says "not installed" for THIS name, so nothing is reported —
+  // and that is the point: the exclusion wins over the watch evidence.
+  assert.equal(result, null)
 })
 
 test('the profile name is used when the caller knows it', () => {
   const result = build({
-    watch: watchPayload(),
-    inventory: inventoryPayload([{ name: 'pkg', status: 'different', version: '1.0.0' }]),
     profile: 'desktop',
+    watch: watchPayload({ packages: ['dsh-cost-meter@1.2.3'] }),
+    inventory: inventoryPayload([{ name: 'dsh-cost-meter', status: 'different', version: '1.2.3' }]),
   })
-  assert.equal(result.clues[0].action.command, 'dsh plugin --profile desktop add pkg@1.0.0')
+  assert.match(result.certain[0].action.command, /--profile desktop/, 'the command names the profile')
+  assert.match(result.certain[0].action.command, /dsh-cost-meter@1\.2\.3/, 'and the exact version')
 })
 
-// ---------------------------------------------------------------------------
-// ⑦ malformed input never throws
-// ---------------------------------------------------------------------------
+test('without a version there is no command to copy', () => {
+  const result = build({
+    watch: watchPayload({ packages: ['dsh-unknown-version'] }),
+    inventory: inventoryPayload([{ name: 'dsh-unknown-version', status: 'different' }]),
+  })
+  assert.equal(typeof result.certain[0].action.command === 'string' && result.certain[0].action.command !== '', false,
+    'a command invented without a version would install something else')
+})
 
 test('malformed input returns null or an empty model and never throws', () => {
-  const inputs = [
-    undefined, null, 42, 'nope', [],
-    { watch: null, inventory: null },
-    { watch: 42, inventory: 'nope' },
-    { watch: { layers: 42 }, inventory: { plugins: 'nope' } },
-    { watch: { disappeared: [null, 42, {}] }, inventory: { plugins: [null, 42, {}] } },
-    { watch: { layers: { tools: { removed: 'not-an-array' } } }, inventory: { plugins: [] } },
-  ]
-  for (const input of inputs) {
-    let result
-    assert.doesNotThrow(() => { result = build(input) }, JSON.stringify(input) + ': must not throw')
-    assert.equal(result === null || typeof result === 'object', true)
-  }
+  assert.equal(build(null), null)
+  assert.equal(build({}), null)
+  assert.equal(build({ watch: 'nonsense', inventory: 7 }), null)
+  const weird = build({ watch: { layers: { packages: { removed: 5 } } }, inventory: { plugins: 'no' } })
+  assert.equal(weird, null)
 })
 
 test('a row with a useless name is dropped instead of shown as blank', () => {
   const result = build({
-    watch: watchPayload(),
-    inventory: inventoryPayload([{ name: '   ', status: 'different', version: '1.0.0' }, { status: 'different' }]),
+    watch: watchPayload({ packages: ['   '] }),
+    inventory: inventoryPayload([{ name: '  ', status: 'different' }]),
   })
-  assert.equal(result, null, 'no usable name means no entry')
+  assert.equal(result, null, 'a blank name is not a plugin')
 })
-
-// ---------------------------------------------------------------------------
-// The model carries facts only - no verdict words
-// ---------------------------------------------------------------------------
 
 test('the model carries no "broken" / "failed" verdict anywhere', () => {
   const result = build({
-    watch: watchPayload({ tools: ['codekg_query'] }),
-    inventory: inventoryPayload([{ name: 'dsh-x', status: 'different', version: '1.0.0' }]),
+    watch: watchPayload({ packages: ['dsh-cost-meter@1.2.3'] }),
+    inventory: inventoryPayload([{ name: 'dsh-cost-meter', status: 'different', version: '1.2.3' }]),
   })
-  const text = JSON.stringify(result).toLowerCase()
-  for (const forbidden of ['broken', 'failed', 'failure', 'crash']) {
-    assert.equal(text.includes(forbidden), false, 'the model must not claim ' + forbidden)
-  }
+  const text = JSON.stringify(result)
+  assert.equal(/broken/i.test(text), false, 'the card never says a plugin is broken')
+  assert.equal(/failed/i.test(text), false, 'and never says it failed')
+  assert.equal(/differ/i.test(text), false, 'and never says a plugin differs from the backup')
 })
-
-// ---------------------------------------------------------------------------
-// The locale says the same thing in both languages
-// ---------------------------------------------------------------------------
 
 test('the locale carries the two new block titles and no "did not load" wording', () => {
   for (const file of ['../locale/zh.json', '../locale/en.json']) {
@@ -408,9 +366,9 @@ test('the fingerprint names the report, so one boot can be recognised after a re
     'the order of the payloads does not change the identity',
   )
   assert.notEqual(
-    fingerprintOf({ certain: [{ name: 'a' }], clues: [] }),
-    fingerprintOf({ certain: [{ name: 'a' }], clues: [{ name: 'z' }] }),
-    'a different report is a different identity',
+    fingerprintOf({ certain: [{ name: 'a' }] }),
+    fingerprintOf({ certain: [{ name: 'a' }, { name: 'b' }] }),
+    'a different set of plugins that did not come up is a different identity',
   )
 })
 
@@ -472,3 +430,52 @@ test('the dead helper backupFallbackText is gone, and nothing references it', ()
   )
 })
 
+// ---------------------------------------------------------------------------
+// THE CARD ONLY SAYS "DID NOT COME UP" (user decision, 2026-11-02).
+//
+// The old card had a second block: "these plugins differ from the backup" — a
+// file difference presented as something to act on. An upgrade, or our own work
+// on a plugin, produces exactly that, and none of it is a failure. The wording
+// must be gone from the card, not merely unused.
+// ---------------------------------------------------------------------------
+
+test('the card no longer renders the "differs from the backup" block', () => {
+  assert.equal(
+    panel.includes('pluginFailure.clueTitle'),
+    false,
+    'the clue title is not rendered any more',
+  )
+  assert.equal(
+    panel.includes('pluginFailure.clueIntro'),
+    false,
+    'and neither is its paragraph',
+  )
+  assert.equal(
+    panel.includes('clue-title'),
+    false,
+    'no row key for it is left behind either',
+  )
+})
+
+test('the wording the card does use never calls a plugin different from the backup', () => {
+  // The strings the card still shows, from the inline dictionaries.
+  const zh = panel.match(/pluginFailure\.(certainTitle|certainIntro)/g) || []
+  assert.ok(zh.length > 0, 'the card still explains itself with certainTitle / certainIntro')
+  for (const key of ['settings.backup.fallback.seed']) void key
+
+  // And the dictionaries themselves: the two keys the card uses must not say
+  // "different from the backup" in either language.
+  for (const file of ['zh', 'en']) {
+    const dict = JSON.parse(fs.readFileSync(path.join(clientDir, '..', 'locale', file + '.json'), 'utf8'))
+    assert.equal(
+      /跟备份不一样|与备份不同|differ(s)? from the backup/i.test(dict.pluginFailure.certainTitle),
+      false,
+      file + ': the title does not judge a plugin against the backup',
+    )
+    assert.equal(
+      /跟备份不一样|与备份不同|differ(s)? from the backup/i.test(dict.pluginFailure.certainIntro),
+      false,
+      file + ': and neither does the paragraph',
+    )
+  }
+})

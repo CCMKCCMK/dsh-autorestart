@@ -10088,11 +10088,10 @@
         const model = build({ watch: loaded.watch, inventory: loaded.inventory })
         if (model === null) return null
 
-        // The fingerprint is WHICH report this is, so dismissing silences this
-        // one for the rest of the boot; the boot record keeps it silent even
-        // after a page refresh.
+        // The fingerprint is WHICH report this is (which plugins did not come up),
+        // so dismissing silences this one for the rest of the boot; the boot record
+        // keeps it silent even after a page refresh.
         const fingerprint = (model.certain || []).map((entry) => entry.name).sort().join(',')
-          + '|' + (model.clues || []).map((entry) => entry.name).sort().join(',')
         if (dismissed !== '' && dismissed === fingerprint) return null
         ensureAnnouncementStyle()
 
@@ -10135,19 +10134,17 @@
         // says «有两件事要你看一下», and repeating it as the first paragraph made
         // the panel look like it had two headings.
 
+        // WHICH PLUGINS DID NOT COME UP. There is exactly ONE list on this card
+        // now (user decision, 2026-11-02): a plugin that is declared in the
+        // profile and did not load this time. A file that merely differs from the
+        // backup is NOT on this card — it belongs to the settings page, without a
+        // verdict attached to it.
         const certain = Array.isArray(model.certain) ? model.certain : []
         if (certain.length > 0) {
           rows.push(h('p', { className: 'dsh-autorestart-announcement__note', key: 'certain-title' }, t('pluginFailure.certainTitle')))
           line('certain-intro', t('pluginFailure.certainIntro'))
-          for (const entry of certain) line('certain:' + entry.name, entry.name)
-        }
-
-        const clues = Array.isArray(model.clues) ? model.clues : []
-        if (clues.length > 0) {
-          rows.push(h('p', { className: 'dsh-autorestart-announcement__note', key: 'clue-title' }, t('pluginFailure.clueTitle')))
-          line('clue-intro', t('pluginFailure.clueIntro'))
-          for (const entry of clues) {
-            line('clue:' + entry.name, entry.name)
+          for (const entry of certain) {
+            line('certain:' + entry.name, entry.name)
             const action = entry.action && typeof entry.action === 'object' ? entry.action : {}
             if (entry.kind === 'linked') {
               rows.push(h('p', { className: 'dsh-autorestart-announcement__note', key: 'hint:' + entry.name }, t('pluginFailure.linkedHint')))
@@ -10178,7 +10175,7 @@
         // IT BELONGS TO THE CARD, SO IT SITS IN THE HEADER (user report,
         // 2026-11-02): at the bottom of the list it read like "restore all" applied
         // to the last plugin only. Same for «知道了».
-        const linkedClues = clues.filter((entry) => entry.kind === 'linked')
+        const linkedClues = certain.filter((entry) => entry.kind === 'linked')
         const actions = []
         if (linkedClues.length > 1) {
           actions.push(h('button', {
@@ -10505,14 +10502,14 @@
       .sort()
       .join(',')
     if (model === null || typeof model !== 'object') return ''
-    return names(model.certain) + '|' + names(model.clues)
+    return names(model.certain)
   }
 
   /**
    * Merge the two data sources into the panel's model.
    *
    * @param {{ watch?: object|null, inventory?: object|null, profile?: string }} input
-   * @returns {{ certain: object[], clues: object[], uiBlindSpot: number, watchAt: number|null }|null}
+   * @returns {{ certain: object[], uiBlindSpot: number, watchAt: number|null }|null}
    */
   function buildPluginFailureModel(input) {
     try {
@@ -10521,54 +10518,76 @@
       const inventory = source.inventory !== null && typeof source.inventory === 'object' ? source.inventory : null
       const profile = typeof source.profile === 'string' ? source.profile : ''
 
-      // --- certain: what the watch says is gone, named from tools/packages only ---
+      // WHICH PLUGINS DID NOT COME UP (user decision, 2026-11-02).
+      //
+      // The ONLY evidence this card accepts: a plugin PACKAGE that loaded on the
+      // previous start and is not loaded now. That is "it did not come up" — the
+      // whole entry is gone, not just a few of its tools.
+      //
+      // What is deliberately NOT evidence:
+      //   * a file difference from the backup (an upgrade, our own edits) — that is
+      //     normal work, and the settings page shows it without judging it;
+      //   * a FEW capabilities disappearing while the package still loads — an
+      //     upgrade renames a tool; that is not a plugin that failed;
+      //   * a plugin the user removed from the bundles — that already happened.
+      const notInstalled = new Set()
+      const inventoryRows = pluginFailureInventoryRows(inventory)
+      for (const row of inventoryRows) {
+        if (row === null || typeof row !== 'object') continue
+        if (row.status !== 'not-installed') continue
+        const name = typeof row.name === 'string' ? row.name.trim() : ''
+        if (name !== '') notInstalled.add(name)
+      }
+      const inventoryRowFor = (name) => inventoryRows
+        .find((row) => row !== null && typeof row === 'object'
+          && typeof row.name === 'string' && row.name.trim() === name) || null
+
       const certain = []
-      const seen = new Set()
-      const addCertain = (name, from) => {
+      const byName = new Map()
+      const addNotLoaded = (value, from) => {
+        // `@scope/pkg@1.2.3` is one package with a version: the card names the
+        // PLUGIN, and the version belongs in the command, not in the name.
+        const text = typeof value === 'string' ? value.trim() : ''
+        const at = text.lastIndexOf('@')
+        const name = at > 0 ? text.slice(0, at) : text
         if (name === '') return
-        const key = from + '|' + name
-        if (seen.has(key)) return
-        seen.add(key)
-        const kind = PLUGIN_FAILURE_THIRD_PARTY
-        certain.push({
+        if (notInstalled.has(name)) return
+        if (byName.has(name)) return
+        const row = inventoryRowFor(name)
+        const kind = row !== null && pluginFailureIsLinked(row) ? PLUGIN_FAILURE_LINKED : PLUGIN_FAILURE_THIRD_PARTY
+        const entry = {
           name,
           source: from,
           kind,
-          action: pluginFailureActionFor(name, kind, null, profile),
-        })
+          action: pluginFailureActionFor(name, kind, row, profile),
+          lostTools: [],
+        }
+        byName.set(name, entry)
+        certain.push(entry)
       }
-      for (const raw of pluginFailureWatchLayer(watch, 'tools')) addCertain(pluginFailureToolOwner(raw), 'tools')
-      for (const raw of pluginFailureWatchLayer(watch, 'packages')) addCertain(pluginFailurePackageName(raw), 'packages')
+      for (const raw of pluginFailureWatchLayer(watch, 'packages')) addNotLoaded(pluginFailurePackageName(raw), 'packages')
+
+      // A vanished TOOL is EVIDENCE, never a trigger: it is attached to a package
+      // that already did not come up. A tool that vanished while its package still
+      // loads is an upgrade and stays out of this card.
+      for (const raw of pluginFailureWatchLayer(watch, 'tools')) {
+        const owner = pluginFailureToolOwner(raw)
+        const entry = byName.get(owner)
+        if (entry === undefined) continue
+        const tool = typeof raw === 'string' ? raw.trim() : ''
+        if (tool !== '' && entry.lostTools.includes(tool) === false) entry.lostTools.push(tool)
+      }
 
       // clientModules CANNOT name a plugin: its items are module names. It is a
       // blind spot, and it is reported as a number so nobody mistakes `batches`
       // for a plugin the user should go and look for.
       const uiBlindSpot = pluginFailureWatchLayer(watch, 'clientModules').length
 
-      // --- clues: what differs from the backup (a lead, not a verdict) ---
-      const clues = []
-      for (const row of pluginFailureInventoryRows(inventory)) {
-        if (row === null || typeof row !== 'object') continue
-        if (row.status !== 'different') continue
-        const name = typeof row.name === 'string' ? row.name.trim() : ''
-        if (name === '') continue
-        const kind = pluginFailureIsLinked(row) ? PLUGIN_FAILURE_LINKED : PLUGIN_FAILURE_THIRD_PARTY
-        clues.push({
-          name,
-          source: 'inventory',
-          kind,
-          action: pluginFailureActionFor(name, kind, row, profile),
-          changeCount: Number.isFinite(Number(row.changeCount)) ? Number(row.changeCount) : null,
-          version: typeof row.version === 'string' ? row.version : null,
-          backupVersion: typeof row.backupVersion === 'string' ? row.backupVersion : null,
-        })
-      }
-
       // Nothing to say: no shell, no empty panel.
-      if (certain.length === 0 && clues.length === 0) return null
+      if (certain.length === 0) return null
 
       const watchAt = watch && Number.isFinite(Number(watch.at)) ? Number(watch.at) : null
-      return { certain, clues, uiBlindSpot, watchAt }
+      return { certain, uiBlindSpot, watchAt }
     } catch {
       // The panel is a convenience; a malformed payload must never break the page.
       return null
