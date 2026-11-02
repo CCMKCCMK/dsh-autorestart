@@ -276,7 +276,15 @@
       "footprint": "Using {size} on disk, {n} copies right now",
       "purpose": "A complete backup of the local plugins, taken before every restart; at most {n} copies are kept, and you can roll back to any one you pick.",
       "kindsLocal": "Both linked plugins (written by hand) and localized ones (their directory has a .git) are in the copy in full, so they can be rolled back.",
-      "kindsThirdParty": "Third-party plugins are maintained by their authors; if something is wrong, reinstall them."
+      "kindsThirdParty": "Third-party plugins are maintained by their authors; if something is wrong, reinstall them.",
+      "limitLabel": "Copies kept",
+      "limitHint": "Backups take disk space, so pick as few copies as you need",
+      "limitAsk": "This deletes the {remove} oldest copies and cannot be undone. {from} copies now → {to} kept.",
+      "limitConfirm": "Delete and keep {to}",
+      "limitCancel": "Cancel",
+      "limitDeleted": "Deleted {removed} copies; {kept} are kept now.",
+      "limitMore": "You picked {requested}, but {kept} are kept because a certified copy cannot be deleted.",
+      "limitFailed": "The change did not go through; the copy limit is unchanged."
     },
     "backupPlugins": {
       "label": "Include the installed plugins in the backup",

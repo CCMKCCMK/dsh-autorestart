@@ -1974,3 +1974,74 @@ test('the shortcut icon and the desktop .lnk come from one answer', async () => 
     'the shortcut itself is still offered',
   )
 })
+
+// ---------------------------------------------------------------------------
+// THE COPY LIMIT IS EDITABLE (user decision, 2026-11-02).
+//
+// A dropdown writes maxBackups through the backup-limit route. Shrinking is the
+// only dangerous direction, so it goes through a confirmation that names the
+// copies it will delete; cancelling must send NOTHING.
+// ---------------------------------------------------------------------------
+
+function backupLocale(lang) {
+  const dict = JSON.parse(fs.readFileSync(path.join(LOCALE_DIR, lang + '.json'), 'utf8'))
+  return dict.settings.backup
+}
+
+test('the limit dropdown offers exactly 1-10 and shows the value in force', () => {
+  const panel = functionBodyOfSettings()
+  assert.match(panel, /\[1, 2, 3, 4, 5, 6, 7, 8, 9, 10\]\.map/, 'the options are 1..10')
+  assert.match(panel, /'data-dsh-autorestart-backup': 'limit-select'/, 'the select exists')
+  assert.match(
+    panel,
+    /value: String\(limitValue === null \? backupsInfo\.max : limitValue\)/,
+    'it is seeded with the effective value and replaced by the answer',
+  )
+})
+
+test('the disk hint is verbatim', () => {
+  assert.equal(backupLocale('zh').limitHint, '备份会占用磁盘空间，请尽量选择较少的份数')
+  assert.match(backupLocale('en').limitHint, /disk space/i)
+  assert.match(functionBodyOfSettings(), /settings\.backup\.limitHint/, 'the page renders it')
+})
+
+test('cancelling the confirmation sends no request at all', () => {
+  const panel = functionBodyOfSettings()
+  const cancelAt = panel.indexOf("'data-dsh-autorestart-backup': 'limit-cancel'")
+  assert.notEqual(cancelAt, -1, 'the cancel button exists')
+  const cancelBlock = panel.slice(cancelAt, cancelAt + 400)
+  assert.equal(cancelBlock.includes('fetch('), false, 'it does not call the route')
+  assert.equal(cancelBlock.includes('submitBackupLimit'), false, 'and does not submit either')
+  assert.match(cancelBlock, /setLimitAsk\(null\)/, 'it only closes the confirmation')
+})
+
+test('the confirmation names the copies it deletes and the before/after counts', () => {
+  const zh = backupLocale('zh').limitAsk
+  assert.match(zh, /将删除 \{remove\} 份最旧的备份，删除后无法恢复/, 'it says how many and that it is final')
+  assert.match(zh, /当前 \{from\} 份 → 保留 \{to\} 份/, 'and shows current -> kept')
+  const panel = functionBodyOfSettings()
+  assert.match(panel, /remove: backupItems\.length - wanted/, 'N comes from the real counts')
+})
+
+test('the answer is reported as it came back, including the protected copies', () => {
+  assert.match(backupLocale('zh').limitDeleted, /已删除 \{removed\} 份/, 'the real deleted count')
+  assert.match(backupLocale('zh').limitMore, /已选 \{requested\} 份，因安全份不可删除，实际保留 \{kept\} 份/,
+    'and the honest line when certified copies survive')
+  const panel = functionBodyOfSettings()
+  assert.match(panel, /answer\.removed/, 'removed comes from the response')
+  assert.match(panel, /keptWillExceedRequest === true/, 'the protected case is decided by the response')
+  assert.match(panel, /answer\.reason/, 'a refusal is shown with the Host reason, unwritten')
+})
+
+/** The body of the settings component, for the assertions above. */
+function functionBodyOfSettings() {
+  const source = fs.readFileSync(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'client.js'),
+    'utf8',
+  )
+  const start = source.indexOf('const submitBackupLimit')
+  assert.notEqual(start, -1, 'the submit handler is there')
+  // The handler sits in the state area and the control it serves renders further
+  // down, so the slice runs to the end of the file rather than a fixed window.
+  return source.slice(start)
+}

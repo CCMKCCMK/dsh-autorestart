@@ -389,6 +389,14 @@
     'settings.backup.purpose': '每次重启前自动拍的本地插件完整备份，最多保留 {n} 份，出问题可自行选择一份回档。',
     'settings.backup.kindsLocal': '链接安装（自己写的）和本地化过的插件（目录里有 .git）都已完整备份，可以回档。',
     'settings.backup.kindsThirdParty': '第三方插件由插件作者维护，有异常建议重装',
+    'settings.backup.limitLabel': '保留份数',
+    'settings.backup.limitHint': '备份会占用磁盘空间，请尽量选择较少的份数',
+    'settings.backup.limitAsk': '将删除 {remove} 份最旧的备份，删除后无法恢复。当前 {from} 份 → 保留 {to} 份。',
+    'settings.backup.limitConfirm': '确认删除并改为保留 {to} 份',
+    'settings.backup.limitCancel': '取消',
+    'settings.backup.limitDeleted': '已删除 {removed} 份，现在保留 {kept} 份。',
+    'settings.backup.limitMore': '已选 {requested} 份，因安全份不可删除，实际保留 {kept} 份。',
+    'settings.backup.limitFailed': '没能改成功，份数保持原样。',
     'settings.backup.empty': '还没有备份；每次重启前会自动生成一份。',
     'settings.backup.path': '存放路径',
     'settings.backup.copyPath': '复制路径',
@@ -885,6 +893,14 @@
     'settings.backup.purpose': 'A complete backup of the local plugins, taken before every restart; at most {n} copies are kept, and you can roll back to any one you pick.',
     'settings.backup.kindsLocal': 'Both linked plugins (written by hand) and localized ones (their directory has a .git) are in the copy in full, so they can be rolled back.',
     'settings.backup.kindsThirdParty': 'Third-party plugins are maintained by their authors; if something is wrong, reinstall them.',
+    'settings.backup.limitLabel': 'Copies kept',
+    'settings.backup.limitHint': 'Backups take disk space, so pick as few copies as you need',
+    'settings.backup.limitAsk': 'This deletes the {remove} oldest copies and cannot be undone. {from} copies now → {to} kept.',
+    'settings.backup.limitConfirm': 'Delete and keep {to}',
+    'settings.backup.limitCancel': 'Cancel',
+    'settings.backup.limitDeleted': 'Deleted {removed} copies; {kept} are kept now.',
+    'settings.backup.limitMore': 'You picked {requested}, but {kept} are kept because a certified copy cannot be deleted.',
+    'settings.backup.limitFailed': 'The change did not go through; the copy limit is unchanged.',
     'settings.backup.empty': 'No backup yet; one is written before every restart.',
     'settings.backup.path': 'Where they live',
     'settings.backup.copyPath': 'Copy the path',
@@ -3337,6 +3353,20 @@
         const sent = info && typeof info.rollbackUrl === 'string' ? info.rollbackUrl.trim() : ''
         if (sent.startsWith('/')) return sent
         return DEFAULT_ROLLBACK_URL
+      }
+
+      /**
+       * The route that writes the backup copy limit (user decision, 2026-11-02).
+       * Same shape as the others: the Host sends it with the state payload, and an
+       * older Host gets it derived from the health route, which is a sibling under
+       * the same prefix.
+       */
+      function backupLimitUrlFor(info) {
+        const sent = info && typeof info.backupLimitUrl === 'string' ? info.backupLimitUrl.trim() : ''
+        if (sent.startsWith('/')) return sent
+        const health = info && typeof info.healthUrl === 'string' ? info.healthUrl.trim() : ''
+        if (health.startsWith('/')) return health.replace(/\/[^/]+$/, '/backup-limit')
+        return ''
       }
 
       /**
@@ -6357,6 +6387,56 @@
         // not a `window.confirm`: the card has to say WHICH copy, that the
         // current state is replaced, and that a restart follows. `null` = nobody
         // is asking, and only a confirmation ever calls the route.
+        // THE COPY LIMIT (user decision, 2026-11-02): the number the user picks,
+        // the confirmation that stands between a smaller number and deleted
+        // copies, and what the route reported back afterwards.
+        const [limitBusy, setLimitBusy] = useState(false)
+        const [limitNote, setLimitNote] = useState('')
+        const [limitAsk, setLimitAsk] = useState(null)
+        // The value the select SHOWS: seeded from the payload, replaced by the
+        // answer, so the number on screen is the number in force right after the
+        // write instead of waiting for the next poll.
+        const [limitValue, setLimitValue] = useState(null)
+
+        /**
+         * WRITE THE COPY LIMIT (user decision, 2026-11-02).
+         *
+         * The route answers with the copies it really deleted and with
+         * `keptWillExceedRequest`, so this reports the truth instead of echoing
+         * the number the user asked for. A refusal carries the Host's `reason`
+         * and is shown as-is — rewriting it would hide which value was refused.
+         */
+        const submitBackupLimit = async (wanted) => {
+          const url = backupLimitUrlFor(info)
+          if (url === '') return
+          setLimitBusy(true)
+          setLimitNote('')
+          try {
+            const response = await fetch(url, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json', accept: 'application/json' },
+              body: JSON.stringify({ maxBackups: wanted }),
+            })
+            const answer = await response.json().catch(() => null)
+            setLimitAsk(null)
+            if (response.ok !== true || answer === null || answer.ok !== true) {
+              setLimitNote(answer && typeof answer.reason === 'string' && answer.reason !== ''
+                ? answer.reason
+                : t('settings.backup.limitFailed'))
+              return
+            }
+            const removed = Array.isArray(answer.removed) ? answer.removed.length : 0
+            const kept = Number.isFinite(Number(answer.kept)) ? Number(answer.kept) : wanted
+            setLimitValue(Number.isFinite(Number(answer.maxBackups)) ? Number(answer.maxBackups) : wanted)
+            setLimitNote(answer.keptWillExceedRequest === true
+              ? fill(t('settings.backup.limitMore'), { requested: String(wanted), kept: String(kept) })
+              : fill(t('settings.backup.limitDeleted'), { removed: String(removed), kept: String(kept) }))
+          } catch {
+            setLimitNote(t('settings.backup.limitFailed'))
+          } finally {
+            setLimitBusy(false)
+          }
+        }
         const [rollbackAsk, setRollbackAsk] = useState(null)
         const [rollbackBusy, setRollbackBusy] = useState(false)
         const [rollbackNote, setRollbackNote] = useState('')
@@ -7355,6 +7435,83 @@
                 { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-backup': 'kinds-third-party' },
                 t('settings.backup.kindsThirdParty'),
               ),
+              // THE COPY LIMIT IS EDITABLE HERE (user decision, 2026-11-02): a
+              // dropdown of 1..10, defaulting to the value the Host reports. It
+              // writes through the backup-limit route and the page re-reads the
+              // state, so "the number shown" is always "the number in force".
+              h(
+                'div',
+                { className: 'dsh-autorestart-settings__backup-row', key: 'backup-limit' },
+                h(
+                  'span',
+                  { className: 'dsh-autorestart-settings__backup-label' },
+                  t('settings.backup.limitLabel'),
+                ),
+                h(
+                  'select',
+                  {
+                    className: 'dsh-autorestart-settings__select',
+                    'data-dsh-autorestart-backup': 'limit-select',
+                    value: String(limitValue === null ? backupsInfo.max : limitValue),
+                    disabled: limitBusy,
+                    onChange: (event) => {
+                      const wanted = Number(event.target.value)
+                      if (Number.isFinite(wanted) !== true) return
+                      // SHRINKING IS THE ONLY DANGEROUS DIRECTION: nothing is
+                      // written until the user confirms how many copies die.
+                      if (wanted < backupItems.length) {
+                        setLimitNote('')
+                        setLimitAsk({ wanted, from: backupItems.length, remove: backupItems.length - wanted })
+                        return
+                      }
+                      void submitBackupLimit(wanted)
+                    },
+                  },
+                  [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((value) =>
+                    h('option', { key: 'limit-' + value, value: String(value) }, String(value))),
+                ),
+              ),
+              h(
+                'span',
+                { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-backup': 'limit-hint' },
+                t('settings.backup.limitHint'),
+              ),
+              limitAsk === null
+                ? null
+                : h(
+                  'div',
+                  { className: 'dsh-autorestart-settings__backup-row', key: 'limit-ask' },
+                  h(
+                    'span',
+                    { className: 'dsh-autorestart-settings__backup-label', 'data-dsh-autorestart-backup': 'limit-ask-body' },
+                    fill(t('settings.backup.limitAsk'), {
+                      remove: String(limitAsk.remove),
+                      from: String(limitAsk.from),
+                      to: String(limitAsk.wanted),
+                    }),
+                  ),
+                  h('button', {
+                    type: 'button',
+                    className: 'dsh-autorestart-announcement__cta',
+                    'data-dsh-autorestart-backup': 'limit-confirm',
+                    disabled: limitBusy,
+                    onClick: () => { void submitBackupLimit(limitAsk.wanted) },
+                  }, t('settings.backup.limitConfirm')),
+                  h('button', {
+                    type: 'button',
+                    className: 'dsh-autorestart-announcement__cta',
+                    'data-dsh-autorestart-backup': 'limit-cancel',
+                    // CANCELLING SENDS NOTHING: no route call, no write, no delete.
+                    onClick: () => { setLimitAsk(null); setLimitNote('') },
+                  }, t('settings.backup.limitCancel')),
+                ),
+              limitNote === ''
+                ? null
+                : h(
+                  'span',
+                  { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-backup': 'limit-note' },
+                  limitNote,
+                ),
               // WHAT THE TWO IDENTITIES MEAN (user decision, 2026-10-30): the
               // words on the rows below are useless without the rule behind
               // them — only a proven copy is ever rolled back, and a manual

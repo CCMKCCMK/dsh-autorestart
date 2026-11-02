@@ -276,7 +276,15 @@
       "footprint": "实际占用 {size}，当前 {n} 份",
       "purpose": "每次重启前自动拍的本地插件完整备份，最多保留 {n} 份，出问题可自行选择一份回档。",
       "kindsLocal": "链接安装（自己写的）和本地化过的插件（目录里有 .git）都已完整备份，可以回档。",
-      "kindsThirdParty": "第三方插件由插件作者维护，有异常建议重装"
+      "kindsThirdParty": "第三方插件由插件作者维护，有异常建议重装",
+      "limitLabel": "保留份数",
+      "limitHint": "备份会占用磁盘空间，请尽量选择较少的份数",
+      "limitAsk": "将删除 {remove} 份最旧的备份，删除后无法恢复。当前 {from} 份 → 保留 {to} 份。",
+      "limitConfirm": "确认删除并改为保留 {to} 份",
+      "limitCancel": "取消",
+      "limitDeleted": "已删除 {removed} 份，现在保留 {kept} 份。",
+      "limitMore": "已选 {requested} 份，因安全份不可删除，实际保留 {kept} 份。",
+      "limitFailed": "没能改成功，份数保持原样。"
     },
     "backupPlugins": {
       "label": "备份包含已安装插件",
