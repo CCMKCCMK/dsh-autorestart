@@ -604,6 +604,47 @@ function backupValues(panel, key) {
     .map((node) => textOf(node))
 }
 
+test('the limit in force is stated as a fact — the dropdown is the only control', async () => {
+  // THE TWO LINES MUST NOT CONTRADICT EACH OTHER (user report, 2026-11-02): the
+  // number is changed by the dropdown ON THIS PAGE, so a "(change it in the
+  // plugin config)" beside it pointed at a second door that does not exist. The
+  // row now states the fact, and the pointer is gone — in both languages.
+  const cases = [
+    { language: 'zh', expected: '最多保留 2 份', guide: '在插件配置里改' },
+    { language: 'en', expected: 'At most 2 copies are kept', guide: 'change it in the plugin config' },
+  ]
+  for (const { language, expected, guide } of cases) {
+    const mounted = mountSettings({
+      ...(language === 'en' ? { language } : {}),
+      info: {
+        instance: { isDesktopApp: true, platform: 'win32' },
+        supervisor: { mode: 'app', installed: false, startup: { mode: 'desktop' } },
+        backups: twoBackups(),
+      },
+    })
+    const panel = await mounted.settled('dsh-autorestart')
+    // ① The fact, with the number in force — nothing else on the line.
+    assert.deepEqual(
+      backupValues(panel, 'max-effective'),
+      [expected],
+      language + ': the limit is stated as a fact, with the number in force',
+    )
+    // ② The control really is on this page — that is what made the pointer wrong.
+    assert.equal(
+      marked(panel, 'data-dsh-autorestart-backup')
+        .filter((node) => node.props['data-dsh-autorestart-backup'] === 'limit-select').length,
+      1,
+      language + ': the dropdown is here, so there is no other door to point at',
+    )
+    // ③ ...and the pointer to that other door is gone.
+    assert.equal(
+      textOf(panel).includes(guide),
+      false,
+      language + ': no pointer to the plugin config any more',
+    )
+  }
+})
+
 test('a backup names its time, and never prints a timezone offset', async () => {
   const mounted = mountSettings({
     info: {

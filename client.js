@@ -384,7 +384,7 @@
     // "everything is fine".
     'settings.backup.multiProfile': '检测到多个 profile，备份和回滚已暂停：它不知道该备份哪一个。解决办法：启动时指定 DSH_PROFILE，或者只保留一个 profile。',
     'settings.backup.keep': '最多保留 {n} 份，超出自动删最旧的那份。',
-    'settings.backup.maxEffective': '最多保留 {n} 份（在插件配置里改）',
+    'settings.backup.maxEffective': '最多保留 {n} 份',
     'settings.backup.footprint': '实际占用 {size}，当前 {n} 份',
     'settings.backup.purpose': '每次重启前自动拍的本地插件完整备份，最多保留 {n} 份，出问题可自行选择一份回档。',
     'settings.backup.kindsLocal': '链接安装（自己写的）和本地化过的插件（目录里有 .git）都已完整备份，可以回档。',
@@ -892,7 +892,7 @@
     'settings.backup.sectionNote': 'Contains: a plugin will not start? Put it back to the previous version',
     'settings.backup.multiProfile': 'More than one profile was found, so backups and rollbacks are paused: it cannot tell which one to back up. Fix it by starting with DSH_PROFILE set, or by keeping a single profile.',
     'settings.backup.keep': 'At most {n} copies are kept; the oldest one is deleted when there are more.',
-    'settings.backup.maxEffective': 'At most {n} copies are kept (change it in the plugin config)',
+    'settings.backup.maxEffective': 'At most {n} copies are kept',
     'settings.backup.footprint': 'Using {size} on disk, {n} copies right now',
     'settings.backup.purpose': 'A complete backup of the local plugins, taken before every restart; at most {n} copies are kept, and you can roll back to any one you pick.',
     'settings.backup.kindsLocal': 'Both linked plugins (written by hand) and localized ones (their directory has a .git) are in the copy in full, so they can be rolled back.',

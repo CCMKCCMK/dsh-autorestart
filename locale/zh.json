@@ -273,7 +273,7 @@
       "rollbackBusy": "正在回退…",
       "rollbackDone": "已回退，正在重启…",
       "rollbackFailed": "回退没成功：{message}",
-      "maxEffective": "最多保留 {n} 份（在插件配置里改）",
+      "maxEffective": "最多保留 {n} 份",
       "footprint": "实际占用 {size}，当前 {n} 份",
       "purpose": "每次重启前自动拍的本地插件完整备份，最多保留 {n} 份，出问题可自行选择一份回档。",
       "kindsLocal": "链接安装（自己写的）和本地化过的插件（目录里有 .git）都已完整备份，可以回档。",
