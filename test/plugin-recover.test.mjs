@@ -174,7 +174,7 @@ test('plan says no-backup when the machine has no known-good backup at all', () 
     profileDir,
   });
   assert.equal(plan.actions[0].mode, RECOVERY_MODES.NO_BACKUP);
-  assert.match(plan.actions[0].reason, /no known-good backup/);
+  assert.match(plan.actions[0].reason, /no copy on this machine has a restart record/);
 });
 
 test('plan says no-backup for a plugin the profile does not enable', () => {

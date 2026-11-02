@@ -225,7 +225,15 @@ test('the .lnk carries the icon of DSH — and no icon at all is not a failure',
   assert.match(script, /New-Object -ComObject WScript\.Shell/, 'the shell writes the shortcut, not a hand-rolled file format');
   assert.match(script, /\.TargetPath = 'C:\\plugin\\scripts\\restore-profile\.cmd'/);
   assert.match(script, /\.IconLocation = 'C:\\Program Files\\DeepSeek Harness\\DeepSeek Harness\.exe,0'/, 'the icon the user will see');
-  assert.match(script, /\.Save\(\)$/);
+  // THE WRITE COMES FIRST, THEN THE REFRESH (user report, 2026-11-02: "still no
+  // icon"). `Save()` alone is not enough: Explorer draws from its own cache, so
+  // the script tells the shell that this one item changed.
+  assert.match(script, /\.Save\(\)/, 'the shortcut is written');
+  assert.match(script, /SHChangeNotify\(0x00002000, 0x0001/, 'and the shell is told to re-read that item');
+  assert.ok(
+    script.indexOf('.Save()') < script.indexOf('SHChangeNotify'),
+    'the refresh happens after the file exists, never before',
+  );
 
   // THE ICON IS OPTIONAL: no executable (a hosted install) means no icon line —
   // and the shortcut is still created instead of failing.

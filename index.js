@@ -139,6 +139,7 @@ import { classifyStartup } from './lib/startup-mode.js'
 import {
   createDesktopShortcut,
   desktopDir,
+  ensureShortcutIcon,
   rescueInfo,
   rescueScriptPaths,
 } from './lib/rescue-paths.js'
@@ -757,7 +758,7 @@ function buildConfigSchema() {
       watchDelayMs: schemastery.number().step(1).min(0).default(8000)
         .description('How long the watch waits after boot so plugins that load late are not reported as gone'),
       maxBackups: schemastery.number().step(1).min(1).default(DEFAULT_MAX_BACKUPS)
-        .description('How many snapshots are kept (default 3: the current one plus the two before it); older ones are deleted automatically, except the newest known-good one, which is never removed.'),
+        .description('How many snapshots are kept (default 3: the current one plus the two before it). Older ones are deleted automatically, except the newest one and the one whose restart record says the instance came up with matching content; the first-install snapshot is kept only while there is room.'),
       rollbackTimeoutMs: schemastery.number().min(1000).default(90000)
         .description('Milliseconds the detached watcher waits for the relaunched host before it restores the snapshot.'),
       // The watchdog: the process that waits for the relaunched host and puts
@@ -1873,7 +1874,7 @@ export function runPluginRecovery(options = {}) {
       .map((action) => action.plugin)
     try {
       requested = options.requestRestart({
-        reason: 'a plugin failed to load, so the known-good copy was put back: '
+        reason: 'a plugin failed to load, so the copy whose restart record says it came up with matching content was put back: '
           + changedPlugins.join(', '),
         plugins: changedPlugins,
       }) !== false
@@ -2044,7 +2045,7 @@ export function collectPluginRecovery(options = {}) {
     failures: named,
     state: recoveryState,
     reason: applied.changed === true
-      ? 'the failed plugin was restored from the known-good backup'
+      ? 'the failed plugin was restored from the backup whose restart record says it came up with matching content'
       : 'the failure was recognised but nothing was changed',
   }
 }
@@ -2673,6 +2674,13 @@ export function buildRestartRequestRecord({
     waitedMs: requestedAt === null ? null : Math.max(0, at - requestedAt),
     attempts: Number.isFinite(request.attempt) ? Math.trunc(request.attempt) : 0,
     snapshotTaken: Boolean(request.snapshot),
+    // WHICH DIRECTORY that snapshot is (2026-11-02). A bare `true` cannot be
+    // checked later, and a copy CAN disappear after it was written — the prune
+    // used to delete the newest one. With the name on record, a reader can say
+    // "the copy that restart took is gone now" instead of repeating "taken".
+    snapshotDir: isPlainObject(request.snapshot) && typeof request.snapshot.dir === 'string' && request.snapshot.dir !== ''
+      ? request.snapshot.dir
+      : null,
     requesters,
     bySessionId: typeof request.bySessionId === 'string' && request.bySessionId !== '' ? request.bySessionId : null,
     ...extra,
@@ -4325,6 +4333,28 @@ const titleOfSummary = (item) => {
   }
 
   /**
+   * THE COPY A RECORD NAMES, CHECKED AGAINST THE DISK (user report, 2026-11-02).
+   *
+   * A restart really did write its snapshot (161 MB, manifest, under `backups/`)
+   * and a later prune deleted it — the records then still said "taken" while the
+   * list showed the copies from the day before. `pruneBackups` no longer deletes
+   * the newest copy, but a record must not go on claiming a rollback point that
+   * is not there any more either: a rollback point the user is told about and
+   * cannot use is worse than being told there is none.
+   *
+   * @returns {boolean|null} true/false, or null when the record names no directory
+   */
+  const snapshotStillOnDisk = (dir) => {
+    const target = typeof dir === 'string' ? dir.trim() : ''
+    if (target === '') return null
+    try {
+      return fs.existsSync(target) === true
+    } catch {
+      return false
+    }
+  }
+
+  /**
    * The record of the fate of the LAST restart request (see RESTART_REQUEST_FILE
    * at the top of this file). It is read lazily, so a request that was cancelled
    * by an EARLIER instance is still visible after a reload.
@@ -4333,7 +4363,12 @@ const titleOfSummary = (item) => {
   const restartRequestPathOf = () => restartRequestPath(stateDirOf())
   const restartRequestOutcome = () => {
     if (lastRestartRequest === null) lastRestartRequest = readRestartRequestRecord(stateDirOf())
-    return lastRestartRequest
+    const record = lastRestartRequest
+    if (!record || typeof record !== 'object' || record.snapshotTaken !== true) return record
+    // The record says a copy was taken. Is it still there? A record from an
+    // older build names no directory (`null`) — then there is nothing to check.
+    if (snapshotStillOnDisk(record.snapshotDir) !== false) return record
+    return { ...record, snapshotTaken: false, snapshotMissing: true }
   }
 
   /** The honest answer about the restart request (queued / deferred / cancelled). */
@@ -4503,7 +4538,15 @@ const titleOfSummary = (item) => {
    *
    * @returns {object|null} the summary (null when no restart happened yet)
    */
-  const lastRestartVerdict = () => summarizeRestartVerdict(readRestartVerdict(stateDirOf()))
+  const lastRestartVerdict = () => {
+    const verdict = summarizeRestartVerdict(readRestartVerdict(stateDirOf()))
+    if (!verdict || !isPlainObject(verdict.snapshot) || verdict.snapshot.taken !== true) return verdict
+    // THE COPY IT NAMES MAY BE GONE (see `snapshotStillOnDisk`): then this
+    // report must not offer it as a rollback point. `missing` is an addition,
+    // not a rewrite — the directory and its time stay readable.
+    if (snapshotStillOnDisk(verdict.snapshot.dir) !== false) return verdict
+    return { ...verdict, snapshot: { ...verdict.snapshot, taken: false, missing: true } }
+  }
 
   /**
    * The version of THIS plugin (the one the user runs).
@@ -4733,6 +4776,13 @@ const titleOfSummary = (item) => {
         backupsDir,
         includePlugins: config.backupIncludePlugins !== false,
         maxBackups: config.maxBackups,
+        // NO TRIMMING HERE (2026-11-02): this copy is written in the MIDDLE of a
+        // rollback, and a prune at this moment can delete the very copy the user
+        // picked — measured on the real fixtures: the undo copy pushed the list
+        // over the limit, the picked copy was the only unprotected one, and the
+        // restore then failed with "the backup directory does not exist". The
+        // next regular backup trims the list as usual.
+        pruneEnabled: false,
         kind: KIND_SNAPSHOT,
         // WHAT PUT THIS COPY THERE, as a fact (2026-11-02): the undo copy of a
         // manual rollback. The old `reason: 'before-manual-rollback'` said the same
@@ -4859,11 +4909,20 @@ const titleOfSummary = (item) => {
     // icon (`assets/icon.ico`) from the plugin directory, and when this install
     // ships none the answer is "no icon" — never the wrong face.
     //
-    // NO FALLBACK TO THE EXECUTABLE, and nothing is written at runtime: the icon
-    // is either in the package or absent. On a host with no desktop shell
-    // (`dsh web`, a server, WSL/Linux/macOS) the shortcut itself is not offered
-    // at all, so the icon is moot there — and on a Windows hosted host the icon
-    // now works, because it no longer depends on an app executable.
+    // NO FALLBACK TO THE EXECUTABLE. The icon is either in the package or absent.
+    //
+    // AND IT IS HANDED TO THE SHORTCUT AS A FRESH COPY, NOT AS THE ASSET PATH
+    // (user report, 2026-11-02: "still no icon", after the asset itself was fixed).
+    // Measured on the real machine: the shipped `.ico` is correct — GDI+ decodes it
+    // to the artwork, and a `.lnk` naming a COPY of those exact bytes draws the
+    // mark — yet the SAME BYTES read from `…/plugins/dsh-autorestart/assets/…`
+    // drew a solid block, on a path that had never been used before. Explorer
+    // serves an icon it has already drawn for a path, and rebuilding the `.lnk`
+    // (rewriting it, deleting and recreating it) does not change that. So the
+    // shortcut gets a file the shell has never seen: a content-addressed copy in
+    // this plugin's own state directory. A new build is a new name, which is a
+    // new cache entry — and the page and the `.lnk` still name ONE file.
+    iconTransform: (icon) => ensureShortcutIcon({ sourceIcon: icon, stateDir: stateDirOf() }),
   })
 
   /**
@@ -5591,7 +5650,7 @@ const titleOfSummary = (item) => {
     const knownGood = latestKnownGood(backupsDirFor(stateDirOf()))
     const targetDir = knownGood && typeof knownGood.dir === 'string' ? knownGood.dir : ''
     if (targetDir === '') {
-      log.error('the restart failed and there is no known-good backup to roll back to:', reason)
+      log.error('the restart failed and no copy has a restart record saying it came up, so there is nothing to roll back to:', reason)
       writeRestartReport({ rolledBack: false, reason: 'no-known-good: ' + reason, backupDir: null, restored })
       return { rolledBack: false, restored, error: 'no-known-good' }
     }
@@ -5617,7 +5676,7 @@ const titleOfSummary = (item) => {
       releaseRollbackLock(stateDirOf())
     }
     if (result && result.ok === true) {
-      log.warn('the known-good backup was restored:', {
+      log.warn('the backup whose restart record says it came up with matching content was restored:', {
         reason,
         restored: result.restored,
         backupDir: targetDir,
@@ -5626,7 +5685,7 @@ const titleOfSummary = (item) => {
       return { rolledBack: true, restored: result.restored, error: null }
     }
     const error = (result && result.error) || 'the restore failed'
-    log.error('the known-good backup could not be restored:', reason, error)
+    log.error('the backup whose restart record says it came up could not be restored:', reason, error)
     writeRestartReport({ rolledBack: false, reason, backupDir: targetDir, restored })
     return { rolledBack: false, restored, error }
   }
@@ -5648,7 +5707,7 @@ const titleOfSummary = (item) => {
     const knownGood = latestKnownGood(backupsDirFor(stateDirOf()))
     const targetDir = knownGood && typeof knownGood.dir === 'string' ? knownGood.dir : ''
     if (targetDir === '') {
-      log.warn('no known-good backup: the automatic rollback is not armed')
+      log.warn('no copy has a restart record saying it came up with matching content: the automatic rollback is not armed')
       return { ok: false, method: 'none', error: 'no-known-good', scriptPath: null, verified: 'nothing', pid: null }
     }
     if (typeof profileDir !== 'string' || profileDir === '') {
@@ -6401,7 +6460,7 @@ const titleOfSummary = (item) => {
             } else {
               // The probe answered but this restart took no snapshot: there is
               // nothing to certify, and inventing one would be the old mistake.
-              log.warn('the new instance answered, but this restart took no snapshot: nothing is certified')
+              log.warn('the new instance answered, but this restart took no snapshot, so no copy got a matching-content record')
             }
             writeRestartOutcome({ decided: true, ok: true, reason: 'the new instance answered' })
             recordRestartVerdict({

@@ -208,8 +208,14 @@ test('③ pruning NEVER removes the newest known-good copy', (t) => {
   assert.equal(fs.existsSync(path.join(backups, stamps[0])), true, 'it is still on disk');
   assert.equal(latestKnownGood(backups).name, stamps[0], 'and it is still the rollback target');
 
-  // The rest of the pruning still happens: three of the four are gone.
-  assert.equal(removed.length, 3, 'every other copy was pruned');
+  // The rest of the pruning still happens — BUT THE NEWEST COPY IS NOW SPARED TOO
+  // (2026-11-02, user report: the restart's own snapshot was deleted while a
+  // leftover survived). With four copies, a limit of 1 and two absolute keepers
+  // (the oldest = the proven one, and the newest), exactly the two in between can
+  // go — the limit cannot be reached, and the prune says so.
+  assert.equal(removed.length, 2, 'every copy that could go, went');
+  assert.equal(removed.includes(stamps[3]), false, 'the newest copy is never a victim either');
+  assert.equal(fs.existsSync(path.join(backups, stamps[3])), true, 'it is still on disk');
 });
 
 test('④ a copy with no meta.json is "unknown" and never the rollback target', (t) => {
@@ -472,7 +478,7 @@ test('⑦ markKnownGood writes the evidence: source, time, fingerprint, scope, i
     intervention: false,
   });
   assert.equal(result.promoted, true);
-  assert.equal(result.reason, 'certified by full-checks');
+  assert.equal(result.reason, 'a boot was observed (full-checks) and it was running this content');
 
   const after = readBackupMeta(backup.dir);
   assert.equal(after.kind, KIND_KNOWN_GOOD);
@@ -556,12 +562,12 @@ test('⑦ markKnownGood promotes NOTHING without evidence, and does not rewrite 
   // The old call shape: a reason, no evidence. This is what an old call site does.
   const legacy = markKnownGood(backup.dir, { reason: 'boot-ok' });
   assert.equal(legacy.promoted, false, 'a boot alone certifies nothing');
-  assert.match(legacy.reason, /no certification/i);
+  assert.match(legacy.reason, /no boot record/i);
 
   // Explicitly "none" is the same answer, with its own wording.
   const explicitNone = markKnownGood(backup.dir, { reason: 'boot-ok', certifiedBy: CERTIFIED_BY.NONE });
   assert.equal(explicitNone.promoted, false);
-  assert.match(explicitNone.reason, /does not prove a boot/i);
+  assert.match(explicitNone.reason, /does not record a boot/i);
 
   // A made-up source does not sneak through either.
   const invented = markKnownGood(backup.dir, { reason: 'boot-ok', certifiedBy: 'boot-ok' });
@@ -642,9 +648,15 @@ test('⑦ pruning never deletes the LAST certified copy, even when the limit say
   assert.equal(prune.skipped, false, 'the floor did not have to stop everything');
   assert.equal(prune.keptCertified, stamps[1], 'the answer names the copy it protected');
   assert.equal(prune.certifiedCount, 1);
-  assert.deepEqual(prune.removed, [stamps[2], stamps[3]], 'everything else that could go, went');
+  // CHANGED 2026-11-02 (user report): the NEWEST copy is a keeper now. Before
+  // this, the newest copy was the only unprotected candidate here and the prune
+  // deleted it — which is how a restart threw away the snapshot it had just
+  // written while yesterday's leftovers stayed. With the newest and the certified
+  // one protected, the budget (3) is larger than the copies that may go (2), so
+  // the "oldest reference" is sacrificed as well and the limit is met.
+  assert.deepEqual(prune.removed, [stamps[0], stamps[2]], 'the copies that may go, went (oldest first)');
   assert.equal(fs.existsSync(path.join(backups, stamps[1])), true, 'the certified copy is still on disk');
-  assert.equal(fs.existsSync(path.join(backups, stamps[0])), true, 'and the oldest reference is untouched as before');
+  assert.equal(fs.existsSync(path.join(backups, stamps[3])), true, 'and the newest copy survived this time');
 });
 
 test('⑦ with NO certified copy at all, pruning still converges to the newest limit', (t) => {
@@ -663,7 +675,7 @@ test('⑦ with NO certified copy at all, pruning still converges to the newest l
   const prune = pruneBackups(backups, 1);
   assert.deepEqual(prune.removed, [stamps[0], stamps[1]], 'the two oldest copies went');
   assert.equal(prune.skipped, false, 'the prune really ran');
-  assert.match(String(prune.reason), /no certified backup/i, 'and it says there is no proof');
+  assert.match(String(prune.reason), /no copy has a restart record/i, 'and it says there is no proof');
   assert.equal(prune.certifiedCount, 0);
   assert.equal(prune.keptCertified, null);
   assert.equal(prune.budget, 2, 'the budget it spent is reported too');
@@ -684,7 +696,7 @@ test('⑦ createBackup prunes and reports it even with no proof', async (t) => {
   const last = results[results.length - 1];
   assert.equal(last.pruned.length, 1, 'the copy over the limit was pruned by that very write');
   assert.equal(last.pruneSkipped, false, 'a prune that ran is not reported as skipped');
-  assert.match(String(last.pruneReason), /no certified backup/i);
+  assert.match(String(last.pruneReason), /no copy has a restart record/i);
   assert.equal(certNames(backups).length, 1, 'only the newest copy is left');
 
   // Once one copy carries evidence the protected pruning takes over: the proven
@@ -739,7 +751,7 @@ test('a machine that never configured maxBackups converges to TWO on the next wr
   assert.equal(left.length, 2, 'exactly two: the new copy and the newest old one');
   assert.match(left[left.length - 1], /^2026-04-20/, 'the copy that was just written is one of them');
   assert.equal(result.pruned.length, 16, 'the other sixteen were removed by that same write');
-  assert.match(String(result.pruneReason), /no certified backup/i, 'and the reason is reported, not silent');
+  assert.match(String(result.pruneReason), /no copy has a restart record/i, 'and the reason is reported, not silent');
 });
 
 /* ------------------------------------------------------------------ *

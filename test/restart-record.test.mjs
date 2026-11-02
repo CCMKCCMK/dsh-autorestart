@@ -293,6 +293,21 @@ test('the record carries the LOCAL time of the snapshot (the directory name is U
  */
 async function bootTheNewInstance(t, label, options = {}) {
   const { dir, file } = profileFixture(t, label)
+  // THE COPY THE RECORD NAMES REALLY EXISTS (2026-11-02): the report now checks
+  // the directory, so a fixture that only names a path would describe a snapshot
+  // that is gone — and rightly be reported as such instead of "taken". It has to
+  // be a complete copy as well (a manifest and a configuration), or the boot
+  // sweep would delete the empty directory as junk.
+  const snapshotDir = path.join(dir, 'backups', '2026-10-29T00-25-20-779Z')
+  fs.mkdirSync(path.join(snapshotDir, 'config'), { recursive: true })
+  fs.writeFileSync(path.join(snapshotDir, 'config', 'cordis.patch.yml'), 'rows: []\n', 'utf8')
+  fs.writeFileSync(path.join(snapshotDir, 'manifest.json'), JSON.stringify({
+    at: Date.now() - 3500,
+    atLocal: '2026-10-29T08:25:20+08:00',
+    bytes: 10,
+    files: ['cordis.patch.yml'],
+    includePlugins: false,
+  }), 'utf8')
   // The old instance wrote the "pending" half before it died.
   writeRestartVerdict(dir, {
     result: RESTART_RESULTS.PENDING,
@@ -301,7 +316,7 @@ async function bootTheNewInstance(t, label, options = {}) {
     requestedAt: Date.now() - 4000,
     startedAt: Date.now() - 3000,
     previousBootId: 'the-boot-that-was-replaced',
-    snapshot: { requested: true, taken: true, dir: path.join(dir, 'backups', '2026-10-29T00-25-20-779Z'), stamp: '2026-10-29T00-25-20-779Z', at: Date.now() - 3500 },
+    snapshot: { requested: true, taken: true, dir: snapshotDir, stamp: '2026-10-29T00-25-20-779Z', at: Date.now() - 3500 },
   })
   const fake = fakeContext({ origin: options.origin || 'http://127.0.0.1:5601' })
   apply(fake.ctx, {

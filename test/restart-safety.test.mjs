@@ -1087,8 +1087,8 @@ test('a rollback without a known-good copy restores NOTHING and says no-known-go
   assert.match(String(watchdogArms[0].restoreBlockedReason), /no backup qualifies/, 'including the reason')
   assert.match(
     String(watchdogArms[0].restoreBlockedReason),
-    /not-certified/,
-    'and which copies were refused, with why (this restart took one uncertified snapshot)',
+    /not-content-verified/,
+    'and which copies were refused, with why (this restart took one snapshot whose restart was never observed)',
   )
   assert.equal(watchers.length, 0, 'the old watcher is not started')
 
@@ -1107,7 +1107,7 @@ test('a rollback without a known-good copy restores NOTHING and says no-known-go
   assert.equal(runtime.lastRollback.rolledBack, false)
   assert.equal(runtime.lastRollback.backupDir, null, 'the interface is told there is no rollback target')
   assert.ok(
-    fake.logs.some((entry) => entry.level === 'error' && entry.text.includes('no known-good backup to roll back to')),
+    fake.logs.some((entry) => entry.level === 'error' && entry.text.includes('nothing to roll back to')),
     'the failure is logged, never swallowed',
   )
 })

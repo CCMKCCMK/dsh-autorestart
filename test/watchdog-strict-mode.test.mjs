@@ -64,7 +64,7 @@ test('the newest certified copy with intervention=false IS the restore target', 
   assert.equal(choice.target, '/backups/c', 'the newest qualified copy wins');
   assert.equal(choice.targetName, 'c');
   assert.deepEqual(choice.excluded, [], 'nothing had to be refused');
-  assert.match(choice.reason, /certified by full-checks/);
+  assert.match(choice.reason, /came up with matching content/);
   assert.match(choice.reason, /no system intervention is on record/);
 });
 
@@ -98,7 +98,7 @@ test('an uncertified copy is refused, whatever its intervention says', () => {
     candidates: [candidate('plain', { certifiedBy: 'none', intervention: false })],
   });
   assert.equal(choice.target, null);
-  assert.equal(choice.excluded[0].exclusion, RESTORE_EXCLUSIONS.NOT_CERTIFIED);
+  assert.equal(choice.excluded[0].exclusion, RESTORE_EXCLUSIONS.NOT_CONTENT_VERIFIED);
 });
 
 test('no candidates at all is strict mode with a reason that says so', () => {
@@ -122,11 +122,11 @@ test('the selection NEVER falls back to "try the newest one anyway"', () => {
   assert.equal(choice.target, null, 'a strict fallback would put a broken state back');
   assert.equal(choice.strict, true);
   assert.deepEqual(choice.excluded.map((entry) => entry.exclusion), [
-    RESTORE_EXCLUSIONS.NOT_CERTIFIED,
+    RESTORE_EXCLUSIONS.NOT_CONTENT_VERIFIED,
     RESTORE_EXCLUSIONS.INTERVENED,
     RESTORE_EXCLUSIONS.INTERVENTION_UNKNOWN,
   ]);
-  assert.match(choice.reason, /none of the 3 copies is certified AND free of a recorded intervention/);
+  assert.match(choice.reason, /none of the 3 copies has a restart record saying the instance came up with matching content/);
 });
 
 /* ------------------------------------------------------------------ *
@@ -143,7 +143,7 @@ test('the marker names the restore target, and says when it is blocked', () => {
     restoreTargetDir: '',
     restoreBlocked: true,
     restoreBlockedReason: 'no backup qualifies',
-    restoreCandidates: [{ name: 'a', exclusion: 'not-certified' }],
+    restoreCandidates: [{ name: 'a', exclusion: 'not-content-verified' }],
     profileDir: '/profile',
   });
   const info = restoreTargetInfoOf(blocked);

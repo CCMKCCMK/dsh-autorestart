@@ -209,12 +209,12 @@ test('the watchdog skips the polluted copies and picks the one proven by the fin
     'both polluted copies are in the refusal list — they are NEWER than nothing, and they are named',
   );
   for (const entry of choice.excluded) {
-    assert.equal(entry.exclusion, RESTORE_EXCLUSIONS.NOT_CERTIFIED);
+    assert.equal(entry.exclusion, RESTORE_EXCLUSIONS.NOT_CONTENT_VERIFIED);
     assert.equal(entry.certifiedBy, 'full-checks', 'the report keeps the stamp it refused');
     assert.equal(entry.certificationEvidence, null, 'and shows the missing criterion');
   }
   assert.equal(
-    choice.notes.some((note) => /stamped by full-checks/.test(note) && /no verifiable/.test(note)),
+    choice.notes.some((note) => /does not say both that the instance came up AND that the content matched/.test(note)),
     true,
     'the reason is said out loud, not left to "nothing to restore"',
   );
@@ -236,7 +236,7 @@ test('the selector re-checks the criterion itself: `certified: true` with no evi
   });
   assert.equal(choice.target, null, 'no restore target');
   assert.equal(choice.strict, true);
-  assert.equal(choice.excluded[0].exclusion, RESTORE_EXCLUSIONS.NOT_CERTIFIED);
+  assert.equal(choice.excluded[0].exclusion, RESTORE_EXCLUSIONS.NOT_CONTENT_VERIFIED);
 });
 
 test('with ONLY polluted copies, the watchdog restores nothing and says why', (t) => {
@@ -246,7 +246,7 @@ test('with ONLY polluted copies, the watchdog restores nothing and says why', (t
   const choice = selectRestoreTarget({ candidates: listBackupIdentities(backups) });
   assert.equal(choice.target, null);
   assert.equal(choice.strict, true);
-  assert.match(choice.reason, /none of the 1 copies is certified/);
+  assert.match(choice.reason, /none of the 1 copies has a restart record/);
   assert.equal(choice.excluded.length, 1);
 });
 
@@ -265,7 +265,7 @@ test('markKnownGood records source AND criterion, and a later promotion does not
     certificationEvidence: CERTIFICATION_EVIDENCE.FINGERPRINT_MATCH,
   });
   assert.equal(promoted.promoted, true);
-  assert.equal(promoted.reason, 'certified by full-checks');
+  assert.equal(promoted.reason, 'a boot was observed (full-checks) and it was running this content');
   const meta = readBackupMeta(copy.dir);
   assert.equal(meta.certifiedBy, 'full-checks');
   assert.equal(meta.certificationEvidence, 'fingerprint-match');
@@ -284,14 +284,14 @@ test('markKnownGood records source AND criterion, and a later promotion does not
   );
 });
 
-test('a promotion that names a source and NO criterion says out loud that the copy is not certified', (t) => {
+test('a promotion that names a source and NO criterion says out loud that nothing says the content came up', (t) => {
   const root = scratch(t, 'writer-no-criterion');
   const backups = backupsRoot(root);
   const copy = makeCopy(backups, '2026-11-01T14-30-00-000Z', { at: 1_000, rawMeta: { kind: KIND_SNAPSHOT, at: 1_000 } });
 
   const promoted = markKnownGood(copy.dir, { reason: 'boot-ok', certifiedBy: CERTIFIED_BY.MANUAL_ROLLBACK });
   assert.equal(promoted.promoted, true, 'the identity was written');
-  assert.match(promoted.reason, /NOT certified/, 'and the caller is told the copy proves nothing');
+  assert.match(promoted.reason, /nothing says the content came up/, 'and the caller is told the copy proves nothing');
   const meta = readBackupMeta(copy.dir);
   assert.equal(meta.certifiedBy, 'manual-rollback', 'the source is stored verbatim');
   assert.equal(meta.certificationEvidence, null);
@@ -389,7 +389,7 @@ test('pruning protects a proven copy, and a polluted one protects nothing', (t) 
   assert.equal(refused.skipped, false);
   assert.deepEqual(refused.removed, [polluted.name], 'the older, unproven copy went');
   assert.equal(refused.certifiedCount, 0);
-  assert.match(String(refused.reason), /no certified backup/);
+  assert.match(String(refused.reason), /no copy has a restart record/);
   assert.equal(fs.existsSync(polluted.dir), false, 'it is really gone');
 
   // Put it back with a real criterion: now the floor has something to protect.
