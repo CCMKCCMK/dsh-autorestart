@@ -496,7 +496,7 @@ test('the backup list reads the directory, not the copies inside it', () => {
   assert.equal(items[0].dir, path.join(backups, '2026-10-29T00-25-20-000Z'), 'where it lives')
 })
 
-test('the settings page shows the count, the local time, the size and the path', async () => {
+test('the settings page shows the count, the local time and the path', async () => {
   const mounted = mountSettings({
     info: {
       instance: { isDesktopApp: true, platform: 'win32' },
@@ -514,7 +514,8 @@ test('the settings page shows the count, the local time, the size and the path',
             bytes: 123456789,
             files: 2,
             includePlugins: true,
-            // A proven copy: only such a one is drawn as a card (2026-11-02).
+            // The Host still stamps a copy like this, but the page reads no
+            // tier any more (2026-11-02): it renders like every other row.
             kind: 'known-good',
             certifiedBy: 'full-checks',
             certificationEvidence: 'fingerprint-match',
@@ -533,19 +534,29 @@ test('the settings page shows the count, the local time, the size and the path',
   assert.equal(value('count'), '当前 1 份，可用于回退的 1 份', 'the count, and how many of them could save the user')
   assert.equal(value('keep'), '最多保留 2 份，超出自动删最旧的那份。', 'the keep limit')
   assert.equal(value('time'), '2026-10-29 08:25', 'the local time, to the minute and without the offset')
-  assert.equal(value('size'), '117.7 MB', 'the size, with the tenth that says something')
-  assert.equal(value('plugins'), '（含已装插件）', 'whether the plugins are in it')
+  // THE PER-COPY SIZE AND SCOPE ROWS ARE GONE (user decision, 2026-11-02): the
+  // row answers "which copy do I go back to", and a byte count next to the
+  // button only pushed the button away. The TOTAL stays — that is the number the
+  // disk question is about — so the fitted unit is still pinned here.
+  assert.deepEqual(backupValues(panel, 'size'), [], 'no per-copy size row any more')
+  assert.deepEqual(backupValues(panel, 'plugins'), [], 'no per-copy plugin scope either')
+  assert.equal(
+    value('footprint'),
+    '实际占用 117.7 MB，当前 1 份',
+    'the total footprint is still reported, with the unit that fits it',
+  )
   assert.equal(value('path'), 'C:\\Users\\fg\\.dsh\\storages\\dsh-autorestart\\backups', 'where they live')
 })
 
 /* ------------------------------------------------------------------ *
- * THE BACKUP LIST, one GROUP per backup (user report, 2026-10-29).
+ * THE BACKUP LIST, one ROW per backup (user decision, 2026-11-02).
  *
- * The old list was ONE run-on line — "2026-10-29 22:08:46+08:00 156.0 MB
- * 含已装插件" — which read as a string of numbers: no offset is needed (the
- * time IS the local clock), the time and the size ran into each other, and
- * the size had no name. Each backup is now two labelled rows, and two
- * backups are two groups with air between them.
+ * The list used to be split into "the safe copy" (a card) and everything else
+ * (a fold or a grey count line). That split was a promise the plugin cannot
+ * keep: a hosted instance never certifies anything, so the safe tier sat empty
+ * while every real copy was demoted. Now each copy is ONE row — its local time
+ * and a rollback button — and only the newest row carries the one sentence that
+ * is true about it ("this is the state from before this restart").
  * ------------------------------------------------------------------ */
 
 /** Two backups as the manifest reports them, rendered by the panel. */
@@ -593,7 +604,7 @@ function backupValues(panel, key) {
     .map((node) => textOf(node))
 }
 
-test('a backup names its time and its size, and never prints a timezone offset', async () => {
+test('a backup names its time, and never prints a timezone offset', async () => {
   const mounted = mountSettings({
     info: {
       instance: { isDesktopApp: true, platform: 'win32' },
@@ -604,9 +615,20 @@ test('a backup names its time and its size, and never prints a timezone offset',
   const panel = await mounted.settled('dsh-autorestart')
   const text = textOf(panel)
 
-  // ① The two rows say WHAT they are.
-  assert.ok(text.includes('备份时间'), `the time row must be labelled: ${text}`)
-  assert.ok(text.includes('备份大小'), `the size row must be labelled: ${text}`)
+  // ① EVERY COPY IS ONE ROW — its time and the way back (user decision,
+  // 2026-11-02). The labelled "备份时间"/"备份大小" rows went with the tier: the
+  // row is a copy, not a table of numbers.
+  const groups = marked(panel, 'data-dsh-autorestart-backup').filter(
+    (node) => node.props['data-dsh-autorestart-backup'] === 'item',
+  )
+  assert.equal(groups.length, 2, 'two copies, two rows')
+  for (const [index, group] of groups.entries()) {
+    const rows = walk(group).filter((node) => node.props
+      && String(node.props.className).includes('dsh-autorestart-settings__backup-row'))
+    assert.equal(rows.length, 1, `backup ${index + 1} is exactly one row`)
+  }
+  assert.equal(text.includes('备份时间'), false, 'no per-copy time label any more')
+  assert.equal(text.includes('备份大小'), false, 'no per-copy size label any more')
 
   // ② No offset anywhere — it is the local clock of the machine that took it.
   assert.equal(/[+-]\d{2}:\d{2}/.test(text), false, `no timezone offset may be printed: ${text}`)
@@ -619,9 +641,17 @@ test('a backup names its time and its size, and never prints a timezone offset',
     'the local time, to the minute, without the offset',
   )
   assert.equal(/22:08:\d{2}/.test(text), false, 'no seconds')
+
+  // ③ Every row carries the button that goes back to THAT copy: a row without a
+  // way back would be a dead end, and the list is the only door to a rollback.
+  assert.deepEqual(
+    backupValues(panel, 'rollback'),
+    ['回退到这一份', '回退到这一份'],
+    'one rollback button per copy, in the same order as the times',
+  )
 })
 
-test('the size is written with the unit that fits it, and no pointless .0', async () => {
+test('the size that is still on the page is the total, with the unit that fits it', async () => {
   const mounted = mountSettings({
     info: {
       instance: { isDesktopApp: true, platform: 'win32' },
@@ -632,20 +662,21 @@ test('the size is written with the unit that fits it, and no pointless .0', asyn
   const panel = await mounted.settled('dsh-autorestart')
   const text = textOf(panel)
 
-  // ③ 156 MB, never 156.0 MB. ④ 92 KB stays in KB.
-  assert.deepEqual(backupValues(panel, 'size'), ['156 MB', '92 KB'], 'the unit follows the byte count')
-  assert.equal(text.includes('156.0'), false, `no pointless tenth: ${text}`)
-  assert.equal(text.includes('0.1 MB'), false, '92 KB must not be shown as a fraction of a MB')
-
-  // The plugin scope travels with the size (it explains the size), in brackets.
+  // ③ THE PER-COPY SIZE ROW IS GONE (user decision, 2026-11-02), so what is left
+  // to check is the TOTAL: 163577856 + 94208 bytes = 156.1 MB, printed with the
+  // unit that fits it.
+  assert.deepEqual(backupValues(panel, 'size'), [], 'no per-copy size row any more')
+  assert.deepEqual(backupValues(panel, 'plugins'), [], 'no per-copy plugin scope either')
   assert.deepEqual(
-    backupValues(panel, 'plugins'),
-    ['（含已装插件）', '（不含已装插件）'],
-    'whether the plugins are in it, right after the size',
+    backupValues(panel, 'footprint'),
+    ['实际占用 156.1 MB，当前 2 份'],
+    'the total footprint, with the unit that fits it',
   )
+  assert.equal(text.includes('156.0'), false, `no pointless tenth: ${text}`)
+  assert.equal(text.includes('0.1 MB'), false, 'the KB copy must not read as a fraction of a MB')
 })
 
-test('two backups are two spaced groups, each with a labelled time row and size row', async () => {
+test('two backups are two rows, each with its time and its own rollback button', async () => {
   const mounted = mountSettings({
     info: {
       instance: { isDesktopApp: true, platform: 'win32' },
@@ -655,11 +686,15 @@ test('two backups are two spaced groups, each with a labelled time row and size 
   })
   const panel = await mounted.settled('dsh-autorestart')
 
-  // ⑤ ONE group per backup, with the two rows inside it.
+  // ⑤ ONE row per backup, and the row is its time plus its own way back
+  // (user decision, 2026-11-02). There is no per-copy 详情 fold any more: the
+  // rows it used to hide (identity, who certified it, content scope,
+  // intervention) are not drawn at all, so a fold would open onto nothing.
   const groups = marked(panel, 'data-dsh-autorestart-backup').filter(
     (node) => node.props['data-dsh-autorestart-backup'] === 'item',
   )
-  assert.equal(groups.length, 2, 'two backups are two groups')
+  assert.equal(groups.length, 2, 'two backups are two rows')
+  const carried = []
   for (const [index, group] of groups.entries()) {
     assert.equal(
       String(group.props.className).includes('dsh-autorestart-settings__backup'),
@@ -668,32 +703,58 @@ test('two backups are two spaced groups, each with a labelled time row and size 
     )
     const rows = walk(group).filter((node) => node.props
       && String(node.props.className).includes('dsh-autorestart-settings__backup-row'))
-    // DEFAULT SINCE 2026-11-02: the four evidence rows are folded away, so only
-    // the time and the size are on screen. The incident's lesson is kept by the
-    // half below: opening 详情 must bring every row back.
-    assert.equal(rows.length, 2, `backup ${index + 1} shows its time and size rows; the evidence rows are folded`)
-    const fold = walk(group).find((node) => node.type === 'details'
-      && node.props && node.props['data-dsh-autorestart-backup'] === 'list-details')
-    assert.ok(fold, `backup ${index + 1} has a 详情 fold`)
-    assert.equal(fold.props.open, undefined, `backup ${index + 1} starts folded: this boot was not rescued`)
-    fold.props.onToggle({ target: { open: true } })
+    assert.equal(rows.length, 1, `backup ${index + 1} is ONE row`)
+    const row = rows[0]
+    const time = walk(row).find((node) => node.props
+      && node.props['data-dsh-autorestart-backup'] === 'time')
+    assert.ok(time, `backup ${index + 1} names its time`)
+    assert.equal(
+      textOf(time),
+      index === 0 ? '2026-10-29 22:08' : '2026-10-28 09:12',
+      `backup ${index + 1} shows the local time of the copy it is`,
+    )
+    const button = walk(row).find((node) => node.props
+      && node.props['data-dsh-autorestart-backup'] === 'rollback')
+    assert.ok(button, `backup ${index + 1} offers its way back`)
+    assert.equal(button.type, 'button', `the way back of backup ${index + 1} is a real button`)
+    assert.equal(textOf(button), '回退到这一份', `backup ${index + 1} says what the button does`)
+    assert.notEqual(button.props.disabled, true, `backup ${index + 1} can be restored: nothing is busy`)
+    carried.push(button.props['data-backup-name'])
+    assert.equal(
+      walk(group).filter((node) => node.type === 'details').length,
+      0,
+      `backup ${index + 1} has no 详情 fold — there is no hidden row to open`,
+    )
   }
-  // OPENED: every row is there again — evidence is never unreachable.
-  const opened = mounted.render('dsh-autorestart')
-  const openedGroups = marked(opened, 'data-dsh-autorestart-backup').filter(
-    (node) => node.props['data-dsh-autorestart-backup'] === 'item',
+  // The button names the copy it restores: a row carrying the wrong name would
+  // restore the wrong copy, which is the one mistake here that cannot be undone.
+  assert.deepEqual(
+    carried,
+    ['2026-10-29T14-08-46-000Z', '2026-10-28T01-12-30-000Z'],
+    'newest first, and every button carries its own copy',
   )
-  for (const [index, group] of openedGroups.entries()) {
-    const rows = walk(group).filter((node) => node.props
-      && String(node.props.className).includes('dsh-autorestart-settings__backup-row'))
-    assert.equal(rows.length, 6, `backup ${index + 1} shows all six rows once 详情 is opened`)
-    const marks = new Set(walk(group)
-      .map((node) => node.props && node.props['data-dsh-autorestart-backup'])
-      .filter((value) => typeof value === 'string'))
-    for (const name of ['time', 'size', 'certified', 'certification-evidence', 'certified-at', 'scope', 'intervention']) {
-      assert.equal(marks.has(name), true, `backup ${index + 1} shows its "${name}" row once opened`)
-    }
-  }
+
+  // THE BUTTON ONLY ASKS (user decision, 2026-10-30): pressing it opens the
+  // confirmation that names the copy, and nothing is posted until that card is
+  // confirmed — one click must never replace the current state.
+  const secondButton = walk(groups[1]).find((node) => node.props
+    && node.props['data-dsh-autorestart-backup'] === 'rollback')
+  secondButton.props.onClick()
+  const asked = mounted.render('dsh-autorestart')
+  const confirmBody = marked(asked, 'data-dsh-autorestart-backup').find(
+    (node) => node.props['data-dsh-autorestart-backup'] === 'rollback-confirm-body',
+  )
+  assert.ok(confirmBody, 'the confirmation appears')
+  assert.ok(
+    textOf(confirmBody).includes('2026-10-28 09:12'),
+    `it names the copy that would be restored: ${textOf(confirmBody)}`,
+  )
+  assert.equal(
+    mounted.fetches.filter((call) => String(call.url).includes('rollback')).length,
+    0,
+    'and nothing was posted: the click only opened the question',
+  )
+
 
   // ...and the stylesheet keeps two groups apart (>= 8px, as asked).
   const style = mounted.styles.find((entry) => entry.id === 'dsh-autorestart-sleep')
@@ -836,85 +897,6 @@ test('① every copy reports its own kind — known-good, snapshot or unknown', 
   }
 })
 
-test('② only the copy that could save the user is written out as a card', async () => {
-  const mounted = mountSettings({
-    info: {
-      instance: { isDesktopApp: true, platform: 'win32' },
-      supervisor: { mode: 'app', installed: false, startup: { mode: 'desktop' } },
-      backups: threeIdentities(),
-    },
-  })
-  const panel = await mounted.settled('dsh-autorestart')
-  // ONE card, and it is the proven copy (user decision, 2026-11-02): the other
-  // two are still listed, but as one small line each — the page must answer
-  // "which copy saves me?" with exactly one card.
-  assert.deepEqual(
-    backupValues(panel, 'kind'),
-    ['安全份'],
-    'only the proven copy is drawn as a card, and it says what it is',
-  )
-  assert.deepEqual(
-    backupValues(panel, 'version'),
-    [],
-    'no plugin version on a card — it reads like a downgrade notice and proves nothing',
-  )
-  assert.equal(textOf(panel).includes('版本 0.8.5'), false, 'the version is not printed anywhere')
-  // PLAN B (user decision, 2026-11-02): the two unproven copies are NOT listed
-  // at all. One grey line counts them and says they are never restored.
-  assert.deepEqual(backupValues(panel, 'other-line'), [], 'no per-copy line for unproven copies')
-  const others = walk(panel).find((node) => node.props
-    && node.props['data-dsh-autorestart-backup'] === 'others-summary')
-  assert.ok(others, 'the count line stands in for them')
-  assert.equal(others.props['data-others-count'], '2', 'and it counts both of them')
-  assert.ok(textOf(others).includes('不会自动还原'), `and says they are never restored automatically: ${textOf(others)}`)
-  assert.equal(
-    marked(panel, 'data-dsh-autorestart-backup').filter(
-      (node) => node.props['data-dsh-autorestart-backup'] === 'rollback',
-    ).length,
-    1,
-    'only the copy that could be used offers the rollback — a seed or a snapshot must not be one click away',
-  )
-  // The identity leads the group: it decides whether the copy may be restored
-  // at all, so it must not be buried under the numbers.
-  // The evidence rows are folded by default (2026-11-02): this case reads them
-  // in the OPENED state, because what it guards is that they exist and say the
-  // right thing — not that they are on screen by default.
-  for (const fold of walk(panel).filter((node) => node.type === 'details'
-    && node.props && node.props['data-dsh-autorestart-backup'] === 'list-details')) {
-    fold.props.onToggle({ target: { open: true } })
-  }
-  const openedPanel = mounted.render('dsh-autorestart')
-  const groups = marked(openedPanel, 'data-dsh-autorestart-backup').filter(
-    (node) => node.props['data-dsh-autorestart-backup'] === 'item',
-  )
-  assert.equal(groups.length, 1, 'one proven copy, one card')
-  for (const [index, group] of groups.entries()) {
-    const first = walk(group).find((node) => node.props && node.props['data-dsh-autorestart-backup'] === 'kind')
-    assert.ok(first, `backup ${index + 1} names its identity`)
-    const rows = walk(group).filter((node) => node.props
-      && String(node.props.className).includes('dsh-autorestart-settings__backup-row'))
-    // SIX ROWS SINCE 2026-11-01: the identity is followed by its evidence
-    // (certified by / WHICH CRITERION / content scope / intervention), and the
-    // time and size rows are still there — one each, as before.
-    assert.equal(rows.length, 6, `backup ${index + 1} keeps the time row, the size row and the evidence rows`)
-  }
-  assert.deepEqual(
-    backupValues(openedPanel, 'certified'),
-    ['四项启动自检全过'],
-    'the card says who proved it — and it is the proven copy',
-  )
-  assert.deepEqual(
-    backupValues(openedPanel, 'certification-evidence'),
-    ['指纹比对通过（新判据）'],
-    'and WHICH criterion was checked, which is what makes the seal worth something',
-  )
-  assert.deepEqual(
-    backupValues(openedPanel, 'intervention'),
-    ['没有记录'],
-    'an unrecorded intervention is shown as unrecorded, never as "no"',
-  )
-})
-
 test('③ the paragraph above the list spells out the rules: 3 copies, only known-good is rolled back', async () => {
   const mounted = mountSettings({
     info: {
@@ -937,34 +919,6 @@ test('③ the paragraph above the list spells out the rules: 3 copies, only know
   assert.ok(text.includes('重启'), 'and then restarts')
 })
 
-test('④ the identities speak English too, and the paragraph follows the language', async () => {
-  const mounted = mountSettings({
-    language: 'en',
-    info: {
-      instance: { isDesktopApp: true, platform: 'win32' },
-      supervisor: { mode: 'app', installed: false, startup: { mode: 'desktop' } },
-      backups: threeIdentities(),
-    },
-  })
-  const panel = await mounted.settled('dsh-autorestart')
-  assert.deepEqual(
-    backupValues(panel, 'kind'),
-    ['Known good'],
-    'the English user reads the same one card, under the same rule',
-  )
-  assert.deepEqual(backupValues(panel, 'other-line'), [], 'no per-copy line for unproven copies in English either')
-  const othersEn = walk(panel).find((node) => node.props
-    && node.props['data-dsh-autorestart-backup'] === 'others-summary')
-  assert.ok(othersEn, 'the count line is there in English too')
-  assert.ok(textOf(othersEn).includes('never restored automatically'), `and says what they are: ${textOf(othersEn)}`)
-  const hint = marked(panel, 'data-dsh-autorestart-backup').filter(
-    (node) => node.props['data-dsh-autorestart-backup'] === 'identity-hint',
-  )
-  const text = textOf(hint[0])
-  assert.ok(text.includes('known-good copy is rolled back'), `only known-good in English: ${text}`)
-  assert.ok(text.includes('3 copies'), `the retention rule in English: ${text}`)
-})
-
 test('the backup list speaks English too', async () => {
   const mounted = mountSettings({
     language: 'en',
@@ -976,10 +930,27 @@ test('the backup list speaks English too', async () => {
   })
   const panel = await mounted.settled('dsh-autorestart')
   const text = textOf(panel)
-  assert.ok(text.includes('Backup time'), `the English time label: ${text}`)
-  assert.ok(text.includes('Backup size'), `the English size label: ${text}`)
-  assert.deepEqual(backupValues(panel, 'plugins'), ['(plugins included)', '(plugins excluded)'])
-  assert.deepEqual(backupValues(panel, 'size'), ['156 MB', '92 KB'])
+  // THE SAME TWO ROWS IN ENGLISH (2026-11-02): one local time and one way back
+  // per copy, and the newest row carries the sentence in the page's language.
+  // (The old per-copy "Backup time"/"Backup size" labels went with the size row,
+  // so the row is checked by what it SAYS, not by a label next to it.)
+  assert.deepEqual(
+    backupValues(panel, 'time'),
+    ['2026-10-29 22:08', '2026-10-28 09:12'],
+    'the local time of each copy, never the directory name',
+  )
+  assert.deepEqual(
+    backupValues(panel, 'rollback'),
+    ['Roll back to this copy', 'Roll back to this copy'],
+    'the way back is translated — never a key name, never Chinese',
+  )
+  assert.deepEqual(
+    backupValues(panel, 'newest-hint'),
+    ['This is the state from before this restart. If this restart caused the problem, going back to this copy fixes it; if it was already broken before the restart, this copy cannot fix it either.'],
+    'the one sentence is printed once, in English, on the newest copy',
+  )
+  assert.deepEqual(backupValues(panel, 'size'), [], 'no per-copy size row in English either')
+  assert.deepEqual(backupValues(panel, 'plugins'), [], 'no per-copy plugin scope in English either')
   assert.equal(/[+-]\d{2}:\d{2}/.test(text), false, 'no offset in English either')
 })
 
@@ -1157,94 +1128,6 @@ test('the rescue group is the SAME on both ends (plan B): the desktop entry beco
   assert.ok(titlesOf(hostedPanel).includes('开机自启'), 'the web page keeps the start-at-login group')
 })
 
-/**
- * THE FLOOD (user report, 2026-11-02): the machine had more than fifteen
- * unverified copies, so the page opened with fifteen sentences saying "an
- * unverified copy, never restored automatically" — and the safe copy with its
- * rollback button was pushed off the first screen. Only the useful ones may be
- * drawn flat now; the rest are one line that names the count and opens on demand.
- */
-function manyUnverified(count) {
-  const items = [
-    {
-      name: '2026-11-02T00-00-00-000Z',
-      dir: 'C:\\Users\\fg\\.dsh\\storages\\dsh-autorestart\\backups\\2026-11-02T00-00-00-000Z',
-      at: 1793558400000,
-      atLocal: '2026-11-02T08:00:00+08:00',
-      bytes: 204800,
-      configFiles: 3,
-      includePlugins: true,
-      version: '0.8.6',
-      kind: 'known-good',
-      certifiedBy: 'full-checks',
-      certificationEvidence: 'fingerprint-match',
-    },
-  ]
-  for (let index = 0; index < count; index += 1) {
-    items.push({
-      name: '2026-11-01T' + String(index).padStart(2, '0') + '-00-00-000Z',
-      dir: 'C:\\Users\\fg\\.dsh\\storages\\dsh-autorestart\\backups\\2026-11-01T' + String(index).padStart(2, '0'),
-      at: 1793472000000 - index * 3600000,
-      atLocal: '2026-11-01T' + String(index).padStart(2, '0') + ':00:00+08:00',
-      bytes: 1024,
-      configFiles: 3,
-      includePlugins: false,
-      kind: 'unverified',
-      certifiedBy: 'none',
-      certificationEvidence: 'none',
-    })
-  }
-  return { dir: 'C:\\Users\\fg\\.dsh\\storages\\dsh-autorestart\\backups', max: 20, count: items.length, items }
-}
-
-test('unverified copies are NOT listed at all — one grey count line and nothing else (plan B)', async () => {
-  const mounted = mountSettings({
-    info: {
-      instance: { isDesktopApp: true, platform: 'win32' },
-      supervisor: { mode: 'app', installed: false, startup: { mode: 'desktop' } },
-      backups: manyUnverified(16),
-    },
-  })
-  const panel = await mounted.settled('dsh-autorestart')
-
-  // The useful things stay visible: the safe copy is still a card with a button.
-  assert.deepEqual(backupValues(panel, 'kind'), ['安全份'], 'the safe copy is still the card')
-  assert.equal(
-    marked(panel, 'data-dsh-autorestart-backup').filter(
-      (node) => node.props['data-dsh-autorestart-backup'] === 'rollback',
-    ).length,
-    1,
-    'and it still has its rollback button',
-  )
-
-  // NO ENTRY for an unverified copy (user decision, 2026-11-02): they can never
-  // be rolled back, so there is nothing to show — not a line, not a fold.
-  assert.deepEqual(backupValues(panel, 'other-line'), [], 'no per-copy line for unverified copies')
-  assert.equal(
-    marked(panel, 'data-dsh-autorestart-backup').filter(
-      (node) => node.props['data-dsh-autorestart-backup'] === 'other',
-    ).length,
-    0,
-    'and no entry hidden in a fold either',
-  )
-  assert.equal(
-    walk(panel).filter((node) => node.type === 'details'
-      && node.props && node.props['data-dsh-autorestart-backup'] === 'others-details').length,
-    0,
-    'there is no fold to open — the copies are simply not drawn',
-  )
-
-  // ONE grey line says how many there are and what they are worth.
-  const summary = walk(panel).find((node) => node.props
-    && node.props['data-dsh-autorestart-backup'] === 'others-summary')
-  assert.ok(summary, 'the count line is there')
-  assert.equal(summary.props['data-others-count'], '16', 'and it counts every one of them')
-  assert.match(
-    textOf(summary),
-    /另有 16 份重启前自动拍的备份（未验证，不会自动还原）/,
-    'in plain words, saying they are never restored automatically',
-  )
-})
 
 test('on Windows the script paths are there too — folded, and always in the tree', async () => {
   const mounted = mountSettings({
@@ -1343,11 +1226,17 @@ test('the whole backup explanation is one fold, closed by default', async () => 
   )
 
   // EVERY word the task listed lives inside that one fold — the count and the
-  // rules, the cards, the path and the per-plugin recovery.
+  // rules, the rows with their way back, the path and the per-plugin recovery.
+  // (`size` is deliberately absent: the per-copy size row went with the tier on
+  // 2026-11-02, so a size node inside the fold would mean the old layout crept
+  // back in.)
   const inside = new Set(walk(folds[0]).map((node) => node.props && node.props['data-dsh-autorestart-backup'])
     .filter((value) => typeof value === 'string'))
-  for (const key of ['list', 'count', 'keep', 'identity-hint', 'evidence-hint', 'time', 'size', 'path', 'copy-path']) {
+  for (const key of ['list', 'count', 'keep', 'identity-hint', 'evidence-hint', 'time', 'rollback', 'newest-hint', 'path', 'copy-path']) {
     assert.equal(inside.has(key), true, `"${key}" is inside the fold`)
+  }
+  for (const gone of ['size', 'kind', 'certified', 'intervention', 'other-line', 'others-summary', 'list-details']) {
+    assert.equal(inside.has(gone), false, `"${gone}" is not drawn any more, so it cannot be inside the fold`)
   }
   // ...and the per-plugin recovery too, which lives in its own key space.
   assert.equal(
@@ -1381,11 +1270,13 @@ test('a boot the watchdog rescued opens the fold and says so on the title', asyn
 })
 
 /* ------------------------------------------------------------------ *
- * THE SEED IS NOT A SAFE COPY (user report, 2026-11-02).
+ * A COPY FROM A FRESH INSTALL (user report, 2026-11-02).
  *
  * The host stamps the first-install seed with `kind: 'known-good'` and
- * `certifiedBy: 'seed'` — a label, not a proof. The page called it "安全份",
- * which is the one thing it must never do.
+ * `certifiedBy: 'seed'` — a label, not a proof — and the page used to call it
+ * "安全份". The tier itself is gone (2026-11-02), so this fixture is kept for
+ * the one case that still needs it: the page must draw such a copy like any
+ * other copy, and never grade it.
  * ------------------------------------------------------------------ */
 
 /** One seed (config only, never proven) and nothing else. */
@@ -1413,71 +1304,7 @@ function seedOnly(extra = {}) {
   }
 }
 
-test('the first-install seed is never shown as 安全份 — it is one line, with no button', async () => {
-  const mounted = mountSettings({
-    info: {
-      instance: { isDesktopApp: true, platform: 'win32' },
-      supervisor: { mode: 'app', installed: false, startup: { mode: 'desktop' } },
-      backups: seedOnly(),
-    },
-  })
-  const panel = await mounted.settled('dsh-autorestart')
-  assert.deepEqual(backupValues(panel, 'kind'), [], 'a seed gets no card and no identity badge')
-  // THE WEAK, MIXED ASSERTION IS SPLIT (2026-11-02). The old line was
-  // `textOf(panel).includes('安全份') === true` — which only proved that the
-  // four characters appear SOMEWHERE in the panel. It would pass just as well
-  // if a card wrongly said 安全份, i.e. it could not fail on the very mistake
-  // this test exists to catch.
-  //
-  // What is asserted now is where the word may live: inside the paragraphs that
-  // EXPLAIN it (the identity hint and the certification hint), and nowhere else
-  // — not in an item, not in a badge, not in a line.
-  const occurrences = (text, needle) => String(text).split(needle).length - 1
-  const hintMarkers = new Set(['identity-hint', 'evidence-hint'])
-  const hints = marked(panel, 'data-dsh-autorestart-backup')
-    .filter((node) => hintMarkers.has(node.props['data-dsh-autorestart-backup']))
-  assert.ok(hints.length > 0, 'the rule is explained somewhere')
-  const explained = hints.reduce((sum, node) => sum + occurrences(textOf(node), '安全份'), 0)
-  assert.ok(explained > 0, 'the paragraphs do explain what a 安全份 is')
-  assert.equal(
-    occurrences(textOf(panel), '安全份'),
-    explained,
-    'every mention of 安全份 in the panel lives in an explaining paragraph — no badge, no card, no line',
-  )
-  const marks = marked(panel, 'data-dsh-autorestart-backup')
-    .filter((node) => node.props['data-dsh-autorestart-backup'] === 'kind')
-  assert.equal(marks.length, 0, 'no badge says 安全份 about a seed')
-  // PLAN B: a seed is not a copy you can roll back to, so it is not listed.
-  assert.deepEqual(backupValues(panel, 'other-line'), [], 'the seed is not listed as a copy at all')
-  const seedLine = walk(panel).find((node) => node.props
-    && node.props['data-dsh-autorestart-backup'] === 'others-summary')
-  assert.ok(seedLine, 'a count line stands in for it')
-  assert.equal(seedLine.props['data-others-count'], '1', 'and it counts the seed')
-  assert.equal(
-    marked(panel, 'data-dsh-autorestart-backup').filter(
-      (node) => node.props['data-dsh-autorestart-backup'] === 'rollback',
-    ).length,
-    0,
-    'a seed offers no rollback button: restoring it must not be one click away',
-  )
-  assert.deepEqual(
-    backupValues(panel, 'count'),
-    ['当前 1 份，可用于回退的 0 份'],
-    'the count is honest: nothing here could be used automatically',
-  )
-})
-
-/* ------------------------------------------------------------------ *
- * THE SAME THREE RULES ON A HOSTED WEB HOST (2026-11-02).
- *
- * Every test above that pins the fold, the "安全份" rule and the removed plugin
- * version renders with `isDesktopApp: true`. The page is also what a `dsh web`
- * user sees, and that is a different `instance` record — so the same three
- * promises are asserted here with `isDesktopApp: false`, instead of assuming
- * the desktop rendering stands for both.
- * ------------------------------------------------------------------ */
-
-test('hosted: the fold, the seed rule and the absent version hold on a web host too', async () => {
+test('hosted: the fold, the row-per-copy list and the absent version hold on a web host too', async () => {
   const mounted = mountSettings({
     info: {
       instance: { isDesktopApp: false, platform: 'linux' },
@@ -1495,21 +1322,26 @@ test('hosted: the fold, the seed rule and the absent version hold on a web host 
   assert.equal(folds.length, 1, 'the backup block is one fold on a web host as well')
   assert.notEqual(folds[0].props.open, true, 'and it starts closed')
 
-  // (2) THE SEED IS STILL NOT A 安全份: one line, no card, no badge, no button.
-  assert.deepEqual(backupValues(panel, 'kind'), [], 'no badge says 安全份 about a seed')
-  assert.deepEqual(backupValues(panel, 'other-line'), [], 'the seed is not listed on a web host either')
-  const seedLineWeb = walk(panel).find((node) => node.props
-    && node.props['data-dsh-autorestart-backup'] === 'others-summary')
-  assert.ok(seedLineWeb, 'the count line stands in for it here too')
-  assert.ok(textOf(seedLineWeb).includes('未验证'), `and it says the copy is unproven: ${textOf(seedLineWeb)}`)
-  assert.equal(
-    marked(panel, 'data-dsh-autorestart-backup').filter(
-      (node) => node.props['data-dsh-autorestart-backup'] === 'rollback',
-    ).length,
-    0,
-    'and no rollback button is offered for it',
+  // (2) THE COPY IS ONE ROW with its time and its own button — the same rule as
+  // on the desktop (2026-11-02). The page does not grade copies any more, so it
+  // does not drop one either: a hosted instance certifies nothing, and hiding
+  // every copy behind that fact left the user with no way back at all.
+  const items = marked(panel, 'data-dsh-autorestart-backup').filter(
+    (node) => node.props['data-dsh-autorestart-backup'] === 'item',
   )
-  assert.deepEqual(backupValues(panel, 'count'), ['当前 1 份，可用于回退的 0 份'], 'the count is honest')
+  assert.equal(items.length, 1, 'the one copy is one row, not a count line')
+  assert.deepEqual(backupValues(panel, 'time'), ['2026-10-31 09:00'], 'with the local time of that copy')
+  assert.deepEqual(backupValues(panel, 'rollback'), ['回退到这一份'], 'and its own way back')
+  assert.deepEqual(
+    backupValues(panel, 'newest-hint').length,
+    1,
+    'and the one sentence, because it is also the newest copy',
+  )
+  assert.deepEqual(
+    backupValues(panel, 'count'),
+    ['当前 1 份，可用于回退的 0 份'],
+    'the count still separates "how many" from "how many could save him automatically"',
+  )
 
   // (3) THE MEANINGLESS VERSION NUMBER IS NOT PRINTED — checked against a
   // marker value, so the assertion can fail if the page ever shows it again.
@@ -1527,34 +1359,154 @@ test('hosted: the fold, the seed rule and the absent version hold on a web host 
   )
 })
 
-test('the same copy WITH a verifiable proof is a 安全份 card', async () => {
+test('every copy on disk is one row — three copies are three rows, newest first', async () => {
   const mounted = mountSettings({
     info: {
       instance: { isDesktopApp: true, platform: 'win32' },
       supervisor: { mode: 'app', installed: false, startup: { mode: 'desktop' } },
-      backups: seedOnly({ certifiedBy: 'full-checks', certificationEvidence: 'fingerprint-match' }),
+      backups: threeIdentities(),
     },
   })
   const panel = await mounted.settled('dsh-autorestart')
-  assert.deepEqual(backupValues(panel, 'kind'), ['安全份'], 'the proof is what makes it safe — the kind is not')
-  assert.deepEqual(backupValues(panel, 'other-line'), [], 'and then there is nothing to demote')
+  const items = marked(panel, 'data-dsh-autorestart-backup').filter(
+    (node) => node.props['data-dsh-autorestart-backup'] === 'item',
+  )
+  assert.equal(items.length, 3, 'three copies are three rows — none is demoted to a count line')
+  assert.deepEqual(
+    backupValues(panel, 'time'),
+    ['2026-10-30 09:00', '2026-10-29 09:00', '2026-10-28 09:00'],
+    'newest first, one local time per row',
+  )
+  assert.deepEqual(
+    backupValues(panel, 'rollback'),
+    ['回退到这一份', '回退到这一份', '回退到这一份'],
+    'and every row carries its own way back',
+  )
+  // The three fixtures carry three DIFFERENT stamps (known-good with a proof, a
+  // snapshot, an old unverified copy). The list must not react to any of them:
+  // the same row for all, plus the one sentence on the newest row only.
+  const expectedMarks = [
+    ['item', 'newest-hint', 'rollback', 'time'],
+    ['item', 'rollback', 'time'],
+    ['item', 'rollback', 'time'],
+  ]
+  for (const [index, item] of items.entries()) {
+    const names = [...new Set(walk(item)
+      .map((node) => node.props && node.props['data-dsh-autorestart-backup'])
+      .filter((value) => typeof value === 'string'))].sort()
+    assert.deepEqual(
+      names,
+      expectedMarks[index],
+      `copy ${index + 1} carries exactly its time, its button${index === 0 ? ' and the sentence' : ''}`,
+    )
+  }
 })
 
-test('a known-good KIND without a checkable criterion is not a 安全份 either', async () => {
+test('only the newest copy carries the sentence about this restart', async () => {
   const mounted = mountSettings({
     info: {
       instance: { isDesktopApp: true, platform: 'win32' },
       supervisor: { mode: 'app', installed: false, startup: { mode: 'desktop' } },
-      backups: seedOnly({ certifiedBy: 'full-checks', certificationEvidence: 'none' }),
+      backups: threeIdentities(),
     },
   })
   const panel = await mounted.settled('dsh-autorestart')
-  assert.deepEqual(backupValues(panel, 'kind'), [], 'the old stamp that cannot be checked is not a safe copy')
-  assert.deepEqual(backupValues(panel, 'other-line'), [], 'it is not listed as a copy at all')
-  const stampLine = walk(panel).find((node) => node.props
-    && node.props['data-dsh-autorestart-backup'] === 'others-summary')
-  assert.ok(stampLine, 'the count line stands in for it')
-  assert.ok(textOf(stampLine).includes('不会自动还原'), `and says it is never restored automatically: ${textOf(stampLine)}`)
+  const hints = marked(panel, 'data-dsh-autorestart-backup').filter(
+    (node) => node.props['data-dsh-autorestart-backup'] === 'newest-hint',
+  )
+  assert.equal(hints.length, 1, 'one sentence, never three')
+  assert.equal(
+    textOf(hints[0]),
+    '这是这次重启前的状态。如果问题是这次重启引起的，回到这份就能恢复；如果重启前就已经坏了，这份也修不好。',
+    'verbatim, as the user worded it',
+  )
+  // It belongs to the NEWEST row — the copy taken right before this restart —
+  // and to no other: on an older copy the same sentence would be a false promise.
+  const items = marked(panel, 'data-dsh-autorestart-backup').filter(
+    (node) => node.props['data-dsh-autorestart-backup'] === 'item',
+  )
+  assert.deepEqual(
+    backupValues(panel, 'time'),
+    ['2026-10-30 09:00', '2026-10-29 09:00', '2026-10-28 09:00'],
+    'newest first — that is what makes "the first row" mean "the newest copy"',
+  )
+  assert.equal(
+    walk(items[0]).some((node) => node.props
+      && node.props['data-dsh-autorestart-backup'] === 'newest-hint'),
+    true,
+    'the first row carries the sentence',
+  )
+  for (const [index, item] of items.slice(1).entries()) {
+    assert.equal(
+      walk(item).some((node) => node.props
+        && node.props['data-dsh-autorestart-backup'] === 'newest-hint'),
+      false,
+      `copy ${index + 2} carries no sentence about this restart`,
+    )
+  }
+})
+
+test('a copy carrying the old safe stamp is drawn like every other copy', async () => {
+  // The Host still stamps copies with kind / certifiedBy / certificationEvidence
+  // and a version. Until 2026-11-02 the page turned that into a "安全份" card
+  // and demoted the rest, but the tier was a promise this plugin cannot keep (a
+  // hosted instance certifies nothing, so the safe tier stayed empty forever).
+  // What is pinned here is that the fields still arriving change NOTHING about
+  // the rendering — including the strongest-looking stamp there is.
+  const backups = threeIdentities()
+  backups.items[0] = { ...backups.items[0], version: '9.9.9-version-marker' }
+  backups.items[1] = {
+    ...backups.items[1],
+    kind: 'known-good',
+    certifiedBy: 'full-checks',
+    certificationEvidence: 'fingerprint-match',
+  }
+  backups.items[2] = { ...backups.items[2], kind: 'known-good', certifiedBy: 'seed', certificationEvidence: 'none' }
+  const mounted = mountSettings({
+    info: {
+      instance: { isDesktopApp: true, platform: 'win32' },
+      supervisor: { mode: 'app', installed: false, startup: { mode: 'desktop' } },
+      backups,
+    },
+  })
+  const panel = await mounted.settled('dsh-autorestart')
+  const items = marked(panel, 'data-dsh-autorestart-backup').filter(
+    (node) => node.props['data-dsh-autorestart-backup'] === 'item',
+  )
+  assert.equal(items.length, 3, 'three rows, whatever the stamps say')
+  assert.deepEqual(
+    backupValues(panel, 'rollback'),
+    ['回退到这一份', '回退到这一份', '回退到这一份'],
+    'every copy keeps its own way back — none is dropped for being unproven',
+  )
+  // No tier node is drawn at all: the page does not read these fields any more.
+  const marks = new Set(marked(panel, 'data-dsh-autorestart-backup')
+    .map((node) => node.props['data-dsh-autorestart-backup']))
+  for (const gone of [
+    'kind',
+    'version',
+    'certified',
+    'certified-at',
+    'certification-evidence',
+    'scope',
+    'intervention',
+    'other',
+    'other-line',
+    'others-summary',
+    'list-details',
+  ]) {
+    assert.equal(marks.has(gone), false, `no "${gone}" node is drawn any more`)
+  }
+  // ...and no row is labelled as safe or as verified, on any copy.
+  for (const [index, item] of items.entries()) {
+    assert.equal(textOf(item).includes('安全份'), false, `copy ${index + 1} is not labelled 安全份`)
+    assert.equal(textOf(item).includes('已验证'), false, `copy ${index + 1} is not labelled 已验证`)
+  }
+  assert.equal(
+    textOf(panel).includes('9.9.9-version-marker'),
+    false,
+    'the plugin version is still not printed, even when the Host sends one',
+  )
 })
 
 /* ------------------------------------------------------------------ *
@@ -1984,7 +1936,7 @@ test('the shortcut icon and the desktop .lnk come from one answer', async () => 
 // ---------------------------------------------------------------------------
 
 function backupLocale(lang) {
-  const dict = JSON.parse(fs.readFileSync(path.join(LOCALE_DIR, lang + '.json'), 'utf8'))
+  const dict = JSON.parse(fs.readFileSync(new URL('../locale/' + lang + '.json', import.meta.url), 'utf8'))
   return dict.settings.backup
 }
 
@@ -2035,10 +1987,7 @@ test('the answer is reported as it came back, including the protected copies', (
 
 /** The body of the settings component, for the assertions above. */
 function functionBodyOfSettings() {
-  const source = fs.readFileSync(
-    path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'client.js'),
-    'utf8',
-  )
+  const source = fs.readFileSync(new URL('../client.js', import.meta.url), 'utf8')
   const start = source.indexOf('const submitBackupLimit')
   assert.notEqual(start, -1, 'the submit handler is there')
   // The handler sits in the state area and the control it serves renders further
