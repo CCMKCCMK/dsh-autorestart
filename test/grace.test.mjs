@@ -660,8 +660,8 @@ test('the settings section offers the restart wait and the shutdown countdown', 
   const restartControls = walk(groups[0]).filter((node) => node.type === 'select' || node.type === 'input')
   assert.deepEqual(
     restartControls.map((node) => node.props['data-dsh-autorestart-setting']),
-    ['restartGraceMs', 'backupOnRestart', 'backupIncludePlugins'],
-    'the restart group carries the wait and the two backup switches',
+    ['restartGraceMs', 'backupOnRestart', 'backupIncludePlugins', 'maxBackups'],
+    'the restart group carries the wait, the two backup switches and the copy limit',
   )
   const shutdownControls = walk(groups[1]).filter((node) => node.type === 'select' || node.type === 'input')
   assert.deepEqual(
