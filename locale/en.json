@@ -205,7 +205,7 @@
       "label": "Backup before a restart",
       "hint": "Saved automatically before every restart, so a host that cannot boot again can be rolled back. What it holds: your settings (always); plugins you wrote yourself and linked to their source directory (their files are copied too); plugins installed from the internet (only which ones and which version are recorded, the files are not copied, reinstall them from that list if something goes wrong).",
       "list": "What is backed up right now",
-      "count": "{n} copies right now, {m} can be rolled back to",
+      "count": "{n} copies right now",
       "sectionNote": "Contains: a plugin will not start? Put it back to the previous version",
       "multiProfile": "More than one profile was found, so backups and rollbacks are paused: it cannot tell which one to back up. Fix it by starting with DSH_PROFILE set, or by keeping a single profile.",
       "keep": "At most {n} copies are kept; the oldest one is deleted when there are more.",
@@ -255,14 +255,12 @@
         "false": "no, nothing had to step in",
         "unknown": "not recorded"
       },
-      "evidenceHint": "\"Certified by\" says WHY a copy counts as safe: all four startup checks passed, the health probe answered in command mode, it is the first-install seed, or a human confirmed a manual rollback. \"Not certified\" means there is no evidence at all — such a copy is never treated as a safe one. When a boot had to be rescued by the watchdog, the evidence records that too, so a later selector can refuse that copy.",
       "version": "version {v}",
       "fallback": {
         "seed": "There is also a first-install seed copy (settings only, not verified, used only when the copy above is unavailable), {time}, {size}",
         "other": "There is also an unverified copy (never restored automatically, used only when the copy above is unavailable), {time}, {size}"
       },
       "othersSummary": "{n} more pre-restart snapshots (unverified, never restored automatically)",
-      "identityHint": "A backup has one of two identities: ① “known good” — the copy a boot has proven; when something breaks, only a known-good copy is rolled back, and the first install creates one automatically. ② “this restart's snapshot” — taken right before every restart and not proven yet; old backups (unverified) and that snapshot are never rolled back automatically. At most {n} copies are kept together (the oldest goes first; a known-good copy is never deleted). A manual rollback asks for confirmation first, then restarts automatically.",
       "rollback": "Roll back to this copy",
       "newestHint": "This is the state from before this restart. If this restart caused the problem, going back to this copy fixes it; if it was already broken before the restart, this copy cannot fix it either.",
       "rollbackConfirmTitle": "Roll back to this copy?",

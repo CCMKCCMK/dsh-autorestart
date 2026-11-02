@@ -708,7 +708,7 @@ test('① a confirmation posts the NAME to the route and says what is happening'
   )
 })
 
-test('④ the panel writes the backup logic out: 安全份 / 本次快照 / 保留 3 份 / 会自动重启', async () => {
+test('④ the panel no longer writes the old tier out — and the true sentences stay', async () => {
   const mounted = mountSettings({
     info: {
       instance: { isDesktopApp: true, platform: 'win32' },
@@ -718,9 +718,50 @@ test('④ the panel writes the backup logic out: 安全份 / 本次快照 / 保�
   })
   const panel = await mounted.settled('dsh-autorestart')
   const text = textOf(panel)
-  for (const word of ['安全份', '本次快照', '旧备份（未验证）', '保留 3 份', '只会回滚安全份', '会自动重启', '二次确认']) {
-    assert.ok(text.includes(word), `the panel must say "${word}": ${text.slice(0, 400)}`)
+  const value = (key) => {
+    const found = marked(panel, 'data-dsh-autorestart-backup')
+      .filter((node) => node.props['data-dsh-autorestart-backup'] === key)
+    return found.length === 0 ? '' : textOf(found[0])
   }
+  // THE OLD TIER'S WORDS ARE GONE (user report, 2026-11-02). They said a backup
+  // has "one of two identities" and that only a "safe" copy is ever rolled back —
+  // while every row on this page carries its own rollback button. A user who
+  // believed that paragraph did not dare press the button on an older copy, so
+  // the words must not be on the page at all: no badge, no line, no paragraph.
+  for (const word of ['安全份', '本次快照', '旧备份（未验证）', '只会回滚安全份', '认证依据', '未认证']) {
+    assert.equal(
+      text.includes(word),
+      false,
+      `the panel must NOT say "${word}" any more: ${text.slice(0, 400)}`,
+    )
+  }
+  // ...WHILE THE SENTENCES THAT ARE TRUE ARE STILL THERE, verbatim: the deletion
+  // must not take them with it (they were checked against the real page).
+  assert.match(
+    value('footprint'),
+    /^实际占用 [\d.]+ (B|KB|MB|GB)，当前 2 份$/,
+    'the real footprint, with the number of copies',
+  )
+  assert.equal(
+    value('purpose'),
+    '每次重启前自动拍的本地插件完整备份，最多保留 3 份，出问题可自行选择一份回档。',
+    'what the folder is for — and that ANY copy can be chosen',
+  )
+  assert.equal(
+    value('kinds-local'),
+    '链接安装（自己写的）和本地化过的插件（目录里有 .git）都已完整备份，可以回档。',
+    'linked and localized plugins are in the copy in full',
+  )
+  assert.equal(
+    value('kinds-third-party'),
+    '第三方插件由插件作者维护，有异常建议重装',
+    'third-party plugins: reinstall, do not roll back',
+  )
+  assert.equal(
+    value('limit-hint'),
+    '备份会占用磁盘空间，请尽量选择较少的份数',
+    'the disk-space hint under the dropdown',
+  )
 })
 
 test('④ the rollback speaks English too, and never shows a key name', async () => {

@@ -530,8 +530,11 @@ test('the settings page shows the count, the local time and the path', async () 
     const found = nodes.filter((node) => node.props['data-dsh-autorestart-backup'] === key)
     return found.length === 0 ? '' : textOf(found[0])
   }
-  // HOW MANY ARE USABLE, next to how many exist (user decision, 2026-11-02).
-  assert.equal(value('count'), '当前 1 份，可用于回退的 1 份', 'the count, and how many of them could save the user')
+  // HOW MANY EXIST — AND NOTHING MORE (user report, 2026-11-02): the line used to
+  // add "可用于回退的 {m} 份", which implied a tier the list does not have any
+  // more. Every row has its own button now, so the only honest number is the
+  // number of copies.
+  assert.equal(value('count'), '当前 1 份', 'the count of copies, with no tier and no second number')
   assert.equal(value('keep'), '最多保留 2 份，超出自动删最旧的那份。', 'the keep limit')
   assert.equal(value('time'), '2026-10-29 08:25', 'the local time, to the minute and without the offset')
   // THE PER-COPY SIZE AND SCOPE ROWS ARE GONE (user decision, 2026-11-02): the
@@ -938,7 +941,7 @@ test('① every copy reports its own kind — known-good, snapshot or unknown', 
   }
 })
 
-test('③ the paragraph above the list spells out the rules: 3 copies, only known-good is rolled back', async () => {
+test('③ the page no longer promises a tier — the old 安全份 paragraphs are gone, the facts stay', async () => {
   const mounted = mountSettings({
     info: {
       instance: { isDesktopApp: true, platform: 'win32' },
@@ -947,17 +950,57 @@ test('③ the paragraph above the list spells out the rules: 3 copies, only know
     },
   })
   const panel = await mounted.settled('dsh-autorestart')
-  const hint = marked(panel, 'data-dsh-autorestart-backup').filter(
-    (node) => node.props['data-dsh-autorestart-backup'] === 'identity-hint',
+  const text = textOf(panel)
+  // THE TWO EXPLAINING PARAGRAPHS ARE GONE (user report, 2026-11-02). They said a
+  // backup has "one of two identities" and that only a "safe" copy is ever rolled
+  // back — while every row below has its own rollback button. That contradiction
+  // is what made a user afraid to press the button on an older copy, so the four
+  // words of the old tier must not appear anywhere on the page.
+  for (const phrase of ['安全份', '可用于回退', '认证依据', '未认证']) {
+    assert.equal(
+      text.includes(phrase),
+      false,
+      `"${phrase}" is the old tier's wording — it must not be on the page: ${text}`,
+    )
+  }
+  const staleNodes = marked(panel, 'data-dsh-autorestart-backup').filter(
+    (node) => node.props['data-dsh-autorestart-backup'] === 'identity-hint'
+      || node.props['data-dsh-autorestart-backup'] === 'evidence-hint',
   )
-  assert.equal(hint.length, 1, 'the explanation exists exactly once')
-  const text = textOf(hint[0])
-  assert.ok(text.includes('保留 3 份'), `the retention rule is stated with the real number: ${text}`)
-  assert.ok(text.includes('只会回滚安全份'), `only a known-good copy is rolled back: ${text}`)
-  assert.ok(text.includes('第一次安装'), 'the first install seeds a known-good copy')
-  assert.ok(text.includes('旧备份（未验证）'), 'an old copy is never rolled back automatically')
-  assert.ok(text.includes('二次确认'), 'a manual rollback asks first')
-  assert.ok(text.includes('重启'), 'and then restarts')
+  assert.equal(staleNodes.length, 0, 'and the two paragraphs are not drawn as orphan nodes either')
+
+  // WHAT STAYS IS WHAT IS TRUE — checked verbatim, because these four sentences
+  // were verified against the real page and must not drift with the deletion.
+  assert.equal(
+    backupValues(panel, 'keep')[0],
+    '最多保留 3 份，超出自动删最旧的那份。',
+    'the retention rule, with the number in force',
+  )
+  assert.match(
+    backupValues(panel, 'footprint')[0] || '',
+    /^实际占用 [\d.]+ (B|KB|MB|GB)，当前 3 份$/,
+    'the real footprint of the three copies',
+  )
+  assert.equal(
+    backupValues(panel, 'purpose')[0],
+    '每次重启前自动拍的本地插件完整备份，最多保留 3 份，出问题可自行选择一份回档。',
+    'what the folder is for — and that ANY copy can be chosen',
+  )
+  assert.equal(
+    backupValues(panel, 'kinds-local')[0],
+    '链接安装（自己写的）和本地化过的插件（目录里有 .git）都已完整备份，可以回档。',
+    'linked and localized plugins are in the copy in full',
+  )
+  assert.equal(
+    backupValues(panel, 'kinds-third-party')[0],
+    '第三方插件由插件作者维护，有异常建议重装',
+    'third-party plugins: reinstall instead of rolling back',
+  )
+  assert.equal(
+    backupValues(panel, 'limit-hint')[0],
+    '备份会占用磁盘空间，请尽量选择较少的份数',
+    'the disk-space hint under the dropdown',
+  )
 })
 
 test('the backup list speaks English too', async () => {
@@ -1068,8 +1111,8 @@ test('seventeen copies are seventeen rows — the tail is never dropped', async 
   )
   assert.deepEqual(
     backupValues(panel, 'count'),
-    ['当前 17 份，可用于回退的 1 份'],
-    'and the count line stays honest about how many of them could save the user automatically',
+    ['当前 17 份'],
+    'and the count says how many copies there are — no "how many could save you" half',
   )
 })
 
@@ -1351,10 +1394,22 @@ test('the whole backup explanation is one fold, closed by default', async () => 
   // back in.)
   const inside = new Set(walk(folds[0]).map((node) => node.props && node.props['data-dsh-autorestart-backup'])
     .filter((value) => typeof value === 'string'))
-  for (const key of ['list', 'count', 'keep', 'identity-hint', 'evidence-hint', 'time', 'rollback', 'newest-hint', 'path', 'copy-path']) {
+  for (const key of ['list', 'count', 'keep', 'time', 'rollback', 'newest-hint', 'path', 'copy-path']) {
     assert.equal(inside.has(key), true, `"${key}" is inside the fold`)
   }
-  for (const gone of ['size', 'kind', 'certified', 'intervention', 'other-line', 'others-summary', 'list-details']) {
+  for (const gone of [
+    'size',
+    'kind',
+    'certified',
+    'intervention',
+    'other-line',
+    'others-summary',
+    'list-details',
+    // THE TWO EXPLAINING PARAGRAPHS WENT WITH THE TIER (user report, 2026-11-02):
+    // they promised "only a safe copy is rolled back", which the list contradicts.
+    'identity-hint',
+    'evidence-hint',
+  ]) {
     assert.equal(inside.has(gone), false, `"${gone}" is not drawn any more, so it cannot be inside the fold`)
   }
   // ...and the per-plugin recovery too, which lives in its own key space.
@@ -1458,8 +1513,8 @@ test('hosted: the fold, the row-per-copy list and the absent version hold on a w
   )
   assert.deepEqual(
     backupValues(panel, 'count'),
-    ['当前 1 份，可用于回退的 0 份'],
-    'the count still separates "how many" from "how many could save him automatically"',
+    ['当前 1 份'],
+    'the count says how many copies there are — and nothing about a tier on a web host either',
   )
 
   // (3) THE MEANINGLESS VERSION NUMBER IS NOT PRINTED — checked against a
@@ -1621,22 +1676,15 @@ test('a copy carrying the old safe stamp is drawn like every other copy', async 
     assert.equal(textOf(item).includes('安全份'), false, `copy ${index + 1} is not labelled 安全份`)
     assert.equal(textOf(item).includes('已验证'), false, `copy ${index + 1} is not labelled 已验证`)
   }
-  // THE WORD ITSELF MUST NEVER COME BACK AS A LABEL (user report, 2026-11-02).
-  // Counting is the point here: every mention of 安全份 left in the panel has to
-  // sit inside a paragraph that EXPLAINS the rule, so a badge, a row or a count
-  // line that said it again would break the equality below — and that is exactly
-  // the failure this test exists to catch.
+  // THE OLD TIER'S WORDS MUST NOT COME BACK AT ALL (user report, 2026-11-02): the
+  // two paragraphs that USED to explain 安全份 are gone, so the word has no
+  // legitimate home on the page any more — a row, a badge or a re-added paragraph
+  // that said it would now contradict the list and the button on every row.
   const occurrences = (text, needle) => String(text).split(needle).length - 1
-  const hintMarkers = new Set(['identity-hint', 'evidence-hint'])
-  const explained = marked(panel, 'data-dsh-autorestart-backup')
-    .filter((node) => hintMarkers.has(node.props['data-dsh-autorestart-backup']))
-    .reduce((sum, node) => sum + occurrences(textOf(node), '安全份'), 0)
-  assert.ok(explained > 0, 'the paragraphs do explain what a 安全份 is')
-  assert.equal(
-    occurrences(textOf(panel), '安全份'),
-    explained,
-    'every mention of 安全份 lives in an explaining paragraph — no row, no badge, no line',
-  )
+  assert.equal(occurrences(textOf(panel), '安全份'), 0, 'no mention of the old tier is left')
+  assert.equal(occurrences(textOf(panel), '可用于回退'), 0, 'and no "usable for rollback" half-count either')
+  assert.equal(occurrences(textOf(panel), '认证依据'), 0, 'and nothing about "certified by"')
+  assert.equal(occurrences(textOf(panel), '未认证'), 0, 'and nothing about "not certified"')
   assert.equal(
     textOf(panel).includes('9.9.9-version-marker'),
     false,
@@ -2077,7 +2125,7 @@ function backupLocale(lang) {
 
 test('the limit dropdown offers exactly 1-10 and shows the value in force', () => {
   const panel = functionBodyOfSettings()
-  assert.match(panel, /\[1, 2, 3, 4, 5, 6, 7, 8, 9, 10\]\.map/, 'the options are 1..10')
+  assert.match(panel, /\[2, 3, 4, 5, 6, 7, 8, 9, 10\]\.map/, 'the options are 2..10 - one copy is no fallback at all')
   assert.match(panel, /'data-dsh-autorestart-backup': 'limit-select'/, 'the select exists')
   assert.match(
     panel,

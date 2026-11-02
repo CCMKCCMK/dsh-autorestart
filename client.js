@@ -374,7 +374,7 @@
     'meta.description': '让 DeepSeek Harness 重启后接着干活：落盘的检查点、启动时重新武装 goal 或给一条续接提示，以及一次等人闲下来的优雅重启。',
     'text.missing': '（这条文案还没写）',
     'settings.backup.list': '现在备份了什么',
-    'settings.backup.count': '当前 {n} 份，可用于回退的 {m} 份',
+    'settings.backup.count': '当前 {n} 份',
     // THE FOLD SAYS WHAT IS INSIDE IT (user decision, 2026-11-02): with the
     // block collapsed, "某个插件起不来" was invisible — and that is the entry a
     // user needs on the day a plugin breaks.
@@ -454,8 +454,6 @@
     'settings.backup.intervention.true': '有（自动救援动过手）',
     'settings.backup.intervention.false': '没有',
     'settings.backup.intervention.unknown': '没有记录',
-    'settings.backup.evidenceHint': '「认证依据」说的是这一份凭什么算安全：四项启动自检全过、命令模式探活通过、首装种子、还是人工回滚后确认。「未认证」就是没有任何证据——它不会被当成安全份。一旦这次启动是被自动救援还原的，认证证据里会记下「有介入」，下一阶段的选择器可以据此不用它。',
-    'settings.backup.identityHint': '备份有两种身份：①「安全份」——启动成功后验证过的那一份，出问题只会回滚安全份；第一次安装时会自动生成一份。②「本次快照」——每次重启前刚拍的，还没验证过；旧备份（未验证）和它都不会被自动回滚。两类合计最多保留 {n} 份，超出删最旧的那份（安全份不会被删）。手动回退会先二次确认，然后会自动重启。',
     // THE MANUAL ROLLBACK (user decision, 2026-10-30): the user may know better
     // than "the newest proven copy", so ANY copy can be restored — but only
     // after a card that says which one, what it replaces, and that a restart
@@ -888,7 +886,7 @@
     'meta.description': 'Keeps agent work alive across a DeepSeek Harness restart: a durable checkpoint, goal re-arm or a continuation message on boot, and an idle-aware graceful restart the agent can request itself.',
     'text.missing': '(this text is missing yet)',
     'settings.backup.list': 'What is backed up right now',
-    'settings.backup.count': '{n} copies right now, {m} can be rolled back to',
+    'settings.backup.count': '{n} copies right now',
     'settings.backup.sectionNote': 'Contains: a plugin will not start? Put it back to the previous version',
     'settings.backup.multiProfile': 'More than one profile was found, so backups and rollbacks are paused: it cannot tell which one to back up. Fix it by starting with DSH_PROFILE set, or by keeping a single profile.',
     'settings.backup.keep': 'At most {n} copies are kept; the oldest one is deleted when there are more.',
@@ -956,8 +954,6 @@
     'settings.backup.intervention.true': 'yes, the watchdog restored a copy',
     'settings.backup.intervention.false': 'no, nothing had to step in',
     'settings.backup.intervention.unknown': 'not recorded',
-    'settings.backup.evidenceHint': '"Certified by" says WHY a copy counts as safe: all four startup checks passed, the health probe answered in command mode, it is the first-install seed, or a human confirmed a manual rollback. "Not certified" means there is no evidence at all — such a copy is never treated as a safe one. When a boot had to be rescued by the watchdog, the evidence records that too, so a later selector can refuse that copy.',
-    'settings.backup.identityHint': 'A backup has one of two identities: ① “known good” — the copy a boot has proven; when something breaks, only a known-good copy is rolled back, and the first install creates one automatically. ② “this restart\'s snapshot” — taken right before every restart and not proven yet; old backups (unverified) and that snapshot are never rolled back automatically. At most {n} copies are kept together (the oldest goes first; a known-good copy is never deleted). A manual rollback asks for confirmation first, then restarts automatically.',
     // THE MANUAL ROLLBACK (user decision, 2026-10-30): any copy can be restored
     // — but only after a card that says which one, what it replaces, and that
     // a restart follows.
@@ -7390,10 +7386,7 @@
               h(
                 'span',
                 { className: 'dsh-autorestart-settings__value', 'data-dsh-autorestart-backup': 'count' },
-                fill(t('settings.backup.count'), {
-                  n: backupItems.length,
-                  m: backupItems.filter((item) => isSafeBackup(item)).length,
-                }),
+                fill(t('settings.backup.count'), { n: backupItems.length }),
               ),
               h(
                 'span',
@@ -7473,7 +7466,7 @@
                       void submitBackupLimit(wanted)
                     },
                   },
-                  [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((value) =>
+                  [2, 3, 4, 5, 6, 7, 8, 9, 10].map((value) =>
                     h('option', { key: 'limit-' + value, value: String(value) }, String(value))),
                 ),
               ),
@@ -7518,22 +7511,15 @@
                   { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-backup': 'limit-note' },
                   limitNote,
                 ),
-              // WHAT THE TWO IDENTITIES MEAN (user decision, 2026-10-30): the
-              // words on the rows below are useless without the rule behind
-              // them — only a proven copy is ever rolled back, and a manual
-              // rollback asks before it restarts.
-              h(
-                'span',
-                { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-backup': 'identity-hint' },
-                fill(t('settings.backup.identityHint'), { n: backupsInfo.max }),
-              ),
-              // WHAT "certified by" MEANS (2026-11-01): the rows below are
-              // useless without the rule behind them — evidence, not a label.
-              h(
-                'span',
-                { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-backup': 'evidence-hint' },
-                t('settings.backup.evidenceHint'),
-              ),
+              // THE TWO EXPLAINING PARAGRAPHS ARE GONE (user report, 2026-11-02).
+              //
+              // They said a backup has "one of two identities" and that only a
+              // "safe" copy is ever rolled back — but since 2026-11-02 the list
+              // has no tier at all: every copy is one row with its own rollback
+              // button. Keeping the paragraph made the page contradict itself,
+              // and a user who believes it will not dare press the button on an
+              // older copy. What is left on this page is what is TRUE: the count,
+              // the rules in force (`keep`), the rows themselves, the path.
               backupItems.length === 0
                 ? h(
                     'span',
