@@ -28,6 +28,7 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
 import { apply } from '../index.js'
+import { createEmptyState, requestRestart, writeState } from '../lib/checkpoint.js'
 
 const HEALTH_PATH = '/__dsh_autorestart/health'
 const CHOICE_PATH = '/__dsh_autorestart/choice'
@@ -163,7 +164,22 @@ async function choose(routes, body) {
   return { statusCode: res.statusCode, body: JSON.parse(res.body) }
 }
 
-test('the whole plugin has no trace of the removed shutdown reserve', () => {
+/**
+ * TEXT GUARD — NOT a behavioural test (2026-11-02).
+ *
+ * It greps every text file of the plugin for ONE removed key name. What it
+ * catches: the old name coming back into the source (a copy-paste that would
+ * make the page and the host disagree again).
+ *
+ * What it CANNOT catch (so nobody trusts it for more): the removed BEHAVIOUR
+ * coming back under another name. A new `invisibleShutdownReserve` would pass
+ * this test and change exactly the thing the user asked to remove.
+ *
+ * The behavioural guarantees are the tests below: the status payload carries no
+ * reserve field, the choice route refuses the removed key, and the restart
+ * reserve stays independent of the countdown.
+ */
+test('text guard: the removed shutdown reserve key appears nowhere in the plugin', () => {
   const hits = []
   for (const relative of pluginFiles()) {
     const full = path.join(PLUGIN_DIR, relative)
@@ -201,6 +217,143 @@ test('the sleep status reports the countdown, not a silent window', () => {
     false,
     'the shutdown has no invisible window any more',
   )
+})
+
+/* ------------------------------------------------------------------ *
+ * THE GATE, WRITTEN DOWN (2026-11-02).
+ *
+ * "I asked for a restart and nothing happened" used to be a fact nobody could
+ * look up: the only trace was a log line, rate limited to one a minute. These
+ * tests pin the two things the operator now gets instead — WHAT the gate decided
+ * and WHO was resetting the quiet window. They assert the RECORD only; the
+ * decision itself is unchanged (that is the point of the whole task).
+ * ------------------------------------------------------------------ */
+
+/** A context that REMEMBERS the event handlers the plugin registers. */
+function createEventContext({ services = {}, agents = null } = {}) {
+  const made = createContext({ services })
+  const handlers = new Map()
+  made.ctx.on = (name, fn) => {
+    if (!handlers.has(name)) handlers.set(name, [])
+    handlers.get(name).push(fn)
+    return () => {}
+  }
+  if (agents !== null) made.ctx.agents = agents
+  const fire = (name, payload) => {
+    for (const fn of handlers.get(name) || []) fn(payload)
+  }
+  return { ...made, handlers, fire }
+}
+
+/**
+ * The gate record the plugin wrote down (`restart-gate.json`, next to the state
+ * file — its own file, because the state document is rebuilt from a whitelist on
+ * every boot and would drop an extra key).
+ */
+function readGateRecord(stateFile) {
+  return JSON.parse(fs.readFileSync(path.join(path.dirname(stateFile), 'restart-gate.json'), 'utf8'))
+}
+
+/** Apply the plugin on a state file that already holds a pending restart. */
+function applyPendingRestart(label) {
+  const stateFile = tempStateFile(label)
+  const state = createEmptyState()
+  requestRestart(state, { reason: 'diagnostics', bySessionId: 'sess-root', now: Date.now() })
+  writeState(stateFile, state)
+  return { stateFile }
+}
+
+test('a SUBAGENT status report is recorded as the source that reset the window', () => {
+  const { stateFile } = applyPendingRestart('reset-subagent')
+  const subagent = { id: 'sess-sub' }
+  const made = createEventContext({
+    // The root list does NOT contain the subagent: exactly what a child session is.
+    agents: { list: () => [], roots: () => [], get: () => undefined },
+  })
+  const runtime = apply(made.ctx, { stateFile, recoveryDelayMs: 0, enabled: true, settleMs: 60000 })
+
+  made.fire('agent/status', { agent: subagent, status: 'running' })
+  runtime.tick()
+
+  const recorded = readGateRecord(stateFile)
+  assert.equal(recorded.quietResetBy, 'agent-status', 'the source of the reset is named')
+  assert.equal(recorded.quietResetIsSubagent, true, 'and it says the session was a SUBAGENT')
+  assert.equal(recorded.quietResetSessionId, 'sess-sub', 'with its id')
+  assert.equal(typeof recorded.quietResetAt, 'number', 'and when it happened')
+})
+
+test('a ROOT session status report is not marked as a subagent', () => {
+  const { stateFile } = applyPendingRestart('reset-root')
+  const root = { id: 'sess-root' }
+  const made = createEventContext({
+    agents: { list: () => [root], roots: () => [root], get: () => root },
+  })
+  const runtime = apply(made.ctx, { stateFile, recoveryDelayMs: 0, enabled: true, settleMs: 60000 })
+
+  made.fire('agent/status', { agent: root, status: 'running' })
+  runtime.tick()
+
+  const recorded = readGateRecord(stateFile)
+  assert.equal(recorded.quietResetBy, 'agent-status')
+  assert.equal(recorded.quietResetIsSubagent, false, 'a root session is not a subagent')
+  assert.equal(recorded.quietResetSessionId, 'sess-root')
+})
+
+test('a queued inbox message is recorded as its own source', () => {
+  const { stateFile } = applyPendingRestart('reset-inbox')
+  const made = createEventContext()
+  const runtime = apply(made.ctx, { stateFile, recoveryDelayMs: 0, enabled: true, settleMs: 60000 })
+
+  made.fire('agent/inbox/inserted', { agent: { id: 'sess-x' } })
+  runtime.tick()
+
+  assert.equal(readGateRecord(stateFile).quietResetBy, 'inbox-inserted', 'the label says where it came from')
+})
+
+test('the gate record answers what it decided, and the health payload carries it', () => {
+  const { stateFile } = applyPendingRestart('gate-record')
+  const made = createEventContext()
+  const runtime = apply(made.ctx, { stateFile, recoveryDelayMs: 0, enabled: true, settleMs: 60000 })
+
+  runtime.tick()
+
+  const recorded = readGateRecord(stateFile)
+  assert.equal(recorded.action, 'wait', 'nothing was allowed through in this test')
+  assert.equal(recorded.reason, 'settling', 'the quiet window had not filled: that is the reason')
+  assert.equal(recorded.settleMs, 60000, 'the window the gate really used')
+  assert.equal(typeof recorded.quietForMs, 'number', 'how long the host had been quiet')
+  assert.ok(Array.isArray(recorded.blockedBy), 'the blocker list is a list')
+  assert.equal(typeof recorded.queueMs, 'number', 'how long the request has waited')
+  assert.equal(recorded.attempts, 0, 'and how many execution attempts there were')
+
+  // THE SAME RECORD IS REACHABLE FROM THE PAYLOAD the operator actually reads.
+  const res = fakeResponse()
+  routeOf(made.routes, HEALTH_PATH).handler(fakeRequest('GET', undefined, `${HEALTH_PATH}?state=1`), res)
+  const payload = JSON.parse(res.body)
+  assert.ok(payload.restartGate, 'the state payload carries the gate record')
+  assert.equal(payload.restartGate.reason, 'settling')
+  assert.equal(payload.restartGate.action, 'wait')
+  assert.equal(payload.quietResetBy, 'none', 'and the flat reset fields sit next to it')
+  assert.equal(payload.quietResetIsSubagent, false)
+})
+
+test('the gate record survives a host restart (it is read back from disk)', () => {
+  const { stateFile } = applyPendingRestart('gate-persisted')
+  const first = createEventContext()
+  const firstRuntime = apply(first.ctx, { stateFile, recoveryDelayMs: 0, enabled: true, settleMs: 60000 })
+  firstRuntime.tick()
+  const written = readGateRecord(stateFile)
+  assert.equal(written.reason, 'settling', 'the first run wrote it')
+
+  // A NEW boot of the plugin, on the same state directory: the record is still there.
+  const second = createEventContext()
+  apply(second.ctx, { stateFile, recoveryDelayMs: 0, enabled: true, settleMs: 60000 })
+  const res = fakeResponse()
+  routeOf(second.routes, HEALTH_PATH).handler(fakeRequest('GET', undefined, `${HEALTH_PATH}?state=1`), res)
+  const payload = JSON.parse(res.body)
+  assert.ok(payload.restartGate, 'the next boot can still read the decision')
+  assert.equal(payload.restartGate.reason, 'settling')
+  assert.equal(payload.restartGate.at, written.at, 'and it is the same decision, not a new one')
 })
 
 test('the choice route refuses the removed key', async () => {

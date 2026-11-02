@@ -133,7 +133,7 @@ test('the record of a request carries the reason, who ended it and when', () => 
       requesters: [{ sessionId: 'sess-a' }],
     },
     now,
-    extra: { deadlineCutsTheRequest: false, hardMs: 900000 },
+    extra: { waitsForever: true },
   })
 
   assert.equal(record.result, 'cancelled')
@@ -144,7 +144,7 @@ test('the record of a request carries the reason, who ended it and when', () => 
   assert.equal(record.generation, 7);
   assert.equal(record.waitedMs, 5000, 'how long the request had been alive is part of the record');
   assert.deepEqual(record.requesters, ['sess-a']);
-  assert.equal(record.deadlineCutsTheRequest, false);
+  assert.equal(record.waitsForever, true);
 
   const written = writeRestartRequestRecord(dir, record);
   assert.equal(written.ok, true, written.error || '');
@@ -178,14 +178,14 @@ test('the summary tells queued from deferred from cancelled', () => {
     by: 'idle-gate',
     restart: live,
     now: now - 5000,
-    extra: { deadlineAt: now + 900000, deadlineCutsTheRequest: false },
+    extra: { waitsForever: true },
   });
   const deferred = summarizeRestartRequest({ restart: live, record: deferredRecord, now });
   assert.equal(deferred.state, 'deferred');
   assert.equal(deferred.pending, true, 'a postponed request is STILL pending');
   assert.match(String(deferred.reason), /conversation-active/);
-  assert.equal(deferred.deadlineInMs, 900000, 'the deadline the user would otherwise have to guess');
-  assert.equal(deferred.deadlineCutsTheRequest, false, 'the default deadline does not cut the request');
+  assert.equal(deferred.deadlineInMs, undefined, 'there is no deadline to report any more');
+  assert.equal(deferred.deadlineCutsTheRequest, undefined, 'and nothing claims to cut it');
 
   const cancelledRecord = buildRestartRequestRecord({
     result: RESTART_REQUEST_STATES.CANCELLED,
@@ -216,7 +216,7 @@ test('a parked restart request is queued, not "done" — and the record says so'
   assert.equal(answer.accepted, true);
   assert.equal(answer.restartRequest.state, 'queued', 'accepted means QUEUED, not restarted');
   assert.equal(answer.restartRequest.pending, true);
-  assert.equal(answer.restartRequest.deadlineCutsTheRequest, false, 'the default gate never cancels a waiting request');
+  assert.equal(answer.restartRequest.deadlineCutsTheRequest, undefined, 'no deadline field is exposed at all');
 
   const state = readState(file);
   assert.ok(state.restart, 'the request is in the checkpoint');
@@ -228,8 +228,7 @@ test('a parked restart request is queued, not "done" — and the record says so'
   assert.equal(record.by, 'tool:restart');
   assert.equal(record.generation, 1);
   assert.equal(record.requestedAt, state.restart.requestedAt);
-  assert.ok(Number.isFinite(record.hardMs), 'the timeouts the gate uses are part of the record');
-  assert.equal(record.deadlineCutsTheRequest, false);
+  assert.equal(record.waitsForever, true, 'and the record says the wait has no end time');
 });
 
 test('a postponed request stays alive and its record says "deferred" with the reason', () => {
@@ -255,7 +254,12 @@ test('a postponed request stays alive and its record says "deferred" with the re
   const summary = runtime.restartRequestInfo();
   assert.equal(summary.state, 'deferred');
   assert.equal(summary.pending, true, 'the summary says it is still pending');
-  assert.ok(summary.deadlineAt !== null, 'the deadline is reported, not hidden');
+  assert.equal(summary.deadlineAt, undefined, 'and the deadline is gone, not hidden');
+  // NOT ONE deadline field survives in the state payload (user decision,
+  // 2026-11-02): the three names that made everybody read "the request is void".
+  const deadlineKeys = Object.keys(summary).filter((key) => /deadline/i.test(key));
+  assert.deepEqual(deadlineKeys, [], 'the state payload has no deadline field at all');
+  assert.equal(summary.waitsUntilIdle, true, 'and it says what it does instead: wait until idle');
 });
 
 // ---------------------------------------------------------------------------

@@ -449,7 +449,7 @@ test('after the hard deadline the restart waits visibly and keeps the request', 
   // The state payload says what is going on.
   const payload = stateOf(routes)
   assert.ok(payload.longWait, 'the state payload carries the long wait')
-  assert.equal(payload.longWait.reason, 'hard-deadline-waiting-for-conversations')
+  assert.equal(payload.longWait.reason, 'waiting-for-conversations')
   assert.equal(typeof payload.longWait.since, 'number')
   assert.ok(payload.longWait.blockedBy.length >= 1, 'the long wait names the blocker')
   assert.equal(payload.longWait.blockedBy[0].sessionId, 'sess-hold')
@@ -697,7 +697,7 @@ test('the bubble shows one more line while the restart waits for a long time', a
       allowRestart: false,
       longWait: {
         since: 1_700_000_000_000,
-        reason: 'hard-deadline-waiting-for-conversations',
+        reason: 'waiting-for-conversations',
         waitedMs: 192_000,
         blockedBy: [{ sessionId: 'sess-hold', kind: 'session', label: '写代码', name: '写代码' }],
       },
@@ -747,7 +747,7 @@ test('the long-wait line exists in both languages', async () => {
       allowRestart: false,
       longWait: {
         since: 1,
-        reason: 'hard-deadline-waiting-for-conversations',
+        reason: 'waiting-for-conversations',
         waitedMs: 192_000,
         blockedBy: [{ sessionId: 'sess-hold', kind: 'session', label: '写代码', name: '写代码' }],
       },
@@ -766,7 +766,7 @@ test('the long-wait line exists in both languages', async () => {
       allowRestart: false,
       longWait: {
         since: 1,
-        reason: 'hard-deadline-waiting-for-conversations',
+        reason: 'waiting-for-conversations',
         waitedMs: 192_000,
         blockedBy: [{ sessionId: 'sess-hold', kind: 'session', label: 'coding', name: 'coding' }],
       },

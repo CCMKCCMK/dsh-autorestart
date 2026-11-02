@@ -493,6 +493,12 @@ function backupPayload() {
         includePlugins: true,
         kind: 'known-good',
         version: '0.8.5',
+        // A CARD IS DRAWN ONLY FOR A PROVEN COPY (2026-11-02), and only a card
+        // carries "回退到这一份" — so both fixtures are proven ones here. The rule
+        // itself (a seed or a snapshot gets no button) is pinned in
+        // settings-startup-backup.test.mjs.
+        certifiedBy: 'full-checks',
+        certificationEvidence: 'fingerprint-match',
       },
       {
         name: '2026-10-28T01-00-00-000Z',
@@ -502,8 +508,10 @@ function backupPayload() {
         bytes: 94208,
         files: 3,
         includePlugins: false,
-        kind: 'snapshot',
+        kind: 'known-good',
         version: null,
+        certifiedBy: 'manual-rollback',
+        certificationEvidence: 'fingerprint-match',
       },
     ],
   }

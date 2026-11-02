@@ -17,6 +17,22 @@ import test from 'node:test'
 import { apply, detectManualRestart, normalizeConfig, planWatchdogArmCommand, PLUGIN_VERSION_FALLBACK, pluginVersion, resolveStateFile, runPluginRecovery } from '../index.js'
 import { DEFAULTS } from '../index.js'
 import { writeState, createEmptyState, entryFor, markPendingResume, markRunning, requestRestart, setDisarmedGoal, setGoal, setParkedGoal } from '../lib/checkpoint.js'
+// THE HONESTY CHECKS (2026-11-02): sleep / scheduler / watchdog / restart /
+// profile. They are cross-module by nature — each one asserts what the user is
+// told when a subsystem does NOT work ("the shutdown was refused", "this check
+// does not apply here", "nothing is waiting for the new host") — so they live
+// next to the other integration assertions.
+import { createSleepController, detectShutdownPlan, runShutdown } from '../lib/sleep.js'
+import {
+  probeSchedulerCapability,
+  SCHEDULER_NOT_APPLICABLE,
+  SCHEDULER_OK,
+} from '../lib/scheduler-capability.js'
+import { detectWatchdogCapabilities, pickWatchdogTier, TIERS } from '../lib/watchdog-tier.js'
+import { AUTOSTART_ADVICE_KINDS, planAutostartAdvice } from '../lib/autostart-advice.js'
+import { removeLeftoverProbeTasks } from '../lib/watchdog-schedule.js'
+import { confirmWatcherAlive, isProcessAlive, launchDetachedWatcher } from '../lib/restart.js'
+import { profileDirInfo } from '../index.js'
 
 /** Create a temporary state-file path per test. */
 function tempStateFile(label) {
@@ -969,8 +985,7 @@ test('a restart that turned parkGoals off disarms no goal', () => {
   assert.equal(goals['sess-goal'].activation, 'armed');
 });
 
-test('a goal whose round budget is spent is reported instead of disarmed', () => {
-  const { file } = tempStateFile('disarm-exhausted');
+test('a goal whose round budget is spent is reported instead of disarmed', () => {  const { file } = tempStateFile('disarm-exhausted');
   const agent = fakeAgent('sess-goal');
   agent.status = 'running';
   const goals = {
@@ -2324,4 +2339,478 @@ test('apply() runs the boot pass and records its outcome on the runtime', () => 
   const runtime = apply(fake.ctx, { stateFile: file, recoveryDelayMs: 0, enabled: true });
   assert.ok(runtime.pluginRecovery && typeof runtime.pluginRecovery === 'object', 'the pass must run at boot');
   assert.equal(typeof runtime.pluginRecovery.ran, 'boolean');
+});
+
+/* ------------------------------------------------------------------ *
+ * THE «IT WAS LYING» CASES (2026-11-02).
+ *
+ * Every test below asserts the FAILING branch first: what the user is told when
+ * the subsystem does NOT work. Nothing here spawns a real shutdown, creates a
+ * real task or touches a real systemd unit — every system call is injected.
+ * ------------------------------------------------------------------ */
+
+/** A child-process double that emits the events the code listens to. */
+function honestChild(events) {
+  return {
+    pid: 4242,
+    unref() {},
+    on(event, handler) {
+      const args = events[event];
+      if (!args) return;
+      setTimeout(() => handler(...args), 0);
+    },
+  };
+}
+
+const HONEST_SHUTDOWN_PLAN = { command: 'shutdown.exe', args: ['/s'], fallbacks: [] };
+
+// (1) THE SHUTDOWN IS JUDGED BY ITS EXIT CODE.
+
+test('a shutdown the system REFUSED is a failure, not "shutting down"', async () => {
+  const result = await runShutdown(HONEST_SHUTDOWN_PLAN, {
+    spawn: () => honestChild({ spawn: [], exit: [1], close: [1] }),
+    exitTimeoutMs: 50,
+  });
+  assert.equal(result.ok, false, 'a refused shutdown is never "ok"');
+  assert.equal(result.executed, false, 'the machine is still on, so nothing was executed');
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.exited, true);
+  assert.match(result.error, /shutdown-refused/);
+  assert.match(result.error, /code 1/, 'the code is in the sentence the user reads');
+});
+
+test('a shutdown that exits 0 is confirmed, and carries the code', async () => {
+  const result = await runShutdown(HONEST_SHUTDOWN_PLAN, {
+    spawn: () => honestChild({ spawn: [], exit: [0], close: [0] }),
+    exitTimeoutMs: 50,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.executed, true);
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.exited, true);
+});
+
+test('a shutdown command killed by a signal is refused too, and says so', async () => {
+  const result = await runShutdown(HONEST_SHUTDOWN_PLAN, {
+    spawn: () => honestChild({ spawn: [], exit: [null, 'SIGTERM'], close: [null, 'SIGTERM'] }),
+    exitTimeoutMs: 50,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.executed, false);
+  assert.match(result.error, /shutdown-refused/);
+  assert.match(result.error, /SIGTERM/);
+});
+
+test('a command still running when the wait runs out is "started", not "confirmed"', async () => {
+  const result = await runShutdown(HONEST_SHUTDOWN_PLAN, {
+    spawn: () => honestChild({ spawn: [] }),
+    exitTimeoutMs: 20,
+  });
+  assert.equal(result.ok, true, 'it really did start');
+  assert.equal(result.executed, true);
+  assert.equal(result.stillRunning, true);
+  assert.equal(result.exited, false, 'the exit code was never seen — the answer says so');
+});
+
+test('the next fallback is tried when the main command is refused', async () => {
+  const attempts = [];
+  const plan = {
+    command: 'systemctl',
+    args: ['poweroff'],
+    fallbacks: [{ command: 'shutdown', args: ['-h', 'now'] }],
+  };
+  const result = await runShutdown(plan, {
+    exitTimeoutMs: 50,
+    spawn: (command) => {
+      attempts.push(command);
+      return command === 'systemctl'
+        ? honestChild({ spawn: [], exit: [1], close: [1] })
+        : honestChild({ spawn: [], exit: [0], close: [0] });
+    },
+  });
+  assert.deepEqual(attempts, ['systemctl', 'shutdown']);
+  assert.equal(result.ok, true);
+  assert.equal(result.command, 'shutdown', 'the command that really worked is the one reported');
+});
+
+test('the state says "the system refused the shutdown" and goes back to idle', () => {
+  const controller = createSleepController({
+    now: () => 1000,
+    busyAgents: () => [],
+    gate: () => ({ allow: true, blockedBy: [] }),
+    titleOf: () => undefined,
+    countdownSeconds: 0,
+    supported: true,
+    shutdown: () => ({
+      ok: false,
+      at: '2026-11-02T00:00:00.000Z',
+      command: 'shutdown.exe',
+      args: ['/s'],
+      executed: false,
+      pid: 4242,
+      error: 'shutdown-refused: the command exited with code 1',
+      exitCode: 1,
+      exited: true,
+    }),
+    setInterval: () => 1,
+    clearInterval: () => {},
+  });
+  controller.arm();
+  const status = controller.tick();
+  assert.equal(status.phase, 'idle', 'the machine did not go off, so nothing may keep saying "shutting down"');
+  assert.equal(status.armed, false);
+  assert.match(status.message, /关机被系统拒绝/);
+  assert.match(status.message, /code 1/);
+  assert.equal(status.lastRun.exitCode, 1, 'the exit code travels with the answer');
+  controller.dispose();
+});
+
+// (2) THE SCHEDULER PROBE ON A NON-WINDOWS MACHINE.
+
+test('the scheduler probe on POSIX is "not applicable", never "ok"', () => {
+  const result = probeSchedulerCapability({
+    platform: 'linux',
+    exec: () => {
+      throw new Error('exec must not be called off Windows');
+    },
+  });
+  assert.equal(result.scheduler, SCHEDULER_NOT_APPLICABLE);
+  assert.notEqual(result.scheduler, SCHEDULER_OK, 'a check that never ran may not carry the green tick');
+  assert.equal(result.applicable, false);
+  assert.match(result.reason, /not applicable/);
+});
+
+test('"not applicable" is never evidence for the Windows tier', () => {
+  const none = pickWatchdogTier({ platform: 'linux' });
+  assert.equal(none.tier, TIERS.NONE);
+  assert.match(none.reason, /neither schedule a task nor detach/);
+});
+
+// (3) setsid IS PROBED BY RUNNING IT.
+
+test('canDetach runs `setsid true` instead of asking for --version', () => {
+  const calls = [];
+  const exec = (file, args) => {
+    calls.push([file, ...args]);
+    // BusyBox behaviour: `--version` is not supported, `true` works.
+    if (file === 'setsid' && args[0] === '--version') return { ok: false, stdout: '', error: 'unrecognized option' };
+    return { ok: true, stdout: '', error: null };
+  };
+  const caps = detectWatchdogCapabilities({ platform: 'linux', exec });
+  assert.equal(caps.canDetach, true, '`setsid true` is the question that matters');
+  assert.deepEqual(calls.find((entry) => entry[0] === 'setsid'), ['setsid', 'true']);
+});
+
+test('a machine whose setsid really fails has no detach tier', () => {
+  const caps = detectWatchdogCapabilities({ platform: 'linux', exec: () => ({ ok: false, stdout: '', error: 'nope' }) });
+  assert.equal(caps.canDetach, false);
+  assert.equal(pickWatchdogTier({ platform: 'linux', canDetach: false }).tier, TIERS.NONE);
+});
+
+// (4) THE ADVICE MUST MATCH WHAT CAN BE INSTALLED.
+
+test('Linux without systemd is NOT promised a systemd user service', () => {
+  const advice = planAutostartAdvice({
+    host: { kind: 'linux' },
+    platform: 'linux',
+    hasSystemd: false,
+    user: 'tester',
+  });
+  assert.equal(advice.kind, AUTOSTART_ADVICE_KINDS.LINUX_NO_SYSTEMD);
+  assert.equal(advice.canInstall, false, 'nothing can be installed without systemd');
+  assert.match(advice.reason, /没有 systemd/);
+  assert.ok(!advice.notes.some((line) => line.includes('systemd 用户服务')), 'the promise is gone');
+  assert.ok(advice.notes.some((line) => line.includes('rc.local')), 'and the alternative is named');
+  assert.deepEqual(advice.commands, [], 'no copy-paste command for an install that cannot happen');
+});
+
+test('Linux WITH systemd still gets the user service and the linger', () => {
+  const advice = planAutostartAdvice({
+    host: { kind: 'linux' },
+    platform: 'linux',
+    hasSystemd: true,
+    user: 'tester',
+  });
+  assert.equal(advice.kind, AUTOSTART_ADVICE_KINDS.LINUX);
+  assert.equal(advice.canInstall, true);
+  assert.ok(advice.commands.some((line) => line.includes('enable-linger tester')));
+});
+
+// (5) THE PROBE CLEANUP IS SKIPPED OFF WINDOWS.
+
+test('the probe-task cleanup is skipped off Windows and calls no schtasks', () => {
+  const calls = [];
+  const result = removeLeftoverProbeTasks({
+    platform: 'linux',
+    exec: (file, args) => {
+      calls.push([file, ...args]);
+      return { ok: false, stdout: '', error: 'schtasks: not found' };
+    },
+  });
+  assert.deepEqual(calls, [], 'no fake fault may be produced on a machine without schtasks');
+  assert.equal(result.ok, true);
+  assert.equal(result.skipped, true);
+  assert.match(result.reason, /not-applicable/);
+  assert.equal(result.error, null, 'and it is not reported as an error');
+});
+
+test('on Windows the cleanup still runs (and a refusal is reported)', () => {
+  const calls = [];
+  const result = removeLeftoverProbeTasks({
+    platform: 'win32',
+    exec: (file, args) => {
+      calls.push([file, ...args]);
+      return { ok: false, stdout: '', error: 'access denied' };
+    },
+  });
+  assert.equal(result.skipped, false);
+  assert.ok(calls.some((entry) => entry[0] === 'schtasks' && entry.includes('/Query')));
+  assert.equal(result.ok, false);
+  assert.match(result.error, /access denied/);
+});
+
+// (6) SOMEBODY HAS TO BE WAITING.
+
+test('a watcher pid that is gone right after its start is NOT confirmed', async () => {
+  const dead = await confirmWatcherAlive({ pid: 4242, waitMs: 0, isAlive: () => false });
+  assert.equal(dead.confirmed, false);
+  assert.equal(dead.alive, false);
+  assert.match(dead.reason, /gone/);
+
+  const alive = await confirmWatcherAlive({ pid: 4242, waitMs: 0, isAlive: () => true });
+  assert.equal(alive.confirmed, true);
+});
+
+test('no pid means no confirmation (never a silent "armed")', async () => {
+  const check = await confirmWatcherAlive({ pid: null, waitMs: 0 });
+  assert.equal(check.confirmed, false);
+  assert.match(check.reason, /no pid/);
+});
+
+test('isProcessAlive is honest about a pid that does not exist', () => {
+  assert.equal(isProcessAlive(process.pid), true, 'the test process itself is alive');
+  assert.equal(isProcessAlive(0), false);
+  assert.equal(isProcessAlive(null), false);
+  assert.equal(isProcessAlive(-1), false);
+});
+
+test('a POSIX watcher launch reports its pid, and says whether that proves anything', () => {
+  const launched = launchDetachedWatcher({
+    watchScriptPath: '/tmp/watch.ps1',
+    platform: 'linux',
+    spawnFn: () => ({ pid: 777, unref() {}, on() {} }),
+  });
+  assert.equal(launched.ok, true);
+  assert.equal(launched.method, 'spawn');
+  assert.equal(launched.pid, 777, 'the pid is what the caller confirms');
+  // A launcher that cannot report a pid is a failure, not a success.
+  const failed = launchDetachedWatcher({
+    watchScriptPath: '/tmp/watch.ps1',
+    platform: 'linux',
+    spawnFn: () => ({ unref() {}, on() {} }),
+  });
+  assert.equal(failed.ok, false);
+  assert.match(failed.error, /could not be started/);
+});
+
+// (7) A CONTAINER IS NOT A LINUX MACHINE THAT CAN BE SWITCHED OFF.
+
+test('a container gets "no reliable way to switch this machine off"', () => {
+  const plan = detectShutdownPlan({
+    platform: 'linux',
+    env: { KUBERNETES_SERVICE_HOST: '10.0.0.1' },
+    readFile: () => 'Linux version 6.6.0',
+    exists: (file) => file === '/run/.containerenv',
+  });
+  assert.equal(plan.kind, 'container');
+  assert.equal(plan.command, null, 'nothing may be executed here');
+  assert.equal(plan.label, '这台机器没有可靠的关机方式');
+  assert.match(plan.reason, /container/);
+});
+
+test('a docker marker is enough too, and the run itself refuses to execute', async () => {
+  const plan = detectShutdownPlan({
+    platform: 'linux',
+    env: {},
+    readFile: () => 'Linux version 6.6.0',
+    exists: (file) => file === '/.dockerenv',
+  });
+  assert.equal(plan.kind, 'container');
+  const run = await runShutdown(plan, {
+    spawn: () => {
+      throw new Error('nothing may be spawned for a container');
+    },
+  });
+  assert.equal(run.ok, false);
+  assert.equal(run.executed, false);
+  assert.equal(run.error, 'no-shutdown-command');
+});
+
+test('a plain Linux still gets the real shutdown plan', () => {
+  const plan = detectShutdownPlan({
+    platform: 'linux',
+    env: {},
+    readFile: () => 'Linux version 6.6.0',
+    exists: () => false,
+  });
+  assert.equal(plan.kind, 'linux');
+  assert.equal(plan.command, 'systemctl');
+  assert.equal(plan.label, '关闭这台 Linux 主机');
+});
+
+// (8) THE HEALTH PAYLOAD CAN SAY WHICH PROFILE (and why it cannot).
+
+test('profileDirInfo tells "several profiles" apart from "no profile"', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-profile-info-'));
+  const saved = {
+    DSH_HOME: process.env.DSH_HOME,
+    DSH_PROFILE: process.env.DSH_PROFILE,
+    DSH_PROFILE_DIR: process.env.DSH_PROFILE_DIR,
+  };
+  try {
+    delete process.env.DSH_PROFILE;
+    delete process.env.DSH_PROFILE_DIR;
+    process.env.DSH_HOME = home;
+    fs.mkdirSync(path.join(home, 'profiles'), { recursive: true });
+
+    // (a) NOTHING lists this plugin.
+    const none = profileDirInfo();
+    assert.equal(none.profile, null);
+    assert.equal(none.profileDirSource, 'unknown');
+    assert.equal(none.profileCandidates, 0);
+
+    // (b) EXACTLY ONE profile lists it.
+    const one = path.join(home, 'profiles', 'solo');
+    fs.mkdirSync(one, { recursive: true });
+    fs.writeFileSync(path.join(one, 'package.json'), JSON.stringify({
+      name: 'solo',
+      dsh: { profile: { bundles: ['dsh-autorestart'] } },
+    }), 'utf8');
+    const single = profileDirInfo();
+    assert.equal(single.profile, one);
+    assert.equal(single.profileDirSource, 'profile bundles scan');
+    assert.equal(single.profileCandidates, 1);
+
+    // (c) TWO profiles list it: nothing is picked, and the reason is explicit.
+    const second = path.join(home, 'profiles', 'second');
+    fs.mkdirSync(second, { recursive: true });
+    fs.writeFileSync(path.join(second, 'package.json'), JSON.stringify({
+      name: 'second',
+      dsh: { profile: { bundles: ['dsh-autorestart'] } },
+    }), 'utf8');
+    const ambiguous = profileDirInfo();
+    assert.equal(ambiguous.profile, null, 'guessing between two profiles is not allowed');
+    assert.equal(ambiguous.profileDirSource, 'ambiguous');
+    assert.equal(ambiguous.profileCandidates, 2);
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    try {
+      fs.rmSync(home, { recursive: true, force: true });
+    } catch {}
+  }
+});
+
+/* ------------------------------------------------------------------ *
+ * THE GOAL IS TAKEN AWAY WHILE THE RESTART WAITS (2026-11-02).
+ *
+ * Real reading (`restart-gate.json`): a restart asked for by a goal-driven
+ * session waited 39 minutes with `attempts: 0`. The gate was fine — it allowed
+ * the restart 12.4 s after the root session really stopped. The deadlock was the
+ * goal round driver: it starts the next round a few seconds after the last one
+ * ended, so the 10 s settle window never filled.
+ *
+ * The fix: disarm WHEN THE REQUEST IS QUEUED, and give the goal back if the
+ * request is withdrawn.
+ * ------------------------------------------------------------------ */
+
+/** An isolated state file plus a context whose goals service records calls. */
+function queuedRestartFixture(label, { grantGoal = true } = {}) {
+  const { file } = tempStateFile(label);
+  const agent = fakeAgent('sess-goal');
+  agent.status = 'running';
+  const goals = grantGoal
+    ? { 'sess-goal': { id: 'goal-1', revision: 3, phase: 'active', activation: 'armed', roundsStarted: 1, maxGoalRounds: 10 } }
+    : {};
+  const calls = { pause: [], resume: [], disarm: [] };
+  const { fake } = contextWithRoutes({ runningAgents: [agent] });
+  fake.ctx.goals = fakeGoalsService(goals, calls);
+  apply(fake.ctx, { stateFile: file, recoveryDelayMs: 0, enabled: true });
+  return { file, agent, goals, calls, fake };
+}
+
+test('a queued restart disarms the requester goal AT ONCE — before the gate runs', () => {
+  const { file, agent, goals, calls, fake } = queuedRestartFixture('queue-disarm-now');
+
+  const restart = fake.tools.find((tool) => tool.name === 'continuum_restart');
+  restart.execute({ reason: 'test' }, { agent });
+
+  // NO POLL IS RUN: the request alone is enough. That is the whole point — the
+  // goal driver must not get the chance to start round N+1 while we wait.
+  assert.equal(calls.disarm.length, 1, 'the goal is disarmed when the request is QUEUED, not when the gate opens');
+  assert.equal(goals['sess-goal'].activation, 'disarmed', 'no new round can start');
+  assert.equal(goals['sess-goal'].phase, 'active', 'the durable goal itself is untouched');
+  assert.equal(goals['sess-goal'].revision, 3, 'and its revision is not bumped');
+  assert.equal(calls.pause.length, 0, 'nothing is paused');
+
+  const state = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(state.disarmedGoals['sess-goal'].goalId, 'goal-1');
+  assert.equal(
+    state.disarmedGoals['sess-goal'].reason,
+    'restart-queued',
+    'the record says WHY the goal is disarmed (a rescue and a restart must not look the same)',
+  );
+  assert.equal(typeof state.disarmedGoals['sess-goal'].disarmedAt, 'number', 'and WHEN');
+});
+
+test('a session WITHOUT a goal is untouched by the queued restart', () => {
+  const { file, agent, calls, fake } = queuedRestartFixture('queue-disarm-no-goal', { grantGoal: false });
+
+  const restart = fake.tools.find((tool) => tool.name === 'continuum_restart');
+  const result = restart.execute({ reason: 'test' }, { agent });
+
+  assert.equal(result.accepted, true, 'the restart is queued all the same');
+  assert.equal(calls.disarm.length, 0, 'goals.disarm is never called for a session that has no goal');
+  const state = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(
+    state.disarmedGoals === undefined || Object.keys(state.disarmedGoals).length === 0,
+    true,
+    'and no goal record is written',
+  );
+  assert.notEqual(state.restart, null, 'the request is still pending');
+});
+
+test('withdrawing the restart gives the goal back AT ONCE', () => {
+  const { file, agent, goals, calls, fake } = queuedRestartFixture('queue-rearm-cancel');
+
+  const restart = fake.tools.find((tool) => tool.name === 'continuum_restart');
+  restart.execute({ reason: 'test' }, { agent });
+  assert.equal(goals['sess-goal'].activation, 'disarmed', 'the request took the goal away');
+  assert.equal(calls.resume.length, 0, 'nothing was re-armed yet');
+
+  const cancel = fake.tools.find((tool) => tool.name === 'continuum_cancel_restart');
+  const cancelled = cancel.execute({ scope: 'all' }, { agent });
+  assert.equal(cancelled.ok, true);
+  assert.equal(cancelled.cancelled, true, 'the request is really gone');
+
+  assert.equal(calls.resume.length, 1, 'the goal is re-armed by the withdrawal itself, not at the next boot');
+  assert.equal(goals['sess-goal'].activation, 'armed', 'the session can start its next round again');
+  assert.equal(goals['sess-goal'].phase, 'active');
+  const state = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(typeof state.disarmedGoals['sess-goal'].resumedAt, 'number', 'the record says it is resumed');
+});
+
+test('a restart that turned parkGoals off still disarms nothing (and re-arms nothing)', () => {
+  const { agent, goals, calls, fake } = queuedRestartFixture('queue-disarm-off');
+
+  const restart = fake.tools.find((tool) => tool.name === 'continuum_restart');
+  restart.execute({ reason: 'test', parkGoals: false }, { agent });
+  assert.equal(calls.disarm.length, 0, 'parkGoals:false still means "do not touch goals"');
+  assert.equal(goals['sess-goal'].activation, 'armed');
+
+  const cancel = fake.tools.find((tool) => tool.name === 'continuum_cancel_restart');
+  cancel.execute({ scope: 'all' }, { agent });
+  assert.equal(calls.resume.length, 0, 'and nothing is re-armed that was never disarmed');
 });

@@ -964,7 +964,22 @@ test('a corrupt history file never breaks the popup', () => {
 // quietly put the automatic restore (or a boot-time restart) back.
 // ---------------------------------------------------------------------------
 
-test('the boot block of index.js calls neither the automatic restore nor a restart', () => {
+/**
+ * SOURCE-LEVEL GUARD — NOT a behavioural test (2026-11-02).
+ *
+ * This reads index.js as TEXT and asserts that three function NAMES do not
+ * appear inside the boot block. What it really catches: a later edit that
+ * copies the old "restore automatically at boot" call back in.
+ *
+ * What it CANNOT catch (stated so nobody trusts it for more): a call through an
+ * alias (`const recover = applyPluginRecovery; recover(...)`), a call from a
+ * module the boot pass delegates to, or the same behaviour re-implemented under
+ * a new name. The BEHAVIOURAL guarantee lives elsewhere: `runtime.pluginRecovery
+ * Info()` only ever reports a report written during THIS boot (index.js), and
+ * the manual restore is the only path that writes anything (pinned by the
+ * restore tests in this file).
+ */
+test('source guard: the boot block of index.js names neither the automatic restore nor a restart', () => {
   const source = fs.readFileSync(new URL('../index.js', import.meta.url), 'utf8');
   const start = source.indexOf('if (runtime.isNewBoot) {');
   const end = source.indexOf("runtime.disarmWatchdog('boot')");

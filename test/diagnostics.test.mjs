@@ -188,6 +188,6 @@ test('the client publishes the report helpers and keeps the bundle isolated', ()
   // The bilingual copy of the new group is in the built-in dictionaries.
   assert.equal(typeof api.dictionaries.zh['settings.report.github'], 'string')
   assert.equal(typeof api.dictionaries.en['settings.report.github'], 'string')
-  assert.equal(api.dictionaries.zh['settings.groups.report'], '报告问题')
-  assert.equal(api.dictionaries.en['settings.groups.report'], 'Report a problem')
+  assert.equal(api.dictionaries.zh['settings.groups.report'], '遇到问题')
+  assert.equal(api.dictionaries.en['settings.groups.report'], 'Something is wrong')
 })

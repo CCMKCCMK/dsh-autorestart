@@ -257,7 +257,20 @@ test('the desktop app and the hosted command share ONE pre-restart snapshot entr
   assert.ok(scheduled[0].watchScript.includes(profile), 'the watcher knows the profile')
 })
 
-test('the snapshot logic exists only once in the plugin', () => {
+/**
+ * TEXT GUARD — NOT a behavioural test (2026-11-02).
+ *
+ * It counts STRINGS in index.js: it can notice that one of these three markers
+ * is written twice, or that it disappeared. It CANNOT prove that the snapshot is
+ * taken exactly once at runtime — an alias, a second helper under another name,
+ * or a copy of the logic in another module would all pass it.
+ *
+ * It stays for the one regression it really catches (a second top-level call
+ * appearing under the same name). The BEHAVIOURAL proof lives in the snapshot
+ * tests above: they drive `executeRestart` for real and count the backup
+ * directories that end up on disk.
+ */
+test('text guard: the snapshot markers appear exactly once in index.js', () => {
   const source = fs.readFileSync(new URL('../index.js', import.meta.url), 'utf8')
   const count = (needle) => source.split(needle).length - 1
   assert.equal(count('snapshotFn('), 1, 'the shared snapshot entry is called from exactly one place')
@@ -400,17 +413,17 @@ test('the desktop app still falls back to the app relaunch when the command is e
       return { ok: true, command, pid: null }
     },
     // The new instance is confirmed without waiting for a real health route.
-    // The new watchdog is injected too: the test decides who is the arbiter
-    // and NOTHING is registered on the machine.
+    // The NEW watchdog is injected too: the test decides that it could not be
+    // armed, so NOTHING is registered on this machine and the old watcher (v1)
+    // is the arbiter — which is exactly the fallback this test is about.
     armWatchdog: () => ({ ok: false, tier: 'none', reason: 'the test forces the fallback' }),
     probeInstance: async () => ({ ok: true, reason: 'the new instance answered' }),
+    // The relaunch itself is injected: no real detached process, no scheduled
+    // task, nothing on the machine.
     scheduleDetached: (options) => {
       scheduled.push(options)
       return { ok: true, method: 'wmi', error: null }
     },
-    // The old watcher is the arbiter here (the new one cannot run), so the
-    // desktop mode still hands over its watcher script.
-    armWatchdog: () => ({ ok: false, tier: 'none', reason: 'the test forces the fallback' }),
   })
   runtime.webPort = 51004
   requestRestartNow(runtime)
@@ -421,12 +434,34 @@ test('the desktop app still falls back to the app relaunch when the command is e
   assert.equal(scheduled.length, 1, 'the desktop app was relaunched instead')
   assert.equal(fs.existsSync(path.join(state.dir, 'backups')), true, 'the relaunch is snapshotted')
 
-  // The restart arms the WATCHDOG (a real one-off scheduled task on this
-  // machine). The test does not let it wait for its trigger: it removes it
-  // right away, so the test leaves nothing behind.
-  try {
-    execFileSync('schtasks', ['/Delete', '/TN', 'dsh-autorestart-watchdog', '/F'], { stdio: 'ignore' })
-  } catch {
-    // There was nothing to remove (a machine without scheduled tasks).
-  }
+  // THE SAFETY NET, AS IT REALLY HAPPENED (2026-11-02).
+  //
+  // The old version of this test ended with a `schtasks /Delete` against the
+  // REAL machine and a comment claiming a real one-off task had been armed —
+  // while the watchdog had been forced to fail one line above. Two lies in one
+  // test: nothing had been armed, and the cleanup could only ever delete
+  // somebody else's task.
+  //
+  // What is true: v2 could not be armed, so v1 is the arbiter; the desktop
+  // relaunch is handed the watcher script (the detached helper writes it when
+  // it runs, which is why the file is NOT on disk here — the launcher is
+  // injected).
+  assert.ok(scheduled[0].watchScriptPath, 'the relaunch is handed a watcher script path')
+  assert.match(String(scheduled[0].watchScriptPath), /-watch\.ps1$/, 'the v1 watcher script')
+  assert.ok(
+    String(scheduled[0].watchScriptPath).startsWith(state.dir),
+    'and it lives in this state directory, not in a guessed one',
+  )
+  assert.ok(String(scheduled[0].watchScript || '').length > 0, 'the script has content')
+
+  // The arbiter decision is on disk, so "who was watching" is not a guess.
+  const report = JSON.parse(fs.readFileSync(path.join(state.dir, 'last-watchdog-report.json'), 'utf8'))
+  assert.equal(report.arbiter, 'v1', 'the report says the old watcher took over')
+  assert.equal(report.tier, 'none', 'and that no scheduled mechanism was used')
+  assert.equal(report.result, 'armed', 'the report calls the old watcher armed')
+  assert.match(
+    String(report.tierReason || ''),
+    /v2 is not available/,
+    'and it says WHY: the new watchdog was not available',
+  )
 })

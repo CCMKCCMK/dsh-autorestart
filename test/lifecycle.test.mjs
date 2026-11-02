@@ -92,97 +92,77 @@ test('restartDecision restarts immediately when no agent is running', () => {
   assert.equal(decision.reason, 'no-agent-running');
 });
 
-test('restartDecision waits inside the soft window', () => {
+// NO DEADLINES (user decision, 2026-11-02). A pending restart waits for the idle
+// gate and nothing else: no soft window, no hard deadline, no timer, no default
+// that ends it. These tests replace the old soft/hard-deadline expectations and
+// pin the new rule: keep waiting, however long, until the gate opens or the user
+// withdraws the request.
+
+test('a busy conversation means LOOSE: the restart waits, with no window and no deadline', () => {
   const state = deferredState();
-  const decision = restartDecision(state, { anyAgentRunning: true, now: T + 100 });
-  assert.equal(decision.action, 'wait');
-  assert.equal(decision.reason, 'agents-busy-within-soft-window');
-  assert.equal(decision.log, undefined);
+  // One millisecond after the request…
+  const early = restartDecision(state, { anyAgentRunning: true, now: T + 1 });
+  assert.equal(early.action, 'long-wait');
+  assert.equal(early.reason, 'waiting-for-conversations');
+  // …and one year later: exactly the same answer. Nothing expires.
+  const late = restartDecision(state, { anyAgentRunning: true, now: T + 365 * 24 * 3600 * 1000 });
+  assert.equal(late.action, 'long-wait');
+  assert.equal(late.reason, 'waiting-for-conversations');
+  assert.equal(typeof late.log, 'string');
 });
 
-test('restartDecision warns once after the soft deadline, then keeps waiting', () => {
+test('the old softMs / hardMs values change nothing at all', () => {
   const state = deferredState();
-  const first = restartDecision(state, {
+  const withoutThem = restartDecision(state, { anyAgentRunning: true, now: T + 10 });
+  const withThem = restartDecision(state, {
     anyAgentRunning: true,
-    now: T + SOFT + 1,
-    softMs: SOFT,
-    hardMs: HARD,
+    now: T + 10,
+    softMs: 1,
+    hardMs: 2,
   });
-  assert.equal(first.action, 'warn');
-  assert.equal(first.reason, 'agents-busy-past-soft-deadline');
-  assert.equal(typeof first.log, 'string');
-  assert.equal(first.markSoftWarned, true);
-
-  // index.js records the warning on the checkpoint; afterwards a plain wait.
-  state.restart.softWarned = true;
-  const second = restartDecision(state, {
-    anyAgentRunning: true,
-    now: T + SOFT + 2,
-    softMs: SOFT,
-    hardMs: HARD,
-  });
-  assert.equal(second.action, 'wait');
-  assert.equal(second.reason, 'agents-busy-awaiting-hard-deadline');
-  assert.equal(second.log, undefined);
+  // Even with the numbers set to "everything is overdue immediately", the answer
+  // is the same: they are accepted for compatibility and ignored.
+  assert.deepEqual({ ...withThem }, { ...withoutThem });
 });
 
-test('restartDecision honours defer policy "wait" at the hard deadline', () => {
+test('defer policy "wait" behaves exactly like "auto" while a conversation runs', () => {
   const state = deferredState();
-  const decision = restartDecision(state, {
-    anyAgentRunning: true,
-    now: T + HARD,
-    softMs: SOFT,
-    hardMs: HARD,
-    policy: 'wait',
-  });
-  // The wait is a LONG wait from here on: it is visible, not a quiet loop.
-  assert.equal(decision.action, 'long-wait');
-  assert.equal(decision.reason, 'hard-deadline-policy-wait');
-  assert.equal(decision.log, 'defer policy wait: still busy after hard deadline');
+  const wait = restartDecision(state, { anyAgentRunning: true, now: T + 10, policy: 'wait' });
+  const auto = restartDecision(state, { anyAgentRunning: true, now: T + 10, policy: 'auto' });
+  assert.equal(wait.action, 'long-wait');
+  assert.equal(wait.reason, 'waiting-for-conversations');
+  assert.equal(auto.action, 'long-wait', 'no policy makes the request expire or get killed');
 });
 
-test('restartDecision waits at the hard deadline by default and never forces a busy conversation', () => {
+test('by default a busy conversation is never interrupted, however long it takes', () => {
   const state = deferredState();
   assert.equal(state.phase, 'deferred');
-  const decision = restartDecision(state, {
-    anyAgentRunning: true,
-    now: T + HARD + 1,
-    softMs: SOFT,
-    hardMs: HARD,
-    policy: 'auto',
-  });
-  // The hard deadline does not give up and it does not kill anything: it says
-  // out loud that this is a LONG wait, and it names the blockers.
+  const decision = restartDecision(state, { anyAgentRunning: true, now: T + 900_000 });
   assert.equal(decision.action, 'long-wait');
-  assert.equal(decision.reason, 'hard-deadline-waiting-for-conversations');
-  assert.equal(
-    decision.log,
-    'dsh-autorestart: hard deadline reached but conversations are still running; forceRestartWhenBusy is disabled, so the restart keeps waiting',
-  );
+  assert.equal(decision.reason, 'waiting-for-conversations');
+  assert.equal(decision.blockedBy.length > 0, true, 'and it names whoever holds it');
+  assert.equal(decision.waitingSince > 0, true, 'and since when');
 });
 
-test('restartDecision force-restarts at the hard deadline only when forceRestartWhenBusy is enabled', () => {
+test('forceRestartWhenBusy interrupts the running conversation — it is not a deadline', () => {
   const state = deferredState();
   const decision = restartDecision(state, {
     anyAgentRunning: true,
-    now: T + HARD + 1,
-    softMs: SOFT,
-    hardMs: HARD,
+    now: T + 1,
     policy: 'auto',
     forceRestartWhenBusy: true,
   });
   assert.equal(decision.action, 'force-restart');
-  assert.equal(decision.reason, 'hard-deadline-force-restart');
+  assert.equal(decision.reason, 'force-restart-while-busy');
+  assert.match(decision.log, /interrupts the running conversations/);
 });
 
-test('restartDecision gives up when a forced restart was already attempted', () => {
+test('a forced restart that was already attempted gives up instead of looping', () => {
   const state = deferredState();
   state.restart.attempt = 1;
   const decision = restartDecision(state, {
     anyAgentRunning: true,
-    now: T + HARD + 1,
-    softMs: SOFT,
-    hardMs: HARD,
+    now: T + 1,
     policy: 'auto',
     forceRestartWhenBusy: true,
   });
@@ -190,41 +170,26 @@ test('restartDecision gives up when a forced restart was already attempted', () 
   assert.equal(decision.reason, 'forced-restart-already-attempted');
 
   // Without the opt-in the pending restart keeps waiting instead of giving up.
-  const waiting = restartDecision(state, {
-    anyAgentRunning: true,
-    now: T + HARD + 1,
-    softMs: SOFT,
-    hardMs: HARD,
-    policy: 'auto',
-  });
+  const waiting = restartDecision(state, { anyAgentRunning: true, now: T + 1, policy: 'auto' });
   assert.equal(waiting.action, 'long-wait');
-  assert.equal(waiting.reason, 'hard-deadline-waiting-for-conversations');
+  assert.equal(waiting.reason, 'waiting-for-conversations');
 });
 
-test('restartDecision never forces a busy conversation from a non-deferred phase', () => {
+test('the force path needs the deferred phase — every other phase keeps waiting', () => {
   const state = deferredState();
   state.phase = 'running';
-  const decision = restartDecision(state, {
-    anyAgentRunning: true,
-    now: T + HARD + 1,
-    softMs: SOFT,
-    hardMs: HARD,
-    policy: 'auto',
-  });
+  const decision = restartDecision(state, { anyAgentRunning: true, now: T + 1, policy: 'auto' });
   assert.equal(decision.action, 'long-wait');
-  assert.equal(decision.reason, 'hard-deadline-waiting-for-conversations');
+  assert.equal(decision.reason, 'waiting-for-conversations');
 
-  // Even with the opt-in the force path needs the deferred phase.
   const forced = restartDecision(state, {
     anyAgentRunning: true,
-    now: T + HARD + 1,
-    softMs: SOFT,
-    hardMs: HARD,
+    now: T + 1,
     policy: 'auto',
     forceRestartWhenBusy: true,
   });
   assert.equal(forced.action, 'long-wait');
-  assert.equal(forced.reason, 'hard-deadline-waiting-for-conversations');
+  assert.equal(forced.reason, 'waiting-for-conversations');
 });
 
 test('resumeStep skips unknown sessions', () => {
@@ -391,21 +356,19 @@ test('restartDecision waits during the settle window and only force-restarts at 
     softMs: SOFT,
     hardMs: HARD,
   });
-  assert.equal(queuedBusy.action, 'wait');
-  assert.equal(queuedBusy.reason, 'agents-busy-within-soft-window');
+  assert.equal(queuedBusy.action, 'long-wait');
+  assert.equal(queuedBusy.reason, 'waiting-for-conversations');
 
-  // ...but the hard deadline only forces a restart when that is explicitly enabled.
+  // ...and only the explicit opt-in interrupts it.
   const forced = restartDecision(state, {
     busyAgents: [{ sessionId: 'other', reason: 'running' }],
     lastActivityAt: T + HARD,
     settleMs: 4000,
     now: T + HARD + 1,
-    softMs: SOFT,
-    hardMs: HARD,
     forceRestartWhenBusy: true,
   });
   assert.equal(forced.action, 'force-restart');
-  assert.equal(forced.reason, 'hard-deadline-force-restart');
+  assert.equal(forced.reason, 'force-restart-while-busy');
 
   // By default the same situation keeps waiting for the conversation to finish.
   const waiting = restartDecision(state, {
@@ -413,11 +376,9 @@ test('restartDecision waits during the settle window and only force-restarts at 
     lastActivityAt: T + HARD,
     settleMs: 4000,
     now: T + HARD + 1,
-    softMs: SOFT,
-    hardMs: HARD,
   });
   assert.equal(waiting.action, 'long-wait');
-  assert.equal(waiting.reason, 'hard-deadline-waiting-for-conversations');
+  assert.equal(waiting.reason, 'waiting-for-conversations');
 });
 
 test('restartDecision defaults keep the previous idle behaviour', () => {
@@ -425,6 +386,8 @@ test('restartDecision defaults keep the previous idle behaviour', () => {
   assert.equal(idle.action, 'restart');
   assert.equal(idle.reason, 'no-agent-running');
   const busy = restartDecision(deferredState(), { anyAgentRunning: true, now: T + 1 });
-  assert.equal(busy.action, 'wait');
-  assert.equal(busy.reason, 'agents-busy-within-soft-window');
+  // A busy conversation means "still waiting", and it says so from the first
+  // second: there is no window in which the page pretends nothing is happening.
+  assert.equal(busy.action, 'long-wait');
+  assert.equal(busy.reason, 'waiting-for-conversations');
 });

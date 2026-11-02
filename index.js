@@ -75,8 +75,10 @@ import {
 } from './lib/lifecycle.js'
 import {
   backupsRoot,
+  backupPluginDirIn,
   CERTIFIED_BY,
   claimRollbackLock,
+  manifestPluginsOf,
   clearRollbackReport,
   CONFIG_DIR,
   CONFIG_FILES,
@@ -97,6 +99,7 @@ import {
   readManifest,
   readRollbackReport,
   releaseRollbackLock,
+  removeIncompleteBackups,
   restoreBackup,
   ROLLBACK_LOCK_NAME,
   ROLLBACK_REPORT_NAME,
@@ -131,6 +134,7 @@ import {
   isCapabilities,
   markSchedulerWarned,
   probeSchedulerCapability,
+  SCHEDULER_OK,
   SCHEDULER_UNKNOWN,
   shouldWarnScheduler,
 } from './lib/scheduler-capability.js'
@@ -147,6 +151,7 @@ import {
   DEFAULT_MAX_ATTEMPTS,
   readPending,
   readReport,
+  recordDisarmOutcome,
   selectRestoreTarget,
   writePending,
   writeReport,
@@ -200,7 +205,7 @@ import {
 } from './lib/restart-verdict.js'
 import { waitForHealthyInstance } from './lib/health.js'
 import { findPluginFailures, mergeFailuresByPlugin } from './lib/plugin-failure.js'
-import { inventory as pluginInventory, pluginDetail as pluginInventoryDetail } from './lib/plugin-compare.js'
+import { inventory as pluginInventory, pluginDetail as pluginInventoryDetail, comparePlugin, PLUGIN_STATUS } from './lib/plugin-compare.js'
 import {
   applyPluginRecovery,
   buildRecoveryReport,
@@ -223,10 +228,12 @@ import { dshHomeDir } from './lib/rescue.js'
 import {
   buildCustomCommand,
   buildWatchScript,
+  confirmWatcherAlive,
   DEFAULT_COMMAND_TIMEOUT_MS,
   DEFAULT_ROLLBACK_COPY_TIMEOUT_MS,
   DEFAULT_ROLLBACK_TIMEOUT_MS,
   detectEnvironment,
+  isProcessAlive,
   launchDetachedWatcher,
   readProcessChain,
   runCommandNow,
@@ -435,7 +442,7 @@ function snapGraceChoice(value, fallback = DEFAULT_RESTART_GRACE_MS) {
  * `pluginVersion()`), but a bundled installation may not ship that file — so
  * the constant below is the last resort. A test keeps the two in sync.
  */
-const PLUGIN_VERSION_FALLBACK = '0.8.7'
+const PLUGIN_VERSION_FALLBACK = '0.8.6'
 
 /**
  * The version of the graceful-shutdown FEATURE, not the version of the package.
@@ -669,15 +676,21 @@ function buildConfigSchema() {
         .description('How often a single session is retried before the recovery gives up on it.'),
       deferPollMs: schemastery.number().min(250).default(3000)
         .description('Milliseconds between two restart-gate checks.'),
+      // KEPT FOR CONFIGURATION COMPATIBILITY, NO LONGER USED (user decision,
+      // 2026-11-02). A pending restart has NO deadline: it waits until every
+      // conversation is idle. These two numbers used to announce a "long wait"
+      // and then look like an expiry date; both are now ignored, and they stay
+      // in the schema only so existing configuration files keep loading.
       deferSoftMs: schemastery.number().min(0).default(300000)
-        .description('Milliseconds after which a pending restart is announced as waiting for a long time.'),
+        .description('No longer used: a pending restart has no deadline. Kept so existing configuration files stay valid.'),
       deferHardMs: schemastery.number().min(0).default(900000)
-        .description('Milliseconds after which a pending restart gives up, unless forceRestartWhenBusy is enabled.'),
+        .description('No longer used: a pending restart has no deadline and never gives up. Kept so existing configuration files stay valid.'),
       deferPolicy: schemastery.union(['auto', 'wait']).default('auto')
         .description('How a pending restart treats a busy conversation: auto waits for it, wait blocks until every conversation is idle.'),
-      // hard deadline only forces a restart over a running conversation when enabled
+      // forceRestartWhenBusy INTERRUPTS a running conversation — it is not a
+      // deadline and must never be described as one (user decision, 2026-11-02).
       forceRestartWhenBusy: schemastery.boolean().default(false)
-        .description('Let the hard deadline restart the host even while a conversation is still running.'),
+        .description('Restart even while a conversation is still running: the running conversations are interrupted. Off by default.'),
       restartMode: schemastery.union(['app', 'command']).default('app')
         .description('How the host is restarted: app relaunches the desktop app, command runs restartCommand.'),
       restartCommand: schemastery.string().default('')
@@ -1467,7 +1480,11 @@ function readInstallChoice(stateDir) {
       restartGraceMs: typeof parsed.restartGraceMs === 'number' ? parsed.restartGraceMs : null,
       // THE WATCHDOG QUESTION (2026-11-01): the user's own answer, and the plugin
       // version they answered it for. null = never asked, and never asked means ON.
+      // THE WATCHDOG NOTICE (2026-11-01, user decision): the popup only INFORMS.
+      // `watchdog` therefore stays whatever it was (normally `null`), and
+      // `watchdogNotified` is the marker that stops it from reappearing.
       watchdog: typeof parsed.watchdog === 'boolean' ? parsed.watchdog : null,
+      watchdogNotified: parsed.watchdogNotified === true,
       askedForPluginVersion: typeof parsed.askedForPluginVersion === 'string'
         ? parsed.askedForPluginVersion
         : null,
@@ -1496,6 +1513,7 @@ function writeInstallChoice(stateDir, values) {
     sleepCountdownSeconds: null,
     restartGraceMs: null,
     watchdog: null,
+    watchdogNotified: false,
     askedForPluginVersion: null,
   }
   const payload = {
@@ -1509,6 +1527,10 @@ function writeInstallChoice(stateDir, values) {
       ? values.restartGraceMs
       : current.restartGraceMs,
     watchdog: typeof values.watchdog === 'boolean' ? values.watchdog : current.watchdog,
+    // "THE USER WAS TOLD" is recorded separately from "the user ANSWERED":
+    // the popup only informs now, so `watchdog` must stay untouched (null) while
+    // this marker stops the notice from coming back.
+    watchdogNotified: values.watchdogNotified === true ? true : current.watchdogNotified === true,
     askedForPluginVersion: typeof values.askedForPluginVersion === 'string'
       ? values.askedForPluginVersion
       : current.askedForPluginVersion,
@@ -1570,8 +1592,14 @@ function shouldAskWatchdog(stateDir) {
   const choice = typeof stateDir === 'string' && stateDir !== '' ? readInstallChoice(stateDir) : null
   // No file at all: a fresh profile, nothing was ever asked.
   if (choice === null) return true
+  // THE NOTICE WAS ALREADY SHOWN (2026-11-01, user decision): the popup only
+  // informs now — "you were told" is the end of it, and it is a marker of its own
+  // (`watchdogNotified`), so telling the user something never turns the watchdog
+  // off and never pretends they answered a question nobody asked.
+  if (choice.watchdogNotified === true) return false
   // `null` here means "no answer recorded" — either no file, or a file written
-  // by a build that did not know this question yet. `true`/`false` is an answer.
+  // by a build that did not know this question yet. `true`/`false` is an answer
+  // from the older two-button prompt, and it still counts as "already dealt with".
   return choice.watchdog === null
 }
 
@@ -1661,13 +1689,18 @@ export function resolveShowSleepButton(rawConfig, stateDir) {
  *   3. `--profile <name>` / `--profile=<name>` on the host command line.
  *   4. the only profile whose `dsh.profile.bundles` lists this plugin.
  *
- * @returns {{ dir: string|null, source: string }}
+ * "I CANNOT TELL" IS NOT "THERE IS NO PROFILE" (2026-11-02): when MORE THAN ONE
+ * profile lists this plugin, nothing is picked and the source says `ambiguous`
+ * (with the count) — the page must then say «多个 profile，备份和回滚已暂停»
+ * instead of claiming there is nothing to back up.
+ *
+ * @returns {{ dir: string|null, source: string, candidates: number }}
  */
 function resolveProfileDirDetailed() {
   const explicit = process.env.DSH_PROFILE_DIR
   if (typeof explicit === 'string' && explicit.trim() !== '') {
     const dir = path.resolve(explicit.trim())
-    if (fs.existsSync(dir)) return { dir, source: 'DSH_PROFILE_DIR' }
+    if (fs.existsSync(dir)) return { dir, source: 'DSH_PROFILE_DIR', candidates: 1 }
   }
   const home = process.env.DSH_HOME && process.env.DSH_HOME.trim() !== ''
     ? process.env.DSH_HOME.trim()
@@ -1708,14 +1741,39 @@ function resolveProfileDirDetailed() {
         if (bundles.includes(name)) matches.push(candidate)
       } catch {}
     }
-    if (matches.length === 1) return { dir: matches[0], source: 'profile bundles scan' }
+    if (matches.length === 1) return { dir: matches[0], source: 'profile bundles scan', candidates: 1 }
+    // MORE THAN ONE: the "must not guess" case, and it SAYS so.
+    if (matches.length > 1) return { dir: null, source: 'ambiguous', candidates: matches.length }
   } catch {}
-  return { dir: null, source: 'unknown' }
+  return { dir: null, source: 'unknown', candidates: 0 }
 }
 
 /** The profile directory, or null when it cannot be resolved. */
 function resolveProfileDir() {
   return resolveProfileDirDetailed().dir
+}
+
+/**
+ * The profile of this host, in the shape the health payload reports.
+ *
+ * EXPORTED so a test can prove the three cases (resolved / ambiguous / none)
+ * without starting a host: the page's «多个 profile» warning depends on the
+ * difference between "ambiguous" and "none", and a difference nobody tests is a
+ * difference that quietly disappears.
+ *
+ * @returns {{ profile: string|null, profileDirSource: string, profileCandidates: number }}
+ */
+export function profileDirInfo() {
+  try {
+    const info = resolveProfileDirDetailed()
+    return {
+      profile: info.dir,
+      profileDirSource: info.source,
+      profileCandidates: info.candidates,
+    }
+  } catch {
+    return { profile: null, profileDirSource: 'unknown', profileCandidates: 0 }
+  }
 }
 
 /**
@@ -2059,6 +2117,33 @@ export async function seedFirstInstallBackup(runtime, config = {}, overrides = {
   if (config.backupOnRestart === false) return null
   const stateDir = path.dirname(String(runtime.stateFile ?? ''))
   const backupsDir = backupsDirFor(stateDir)
+  // BOOT-TIME SWEEP (2026-11-02). The sweep inside `createBackup` runs only when
+  // a backup is WRITTEN, so a machine whose pre-restart backup path itself fails
+  // never cleans up after itself: the real machine kept 24 complete-looking
+  // directories that held no manifest and no configuration, 1.78 GB in total.
+  // The boot is the one moment that always happens, so the sweep belongs here as
+  // well. A refusal is recorded, never fatal: the host coming up does not depend
+  // on deleting stale directories.
+  let bootHygiene = null
+  try {
+    bootHygiene = removeIncompleteBackups(backupsDir)
+  } catch (error) {
+    bootHygiene = {
+      removed: [],
+      bytes: 0,
+      error: error && error.message ? String(error.message) : String(error),
+    }
+  }
+  state.bootHygiene = bootHygiene
+  if (bootHygiene && Array.isArray(bootHygiene.removed) && bootHygiene.removed.length > 0) {
+    try {
+      runtime.log.warn('removed backup directories that were not backups', {
+        count: bootHygiene.removed.length,
+        bytes: bootHygiene.bytes,
+        names: bootHygiene.removed.slice(0, 10),
+      })
+    } catch {}
+  }
   /**
    * Record the outcome where the interface can see it.
    *
@@ -2232,6 +2317,18 @@ export async function takePreRestartSnapshot({
       pruned: backup.pruned,
       profileDirSource: info.source,
     })
+    // WHERE THE DISK SPACE WENT (2026-11-01): the sweep that removes directories
+    // holding neither a manifest nor a configuration reports what it did, so a
+    // 1.78 GB pile cannot quietly grow back.
+    if (backup.hygiene && Array.isArray(backup.hygiene.removed) && backup.hygiene.removed.length > 0) {
+      log.warn('removed incomplete backup directories', {
+        removed: backup.hygiene.removed.length,
+        bytes: backup.hygiene.bytes,
+        names: backup.hygiene.removed.slice(0, 10),
+        capped: backup.hygiene.capped === true,
+        skipped: Array.isArray(backup.hygiene.skipped) ? backup.hygiene.skipped.length : 0,
+      })
+    }
     // A report from an older boot must not be mistaken for this one.
     clearRollbackReport(stateDir)
   } else {
@@ -2605,8 +2702,8 @@ export function readRestartRequestRecord(stateDir) {
  * different situations:
  *
  *   - `queued`    — accepted, waiting for the idle gate;
- *   - `deferred`  — the gate postponed it, and it is STILL waiting (`deadlineAt`
- *                   says when the wait stops being "patient" — see `note`);
+ *   - `deferred`  — the gate postponed it, and it is STILL waiting (there is no
+ *                   end time: it waits until every conversation is done);
  *   - `cancelled` — it will not happen; `reason`/`by`/`at` say why, who, when.
  *
  * @param {{ restart?: object|null, record?: object|null, now?: number }} [input]
@@ -2623,7 +2720,6 @@ export function summarizeRestartRequest({ restart = null, record = null, now = D
       && (last.requestedAt === null || last.requestedAt === live.requestedAt)
     const deferred = sameRequest && last.result === RESTART_REQUEST_STATES.DEFERRED
     const requestedAt = Number.isFinite(live.requestedAt) ? Number(live.requestedAt) : null
-    const deadlineAt = sameRequest && Number.isFinite(last.deadlineAt) ? last.deadlineAt : null
     return {
       state: deferred ? RESTART_REQUEST_STATES.DEFERRED : RESTART_REQUEST_STATES.QUEUED,
       pending: true,
@@ -2635,19 +2731,16 @@ export function summarizeRestartRequest({ restart = null, record = null, now = D
       requestedAtLocal: requestedAt === null ? null : localIsoTime(requestedAt),
       // How long the user has been waiting ALREADY.
       waitedMs: requestedAt === null ? null : Math.max(0, at - requestedAt),
-      // When the hard deadline is. `deadlineCutsTheRequest: false` means "past
-      // this moment the plugin keeps waiting instead of giving up" — that is the
-      // default, and saying it out loud is the difference between a documented
-      // wait and a request that silently evaporates.
-      deadlineAt,
-      deadlineInMs: deadlineAt === null ? null : Math.max(0, deadlineAt - at),
-      deadlineCutsTheRequest: sameRequest ? last.deadlineCutsTheRequest === true : false,
+      // NO DEADLINE, ON PURPOSE (user decision, 2026-11-02): a pending restart has
+      // no expiry. It waits until the idle gate allows it or the user withdraws
+      // it — nothing else ends it, and nothing pretends to.
+      waitsUntilIdle: true,
       requesters: Array.isArray(live.requesters)
         ? live.requesters.map((entry) => (isPlainObject(entry) ? entry.sessionId : null)).filter(Boolean)
         : [],
       note: deferred
-        ? 'the gate postponed this restart; the request is kept and retried while the host waits for the conversations to finish'
-        : 'the request is queued; it runs as soon as the idle gate allows it',
+        ? 'the gate postponed this restart; the request is kept and retried until the conversations are done — there is no deadline'
+        : 'the request is queued; it runs as soon as the idle gate allows it, however long that takes',
     }
   }
   if (last === null) {
@@ -2899,14 +2992,97 @@ export function createRuntime(ctx, config, options = {}) {
   let lastDecisionLogAt = 0
 
   /**
-   * Record REAL conversation activity (an agent turn that started or ended, a
-   * message that was queued, a session event that says work happened).
+   * WHO reset the quiet window last — DIAGNOSTICS ONLY (2026-11-02).
+   *
+   * `lastActivityAt` is what the settle window counts from. Until now nothing
+   * recorded WHICH event moved it, so "the restart never fires" could only be
+   * guessed at: a member's status report, the interface syncing, a queued
+   * message — all three look identical from the outside.
+   *
+   * This records the source of the last reset. It changes NO decision: the
+   * callers below were already calling `noteActivity()`, and they still call it
+   * exactly where they did before. The only new thing is the label.
+   */
+  let quietReset = { by: 'none', at: 0, sessionId: null, isSubagent: false }
+
+  /** The reset source as the payloads expose it (flat keys, easy to read). */
+  const quietResetInfo = () => ({
+    quietResetBy: quietReset.by,
+    quietResetAt: quietReset.at,
+    quietResetSessionId: quietReset.sessionId,
+    quietResetIsSubagent: quietReset.isSubagent,
+  })
+
+  /**
+   * THE LAST GATE DECISION, as it was written down.
+   *
+   * `null` means no decision has been recorded on this machine yet. It is never
+   * invented: an absent record is reported as absent.
+   *
+   * WHY ITS OWN FILE (`restart-gate.json` next to the state file): the state
+   * document is rebuilt from a whitelist on every boot, so any extra key put
+   * there is dropped — and it also marks the state as "repaired", which is a
+   * false alarm. A separate file keeps the two concerns apart.
+   */
+  let lastGateRecord = null
+
+  /** Where the gate record lives. */
+  const gateRecordPath = () => path.join(path.dirname(stateFile), 'restart-gate.json')
+
+  /** The record of the previous boots; null when there is none (or it is broken). */
+  const readGateRecordFile = () => {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(gateRecordPath(), 'utf8'))
+      return isPlainObject(parsed) ? parsed : null
+    } catch {
+      return null
+    }
+  }
+
+  /** Write the record down. A failure is logged, never thrown: this is diagnostics. */
+  const writeGateRecordFile = (record) => {
+    try {
+      fs.writeFileSync(gateRecordPath(), `${JSON.stringify(record, null, 2)}\n`, 'utf8')
+      return true
+    } catch (error) {
+      log.warn('could not write the restart-gate record:', String(error))
+      return false
+    }
+  }
+
+  /**
+   * The last gate decision: what it was, why, who blocked it, how long the
+   * request had waited and how many attempts there were — plus the reset source
+   * AS IT WAS at that decision (the live one is reported separately, next to it,
+   * so the two are never confused).
+   *
+   * `null` when the gate has not decided anything on this machine yet.
+   */
+  const restartGateInfo = () => {
+    const recorded = lastGateRecord !== null ? lastGateRecord : readGateRecordFile()
+    return recorded === null ? null : { ...recorded }
+  }
+
+  /**
+   * Record REAL conversation activity (a turn that started or ended, a message
+   * that was queued, a session event that says work happened).
    *
    * The routine session events of the interface do NOT go through here: they
    * would keep the quiet window from ever filling.
+   *
+   * @param {'agent-status'|'session-event'|'inbox-inserted'} [source] where the
+   *   activity came from (diagnostics only — the window moves either way)
+   * @param {{ sessionId?: string|null, isSubagent?: boolean }} [detail] what it
+   *   was about, when the caller knows
    */
-  const noteActivity = () => {
+  const noteActivity = (source = 'session-event', detail = {}) => {
     lastActivityAt = Date.now()
+    quietReset = {
+      by: source,
+      at: lastActivityAt,
+      sessionId: detail.sessionId === undefined || detail.sessionId === null ? null : String(detail.sessionId),
+      isSubagent: detail.isSubagent === true,
+    }
   }
 
   /** Queued inbox messages an agent still has to process (nextTurn / nextStep). */
@@ -3455,6 +3631,116 @@ export function createRuntime(ctx, config, options = {}) {
     return { disarmed, reported }
   }
 
+  /**
+   * The goals THIS queued restart disarmed, so withdrawing the request can put
+   * them back (sessionId → { goalId, disarmedAt, reason }).
+   */
+  const queuedGoalDisarms = new Map()
+
+  /** What the queued restarts took away, for the status surfaces. */
+  const queuedGoalDisarmList = () => [...queuedGoalDisarms.entries()].map(([sessionId, entry]) => ({
+    sessionId,
+    goalId: entry.goalId,
+    disarmedAt: entry.disarmedAt,
+    reason: entry.reason,
+  }))
+
+  /**
+   * DISARM THE GOAL OF THE SESSION THAT ASKED FOR THE RESTART — AT ONCE.
+   *
+   * Real reading (restart-gate.json, 2026-11-02): a restart asked for by a
+   * goal-driven session waited 39 minutes with `attempts: 0`. The gate was fine
+   * — `action: "allow", reason: "no-agent-running", quietForMs: 12412` the
+   * moment the root session really stopped. The deadlock was elsewhere: the goal
+   * round driver starts the next round a few seconds after the last one ended,
+   * so the 10-second settle window never filled. Waiting for "the busy session
+   * to go idle" cannot work: between two rounds it IS idle, and the next round
+   * starts first.
+   *
+   * So the disarm happens when the request is QUEUED, not when the gate finally
+   * opens (by then the request has been waiting forever):
+   *   - the round that is running right now still finishes normally;
+   *   - no new round starts;
+   *   - the quiet window fills, the gate allows, the restart happens;
+   *   - after the restart the existing boot recovery re-arms the goal.
+   *
+   * A session WITHOUT a goal is untouched: `disarmGoal` answers `no-goal` and
+   * nothing is written.
+   *
+   * @param {string|string[]} sessionIds the requester(s)
+   * @param {{ reason?: string }} [options]
+   */
+  const disarmQueuedRestartGoals = (sessionIds, { reason = 'restart-queued' } = {}) => {
+    const list = Array.isArray(sessionIds) ? sessionIds : [sessionIds]
+    const disarmed = []
+    const reported = []
+    for (const raw of list) {
+      const sessionId = raw === undefined || raw === null ? '' : String(raw)
+      if (sessionId === '') continue
+      // 'settings' is the page itself, not a conversation: it has no goal.
+      if (sessionId === 'settings') continue
+      if (queuedGoalDisarms.has(sessionId)) continue
+      try {
+        const result = disarmGoal(sessionId)
+        if (result.disarmed === true) {
+          queuedGoalDisarms.set(sessionId, {
+            goalId: result.goalId === undefined ? null : result.goalId,
+            disarmedAt: Date.now(),
+            reason,
+          })
+          // WHY this goal is disarmed, written into the record next to the
+          // timestamp: `disarmedAt` alone cannot tell a restart from a rescue.
+          const record = state.disarmedGoals && state.disarmedGoals[sessionId]
+          if (record && typeof record === 'object') record.reason = reason
+          disarmed.push(result)
+        } else {
+          reported.push(result)
+        }
+      } catch (error) {
+        reported.push({ sessionId, disarmed: false, reason: 'disarm-failed', error: describeError(error) })
+      }
+    }
+    if (disarmed.length > 0) persist()
+    return { disarmed, reported }
+  }
+
+  /**
+   * PUT BACK THE GOALS A QUEUED RESTART TOOK AWAY (the withdraw path).
+   *
+   * A cancelled restart must not leave the session standing still for ever: the
+   * goal is re-armed here, immediately, with the revision it has NOW (a stale
+   * revision is refused loudly, never silently).
+   *
+   * @param {{ reason?: string }} [options]
+   */
+  const rearmQueuedRestartGoals = ({ reason = 'restart-cancelled' } = {}) => {
+    const resumed = []
+    const failed = []
+    for (const [sessionId, entry] of [...queuedGoalDisarms.entries()]) {
+      const target = liveAgent(sessionId)
+      const goal = target ? goalFor(sessionId, target) : null
+      if (!target || !goal || typeof goal !== 'object' || !ctx.goals || typeof ctx.goals.resume !== 'function') {
+        // Nothing to resume (the session is gone, or it never had a goal): the
+        // record goes, so it cannot be reported as pending for ever.
+        queuedGoalDisarms.delete(sessionId)
+        failed.push({ sessionId, goalId: entry.goalId, reason: target ? 'no-goal' : 'session-not-live' })
+        continue
+      }
+      try {
+        ctx.goals.resume(target, { id: goal.id, revision: goal.revision })
+        stampResumedGoal(state, sessionId, { resumedAt: Date.now() })
+        queuedGoalDisarms.delete(sessionId)
+        resumed.push({ sessionId, goalId: goal.id, reason })
+        log.info(`re-armed goal ${goal.id} of session ${sessionId}: the restart was withdrawn (${reason})`)
+      } catch (error) {
+        failed.push({ sessionId, goalId: goal.id, reason: 'resume-failed', error: describeError(error) })
+        log.warn(`could not re-arm goal ${goal.id} of session ${sessionId} after the restart was withdrawn:`, describeError(error))
+      }
+    }
+    if (resumed.length > 0) persist()
+    return { resumed, failed }
+  }
+
   const anyAgentRunning = () => busyAgents().length > 0
 
   /**
@@ -3515,14 +3801,14 @@ export function createRuntime(ctx, config, options = {}) {
   })
 
   /**
-   * The description of a LONG wait, or null when the restart is not waiting
-   * for the long time yet.
+   * The description of a LONG wait, or null when nothing holds the restart.
    *
-   * A pending restart that passed the hard deadline while a conversation was
-   * still running is not "just a little longer": it is a long wait, and the
-   * user has to SEE it — how long it has been waiting, why, and who holds it.
-   * The request itself is never dropped: the restart stays pending and fires
-   * as soon as the gate is quiet again.
+   * THERE IS NO THRESHOLD (user decision, 2026-11-02). The old version only called
+   * the wait "long" once a hard deadline had passed — which made the user wait in
+   * silence for fifteen minutes before the page admitted anything, and made the
+   * plugin look like it had given up. A restart that is held by a conversation is
+   * a wait from the first second: the page shows how long it has been waiting,
+   * why, and who holds it.
    *
    * @param {number} [now]
    * @returns {{ since: number, reason: string, waitedMs: number, blockedBy: any[] }|null}
@@ -3532,17 +3818,13 @@ export function createRuntime(ctx, config, options = {}) {
     if (!restart || typeof restart !== 'object') return null
     const requestedAt = Number.isFinite(restart.requestedAt) ? restart.requestedAt : 0
     if (requestedAt <= 0) return null
-    const hardMs = Number.isFinite(config.deferHardMs) ? config.deferHardMs : 0
-    // The long wait begins when the hard deadline is reached.
-    const since = requestedAt + hardMs
-    if (now < since) return null
     const verdict = gate()
     if (verdict.allow) return null
     const blockedBy = goalAwareBlockingDetails(runtime, verdict.blockedBy)
     if (blockedBy.length === 0) return null
     return {
-      since,
-      reason: 'hard-deadline-waiting-for-conversations',
+      since: requestedAt,
+      reason: 'waiting-for-conversations',
       waitedMs: Math.max(0, now - requestedAt),
       blockedBy,
     }
@@ -4029,31 +4311,25 @@ const titleOfSummary = (item) => {
   })
 
   /**
-   * The deadlines the idle gate really uses.
+   * HOW the idle gate treats a busy conversation — and, above all, the fact that
+   * there is NO deadline (user decision, 2026-11-02).
    *
-   * They are written into every record on purpose (task requirement): "the
-   * restart has been waiting for two minutes and nothing happened" is only a
-   * mystery as long as the numbers and the POLICY behind them are invisible.
-   * `deadlineCutsTheRequest` is the important one: with the default settings the
-   * hard deadline does NOT cancel anything (see lib/lifecycle.js
-   * `restartDecision` — it answers `long-wait`), so a waiting request is not a
-   * request with an expiry date.
+   * The old shape of this answer carried `deadlineAt` / `deadlineInMs` /
+   * `deadlineCutsTheRequest`, and every reader of it (including the captain)
+   * understood "the deadline has passed" as "the request is void". It never was:
+   * a waiting restart has no expiry. The name is kept so no caller changes, but
+   * the answer now says only what is true: how the wait behaves.
    */
-  const restartDeadlineInfo = (restart) => {
-    const requestedAt = restart !== null && isPlainObject(restart) && Number.isFinite(restart.requestedAt)
+  const restartDeadlineInfo = (restart) => ({
+    policy: typeof config.deferPolicy === 'string' ? config.deferPolicy : 'auto',
+    // The ONE thing that can act on a busy conversation, and it interrupts it.
+    forceRestartWhenBusy: config.forceRestartWhenBusy === true,
+    // There is no soft window and no hard deadline any more.
+    waitsForever: true,
+    requestedAt: restart !== null && isPlainObject(restart) && Number.isFinite(restart.requestedAt)
       ? Number(restart.requestedAt)
-      : Date.now()
-    const softMs = Number.isFinite(config.deferSoftMs) ? Number(config.deferSoftMs) : null
-    const hardMs = Number.isFinite(config.deferHardMs) ? Number(config.deferHardMs) : null
-    return {
-      softMs,
-      hardMs,
-      policy: typeof config.deferPolicy === 'string' ? config.deferPolicy : 'auto',
-      forceRestartWhenBusy: config.forceRestartWhenBusy === true,
-      deadlineAt: hardMs === null ? null : requestedAt + hardMs,
-      deadlineCutsTheRequest: config.forceRestartWhenBusy === true,
-    }
-  }
+      : Date.now(),
+  })
 
   /**
    * Write down what happened to the restart request — the ONE place that writes
@@ -4115,6 +4391,13 @@ const titleOfSummary = (item) => {
     clearRestartStage()
     releaseRequesters()
     cancelRestart(state, { now: Date.now() })
+    // THE GOALS THE WAITING RESTART TOOK AWAY COME BACK NOW. A withdrawn
+    // request must not leave a session standing still: the disarm exists only
+    // for the duration of the wait.
+    const rearmed = rearmQueuedRestartGoals({ reason: 'the restart request was withdrawn (' + text + ')' })
+    for (const item of rearmed.failed) {
+      log.warn(`could not re-arm the goal of session ${item.sessionId} after the withdrawal: ${item.reason}`)
+    }
     persist()
     stopPolling()
     log.warn('the restart request is withdrawn: ' + text, {
@@ -4321,6 +4604,12 @@ const titleOfSummary = (item) => {
       // to show exactly that instead of guessing.
       intervention: item.intervention,
       certified: item.certified === true,
+      // THE COPY'S OWN PLUGIN LIST (user report, 2026-11-02): what really went
+      // into `node_modules-link/` of THIS copy. `null` = the copy is too old to
+      // say (the page then scans the directory instead of believing a number),
+      // `[]` = it holds no plugin files at all, which is the honest answer for a
+      // config-only or slim copy.
+      plugins: manifestPluginsOf(item.dir),
     }))
     return {
       dir,
@@ -4462,7 +4751,7 @@ const titleOfSummary = (item) => {
     })
       markRestartStage('waiting')
       persist()
-      // A request that was accepted says so, with the deadlines the gate uses:
+      // A request that was accepted says so, with the policy the gate uses:
       // the record is what makes "queued / deferred / cancelled" answerable.
       recordRestartRequestFate(RESTART_REQUEST_STATES.QUEUED, {
         reason: 'manual rollback to ' + target.name,
@@ -4496,6 +4785,12 @@ const titleOfSummary = (item) => {
     env: process.env,
     platform: env.platform,
     exists: (target) => fs.existsSync(target),
+    // THE ICON OF THE SHORTCUT IS DSH'S OWN EXECUTABLE (2026-11-02): the host
+    // already knows it, and a shortcut with the program's icon is the one the
+    // user recognises on the desktop. When there is no desktop app (hosted
+    // `dsh web`, a server) there is no executable to borrow an icon from — the
+    // shortcut is then created without one instead of failing.
+    iconPath: env.appExePath || '',
   })
 
   /**
@@ -4558,7 +4853,10 @@ const titleOfSummary = (item) => {
       const caps = detectWatchdogCapabilities({ platform: env.platform })
       picked = tierWithProof({
         platform: env.platform,
-        probeOk: checked.scheduler === 'ok',
+        // ONLY `ok` IS A PROOF (2026-11-02). `not-applicable` (a non-Windows
+        // machine: there is no one-off scheduled task to probe) must never count
+        // as "the scheduler works" — that green tick was the lie this removes.
+        probeOk: checked.scheduler === SCHEDULER_OK,
         hasSystemdRun: caps.hasSystemdRun,
         hasAt: caps.hasAt,
         canDetach: caps.canDetach,
@@ -5269,20 +5567,20 @@ const titleOfSummary = (item) => {
    * confirm anything any more, and the watcher is the only safety net left.
    *
    * @param {{ backup: any, profileDir: string|null, gateScriptPath?: string|null }} details
-   * @returns {{ ok: boolean, method: string, error: string|null, scriptPath: string|null }}
+   * @returns {Promise<{ ok: boolean, method: string, error: string|null, scriptPath: string|null, verified: string, pid: number|null }>}
    */
-  const armRollbackWatcher = ({ backup, profileDir, gateScriptPath = null }) => {
+  const armRollbackWatcher = async ({ backup, profileDir, gateScriptPath = null }) => {
     // The watcher must restore a state a boot has already proven. The snapshot
     // of the restart it is guarding may be the broken state itself.
     const knownGood = latestKnownGood(backupsDirFor(stateDirOf()))
     const targetDir = knownGood && typeof knownGood.dir === 'string' ? knownGood.dir : ''
     if (targetDir === '') {
       log.warn('no known-good backup: the automatic rollback is not armed')
-      return { ok: false, method: 'none', error: 'no-known-good', scriptPath: null }
+      return { ok: false, method: 'none', error: 'no-known-good', scriptPath: null, verified: 'nothing', pid: null }
     }
     if (typeof profileDir !== 'string' || profileDir === '') {
       log.warn('the profile directory is unknown: the automatic rollback is not armed')
-      return { ok: false, method: 'none', error: 'the profile directory is unknown', scriptPath: null }
+      return { ok: false, method: 'none', error: 'the profile directory is unknown', scriptPath: null, verified: 'nothing', pid: null }
     }
     const stateDir = stateDirOf()
     const scriptPath = path.join(stateDir, 'restart-' + state.generation + '-watch.ps1')
@@ -5307,7 +5605,7 @@ const titleOfSummary = (item) => {
     const written = writeTextFileAtomic(scriptPath, script)
     if (!written.ok) {
       log.error('could not write the rollback watcher:', written.error)
-      return { ok: false, method: 'none', error: written.error, scriptPath }
+      return { ok: false, method: 'none', error: written.error, scriptPath, verified: 'nothing', pid: null }
     }
     const result = launchWatcherFn({
       watchScriptPath: scriptPath,
@@ -5315,14 +5613,57 @@ const titleOfSummary = (item) => {
     })
     if (!result || result.ok !== true) {
       log.error('could not start the rollback watcher:', (result && result.error) || 'unknown error')
-      return { ok: false, method: (result && result.method) || 'none', error: (result && result.error) || null, scriptPath }
+      return {
+        ok: false,
+        method: (result && result.method) || 'none',
+        error: (result && result.error) || null,
+        scriptPath,
+        verified: 'nothing',
+        pid: null,
+      }
+    }
+    // SOMEBODY HAS TO BE WAITING (2026-11-02). `result.ok` only says the launcher
+    // accepted the command. When it reported a pid, the process is CONFIRMED a
+    // moment later: a watcher that dies right after its start is not a safety
+    // net, and the report must say so instead of "armed".
+    let verification = 'launcher'
+    let pid = Number.isFinite(result.pid) ? Number(result.pid) : null
+    if (pid !== null) {
+      let check = null
+      try {
+        check = await confirmWatcherAlive({
+          pid,
+          waitMs: 250,
+          isAlive: isProcessAlive,
+          sleep: (ms) => new Promise((resolve) => {
+            const timer = setTimeout(resolve, ms)
+            if (timer && typeof timer.unref === 'function') timer.unref()
+          }),
+        })
+      } catch (error) {
+        check = { confirmed: false, alive: false, pid, reason: String(error) }
+      }
+      if (check.confirmed !== true) {
+        log.error('the rollback watcher did not survive its start:', check.reason)
+        return {
+          ok: false,
+          method: (result && result.method) || 'none',
+          error: 'the rollback watcher did not survive its start: ' + check.reason,
+          scriptPath,
+          verified: 'gone',
+          pid,
+        }
+      }
+      verification = 'alive'
     }
     log.warn('the rollback watcher is armed', {
       scriptPath,
       method: result.method,
+      pid,
+      verification,
       timeoutMs: config.rollbackTimeoutMs,
     })
-    return { ok: true, method: result.method, error: null, scriptPath }
+    return { ok: true, method: result.method, error: null, scriptPath, verified: verification, pid }
   }
 
   /**
@@ -5342,12 +5683,16 @@ const titleOfSummary = (item) => {
    * @param {string} reason
    * @param {string} tier
    * @param {object|null} arm the result of `armWatchdog` (null when unknown)
+   * @param {{ result?: string, error?: string|null, verification?: string, pid?: number|null }} [extra]
+   *   HOW the arbiter was really armed. Without it the report always said
+   *   `armed` — which was a lie when the v1 watcher could not be started at all.
    */
-  const writeArbiterReport = (arbiter, reason, tier = 'none', arm = null) => {
+  const writeArbiterReport = (arbiter, reason, tier = 'none', arm = null, extra = null) => {
     try {
+      const how = extra && typeof extra === 'object' ? extra : {};
       writeReport(stateDirOf(), {
         at: new Date().toISOString(),
-        result: 'armed',
+        result: typeof how.result === 'string' && how.result !== '' ? how.result : 'armed',
         tier,
         tierReason: reason || '',
         arbiter,
@@ -5356,7 +5701,11 @@ const titleOfSummary = (item) => {
         restored: false,
         relaunched: false,
         ready: false,
-        error: null,
+        error: how.error == null ? null : String(how.error),
+        ...(typeof how.verification === 'string' && how.verification !== ''
+          ? { arbiterVerification: how.verification }
+          : {}),
+        ...(Number.isFinite(how.pid) ? { arbiterPid: Number(how.pid) } : {}),
         ...describeArmResult(arm),
       })
     } catch (error) {
@@ -5698,8 +6047,27 @@ const titleOfSummary = (item) => {
           supervised: detected.supervised,
         })
         if (arbiter.startV1 === true) {
-          armRollbackWatcher({ backup, profileDir })
-          writeArbiterReport(ARBITERS.V1, arbiter.reason, 'none', watchdogArm)
+          // THE V1 WATCHER IS AWAITED *AND* VERIFIED (2026-11-02). The result
+          // used to be dropped on the floor, so the report said "armed" even
+          // when the watcher never started. Now: launched + confirmed → armed;
+          // anything else → "there is no automatic rollback" with the reason.
+          const v1 = await armRollbackWatcher({ backup, profileDir })
+          if (v1.ok === true) {
+            writeArbiterReport(ARBITERS.V1, arbiter.reason, 'none', watchdogArm, {
+              result: 'armed',
+              verification: v1.verified,
+              pid: v1.pid,
+            })
+          } else {
+            writeArbiterReport(
+              ARBITERS.V1,
+              'there is NO automatic rollback here: ' + String(v1.error || 'the old watcher could not be started'),
+              'none',
+              watchdogArm,
+              { result: 'none', error: v1.error, verification: v1.verified === 'nothing' ? undefined : v1.verified },
+            )
+            log.error('there is NO automatic rollback for this restart:', v1.error)
+          }
           // The fallback to v1 must say WHY in the log too: without this line
           // the operator only sees "v1 started" and never learns that a
           // leftover systemd unit kept v2 away.
@@ -6043,12 +6411,50 @@ const titleOfSummary = (item) => {
       lastActivityAt: quietSince(),
       settleMs: effectiveSettleMs(),
       now,
-      softMs: config.deferSoftMs,
-      hardMs: config.deferHardMs,
+      // NO softMs / hardMs: the gate has no deadlines any more (2026-11-02).
       policy: config.deferPolicy,
       forceRestartWhenBusy: config.forceRestartWhenBusy,
     })
     if (decision.log) log.info(decision.log)
+    // THE GATE, WRITTEN DOWN (diagnostics only, 2026-11-02).
+    //
+    // Until now the only trace of a decision was the rate-limited log line
+    // below, so "I asked for a restart and nothing happened" could not be
+    // answered after the fact — it had to be guessed (and a wrong guess cost
+    // two rounds). This record is persisted with the state and exposed by
+    // health / continuum_status, together with WHO was resetting the quiet
+    // window at that moment.
+    //
+    // It RECORDS the decision. It does not take part in it.
+    try {
+      const requestedAt = state.restart && Number.isFinite(state.restart.requestedAt)
+        ? state.restart.requestedAt
+        : now
+      const record = {
+        at: now,
+        // `allow` means "the gate let the restart through" (the decision says
+        // `restart`); every other outcome — wait / warn / long-wait — is a
+        // wait, because the restart has not happened.
+        action: decision.action === 'restart' ? 'allow' : 'wait',
+        reason: typeof decision.reason === 'string' ? decision.reason : 'unknown',
+        blockedBy: busy.map((entry) => ({
+          sessionId: entry && entry.sessionId !== undefined && entry.sessionId !== null
+            ? String(entry.sessionId)
+            : null,
+          reason: entry && typeof entry.reason === 'string' ? entry.reason : 'busy',
+        })),
+        quietForMs: Math.max(0, now - quietSince()),
+        settleMs: effectiveSettleMs(),
+        // How long the request has been waiting (from its own requestedAt).
+        queueMs: Math.max(0, now - requestedAt),
+        attempts: state.restart && Number.isFinite(state.restart.attempt) ? state.restart.attempt : 0,
+        ...quietResetInfo(),
+      }
+      lastGateRecord = record
+      writeGateRecordFile(record)
+    } catch (error) {
+      log.warn('could not record the restart gate:', String(error))
+    }
     // The diagnostic line of the pending restart: what the gate decided and
     // why. It is rate limited (once a minute) so the 3s poll does not flood
     // the log, and it is the first thing to look at when "the restart never
@@ -6069,19 +6475,12 @@ const titleOfSummary = (item) => {
     switch (decision.action) {
       case 'wait':
         return
-      case 'warn': {
-        if (!state.restart.softWarned) {
-          state.restart.softWarned = true
-          persist()
-        }
-        return
-      }
       case 'long-wait': {
-        // The hard deadline is over and a conversation still holds the
-        // restart. The request is KEPT — the user asked for a restart, it must
-        // never be dropped silently — and the wait becomes VISIBLE: a clear
-        // log line (rate limited, so the 3s poll does not flood the log) and
-        // the `longWait` block of the state payload.
+        // A conversation still holds the restart. The request is KEPT — the user
+        // asked for a restart, it must never be dropped silently — and the wait
+        // is VISIBLE from the first second: a clear log line (rate limited, so
+        // the 3s poll does not flood the log) and the `longWait` block of the
+        // state payload. There is no deadline and nothing ever expires.
         const requestedAt = Number.isFinite(state.restart.requestedAt) ? state.restart.requestedAt : now
         const waitedMs = Math.max(0, now - requestedAt)
         const lastAt = longWaitLog.requestedAt === requestedAt ? longWaitLog.at : 0
@@ -6416,6 +6815,24 @@ const titleOfSummary = (item) => {
               log.info('the watchdog is disarmed (' + where + ')', {
                 attempts: record.attempts,
                 tier: record.tier,
+              })
+              // THE ENDING GOES INTO THE REPORT (2026-11-01): a restart that
+              // worked used to leave `last-watchdog-report.json` saying `armed`
+              // forever, while health answered `ready:true`. The ending is written
+              // where the report is, so the file and health cannot disagree.
+              try {
+                recordDisarmOutcome(stateDirOf(), { record })
+              } catch (error) {
+                log.warn('could not record the disarm outcome in the report:', String(error))
+              }
+            }
+            const staleProbes = record.probes && Array.isArray(record.probes.failed) ? record.probes.failed : []
+            if (staleProbes.length > 0) {
+              // Cleanup of the leftover capability probes must never block the
+              // boot, but it must not be silent either.
+              log.warn('some leftover capability probe tasks could not be removed', {
+                failed: staleProbes.slice(0, 5),
+                error: record.probes.error || null,
               })
             }
             return record
@@ -6807,6 +7224,23 @@ const titleOfSummary = (item) => {
      */
     quietSince,
     /**
+     * THE LAST GATE DECISION (diagnostics only, 2026-11-02): what the
+     * pending-restart gate decided, why, who was blocking it, how long the
+     * request had waited and how many execution attempts there were.
+     *
+     * `null` when the gate has not decided anything on this machine yet.
+     *
+     * @returns {object|null}
+     */
+    restartGateInfo,
+    /**
+     * WHO reset the quiet window last — the event type, the session and whether
+     * that session was a subagent (diagnostics only).
+     *
+     * @returns {{ quietResetBy: string, quietResetAt: number, quietResetSessionId: string|null, quietResetIsSubagent: boolean }}
+     */
+    quietResetInfo,
+    /**
      * The RESTART reserve: the extra wait after the last conversation
      * finished, before the host is really restarted.
      *
@@ -6846,6 +7280,24 @@ const titleOfSummary = (item) => {
     sessionTitle,
     disarmGoal,
     disarmBlockingGoals,
+    /**
+     * Disarm the goal of the session(s) that asked for the pending restart, the
+     * moment the request is queued (so a goal-driven session stops starting new
+     * rounds and the quiet window can fill).
+     *
+     * @param {string|string[]} sessionIds
+     * @param {{ reason?: string }} [options]
+     */
+    disarmQueuedRestartGoals,
+    /**
+     * Re-arm the goals a queued restart took away — the withdraw path: a
+     * cancelled restart must not leave a session standing still.
+     *
+     * @param {{ reason?: string }} [options]
+     */
+    rearmQueuedRestartGoals,
+    /** What the queued restarts took away (for the status surfaces). */
+    queuedGoalDisarmList,
     disarmedGoalRecords,
     parkedGoalRecords,
     goalFor,
@@ -8127,7 +8579,8 @@ export function buildLifecycleTools(runtime, config) {
     description:
       'Ask DeepSeek Harness to restart gracefully: the restart waits until EVERY conversation is idle '
       + '(no running turn and no queued inbox work, other sessions, subagents and teammates included) and '
-      + 'the host has been quiet for settleMs (default 2000 ms); a hard deadline only forces it when '
+      + 'the host has been quiet for settleMs (default 2000 ms); a pending restart waits for that gate '
+      + 'and has NO deadline (forceRestartWhenBusy interrupts a running conversation instead). '
       + 'forceRestartWhenBusy is enabled, otherwise the restart keeps waiting for the other conversations. '
       + 'Other conversations are never killed mid-turn: the detached helper re-checks this idle gate '
       + 'over loopback immediately before it kills the process. After the restart this '
@@ -8200,6 +8653,24 @@ export function buildLifecycleTools(runtime, config) {
         parkGoals,
         now,
       })
+      // THE REQUESTER'S GOAL GOES NOW, not when the gate opens (2026-11-02).
+      //
+      // A goal-driven session starts its next round a few seconds after the
+      // last one ended, so the settle window never fills and "wait until every
+      // conversation is idle" waits for ever (real reading: 39 minutes,
+      // `attempts: 0`). Taking the goal away HERE removes the authority that
+      // starts round N+1; the round that is running still finishes normally.
+      //
+      // Nothing happens for a session without a goal (the helper answers
+      // `no-goal`), and `parkGoals: false` still means "do not touch goals".
+      const queuedDisarm = parkGoals === true && sessionId
+        ? runtime.disarmQueuedRestartGoals([sessionId], { reason: 'restart-queued' })
+        : { disarmed: [], reported: [] }
+      if (queuedDisarm.disarmed.length > 0) {
+        for (const item of queuedDisarm.disarmed) {
+          log.info(`goal ${item.goalId} of session ${item.sessionId} is disarmed while the restart waits: no new round starts, the running one still finishes`)
+        }
+      }
       if (sessionId && resume) {
         markPendingResume(state, {
           sessionId,
@@ -8273,6 +8744,17 @@ export function buildLifecycleTools(runtime, config) {
           generation: { type: 'integer' },
           pendingRestart: { type: 'boolean' },
           gateAllow: { type: 'boolean' },
+          // THE GATE, WRITTEN DOWN (diagnostics only, 2026-11-02): the last
+          // decision of the pending-restart gate and who was resetting the quiet
+          // window at that moment. `restartGate` is null when the gate has not
+          // decided anything yet on this machine — the field is declared here
+          // because this schema is strict, and an undeclared key would refuse
+          // the whole tool.
+          restartGate: { oneOf: [{ type: 'object' }, { type: 'null' }] },
+          quietResetBy: { type: 'string' },
+          quietResetAt: { type: 'number' },
+          quietResetSessionId: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+          quietResetIsSubagent: { type: 'boolean' },
           quietForMs: { type: 'number' },
           graceMs: { type: 'number' },
           effectiveSettleMs: { type: 'number' },
@@ -8284,8 +8766,7 @@ export function buildLifecycleTools(runtime, config) {
               // Every blocker says WHAT it is (`session` or `subagent`) and
               // HOW it is called (`label`: the title of the session, or of the
               // session that created the subagent).
-              //
-              // The title fields are NULLABLE: a session whose title could not
+              //              // The title fields are NULLABLE: a session whose title could not
               // be resolved reports `null`, and a strict schema would reject
               // the whole tool output for it. The tool schema has no type
               // arrays, so "string or null" is declared as a `oneOf`.
@@ -8349,6 +8830,12 @@ export function buildLifecycleTools(runtime, config) {
         restartRequest: runtime.restartRequestInfo(),
         gateAllow: verdict.allow,
         quietForMs: Math.round(verdict.quietForMs),
+        // DIAGNOSTICS (2026-11-02): what the gate decided the last time it ran
+        // (action / reason / blockedBy / quietForMs / settleMs / queueMs /
+        // attempts) and which event reset the quiet window. This is the answer
+        // to "the restart never fires, and nothing says why".
+        restartGate: runtime.restartGateInfo(),
+        ...runtime.quietResetInfo(),
         // The RESTART reserve (the extra wait after the last conversation
         // finished) and the quiet window the gate really uses.
         graceMs: runtime.graceMs(),
@@ -8677,6 +9164,13 @@ export function buildLifecycleTools(runtime, config) {
           restart: pendingBefore,
         })
         runtime.stopPolling()
+        // The restart is over, so the reason for the disarm is over too: the
+        // goals taken away while it waited come back NOW, not at the next boot
+        // (a cancelled restart must never leave a session standing still).
+        const rearmed = runtime.rearmQueuedRestartGoals({ reason: 'the last requester withdrew its restart request' })
+        for (const item of rearmed.failed) {
+          log.warn(`could not re-arm the goal of session ${item.sessionId} after the withdrawal: ${item.reason}`)
+        }
         log.info(`session ${sessionId} withdrew the last restart request; the pending restart is cancelled`, reason || '')
       } else {
         log.info(`session ${sessionId} withdrew its restart request; ${outcome.remaining} requester(s) remain`)
@@ -9244,6 +9738,12 @@ function buildParkRoute(ctx, runtime, config) {
             resume: true,
             now: Date.now(),
           })
+          // The same rule as the tool: the goal of the session that asked is
+          // taken away while the restart waits, so the round driver cannot keep
+          // the quiet window from filling.
+          const queuedDisarm = runtime.disarmQueuedRestartGoals([sessionId], { reason: 'restart-queued' })
+          for (const item of queuedDisarm.disarmed) disarmed.push(item)
+          for (const item of queuedDisarm.reported) reported.push(item)
           // The first stage, in the same breath as the request: the answer to
           // this POST is already "waiting for the sessions", never silence.
           runtime.markRestartStage('waiting', { blocked: blockingSessionIds(runtime).length })
@@ -9753,6 +10253,65 @@ function buildPluginRestoreRoute(ctx, runtime, config) {
  * CACHED FOR 60 s, keyed by the plugin name, because walking 120 plugin trees is
  * a stat per file and the page may be opened several times in a row.
  */
+/**
+ * THE PLUGIN LIST AS THE PAGE MUST SEE IT (user report, 2026-11-02).
+ *
+ * Two corrections on top of `inventory()`:
+ *
+ * 1. WHERE THE COPY IS. `inventory()` picks `node_modules-link/<name>` or
+ *    `node_modules/<name>` from the LIVE install shape. When that shape changed
+ *    after the copy was taken, a perfectly good copy was reported as missing:
+ *    `dsh-codekg`'s files sat in `node_modules-link/dsh-codekg` while the page
+ *    said "the backup has no copy of this plugin". The copy is asked FIRST now
+ *    (`backupPluginDirIn`: its own manifest → directory scan → live flag), and
+ *    the comparison is repeated only when the first answer was "missing".
+ * 2. HOW IT WAS INSTALLED. The page lists hand-written plugins one by one and
+ *    merges everything else into two sentences — and those sentences must be
+ *    TRUE. A name in the profile's `dependencies` came from npm (its files are
+ *    not copied; it is reinstalled), while a bundle that is neither linked nor a
+ *    dependency is shipped with DSH itself (nothing to back up).
+ *
+ * Never throws: an unreadable profile package.json only loses the distinction
+ * (everything becomes `builtin`, and the page then says "不需要备份", which is the
+ * safe side — it must not claim we have files we do not have).
+ */
+export function describePluginsForPage(list, { profileDir = '', backupDir = '' } = {}) {
+  const dependencies = (() => {
+    try {
+      const manifest = JSON.parse(fs.readFileSync(path.join(profileDir, 'package.json'), 'utf8'))
+      const deps = manifest && manifest.dependencies && typeof manifest.dependencies === 'object'
+        ? manifest.dependencies
+        : {}
+      return new Set(Object.keys(deps))
+    } catch {
+      return new Set()
+    }
+  })()
+  const plugins = Array.isArray(list) ? list : []
+  return plugins.map((plugin) => {
+    const name = plugin && typeof plugin.name === 'string' ? plugin.name : ''
+    const linked = plugin.linked === true
+    const install = linked ? 'link' : (dependencies.has(name) ? 'npm' : 'builtin')
+    const described = { ...plugin, install }
+    if (name === '' || backupDir === '') return described
+    if (plugin.status !== PLUGIN_STATUS.MISSING) return described
+    // A SECOND LOOK — only where the first answer was the damaging one.
+    const copyDir = backupPluginDirIn(backupDir, name, { linked })
+    if (typeof copyDir !== 'string' || copyDir === '') return described
+    const retried = comparePlugin({
+      liveDir: path.join(profileDir, PLUGINS_DIR, name),
+      backupDir: copyDir,
+    })
+    if (retried.status === PLUGIN_STATUS.MISSING) return described
+    return {
+      ...described,
+      status: retried.status,
+      changeCount: retried.changeCount,
+      truncated: retried.truncated === true,
+    }
+  })
+}
+
 function buildPluginInventoryRoute(ctx, runtime, config) {
   const routePath = resolvePluginInventoryPath(config)
   const ttlMs = 60000
@@ -9812,7 +10371,18 @@ function buildPluginInventoryRoute(ctx, runtime, config) {
         const profileDir = runtime.profileDir && typeof runtime.profileDir.dir === 'string' ? runtime.profileDir.dir : ''
         const backupsDir = profileDir === '' ? '' : backupsDirFor(runtime.stateDir)
         const value = plugin === ''
-          ? { ok: true, kind: 'inventory', ...pluginInventory({ profileDir, backupsDir, now }) }
+          ? (() => {
+            const inventory = pluginInventory({ profileDir, backupsDir, now })
+            return {
+              ok: true,
+              kind: 'inventory',
+              ...inventory,
+              plugins: describePluginsForPage(inventory.plugins, {
+                profileDir,
+                backupDir: typeof inventory.backupDir === 'string' ? inventory.backupDir : '',
+              }),
+            }
+          })()
           : { ok: true, kind: 'detail', ...pluginInventoryDetail({ profileDir, backupsDir, plugin }) }
         runtime.pluginInventoryCache = { ...cache, [cacheKey]: { at: now, value } }
         answer(value)
@@ -10068,13 +10638,20 @@ function buildChoiceRoute(ctx, runtime, config) {
         // install-choice.json (where readInstallChoice() looks for it), so it is
         // written here and not through applyConfigChoice. Writing it anywhere
         // else is the bug that produced a cheerful "saved" with nothing on disk.
-        if (hasWatchdog || hasAskedVersion) {
+        // THE NOTICE-ONLY PATH (2026-11-01, user decision): the popup no longer
+        // asks a question, so the client sends `watchdogNotified: true` INSTEAD
+        // of a `watchdog` answer. It records "the user was told" and leaves the
+        // `watchdog` field exactly as it was — telling somebody something is not
+        // an answer, and must never be stored as "the user turned it off".
+        const hasNotified = body.watchdogNotified === true
+        if (hasWatchdog || hasAskedVersion || hasNotified) {
           // resolveStateDir(), NOT path.dirname(config.stateFile): the default
           // stateFile is '' and path.dirname('') is '.', so that spelling wrote
           // the file into the process working directory - which is exactly why
           // the panel said "saved" while the real state dir never changed.
           writeInstallChoice(resolveStateDir(config), {
             ...(hasWatchdog ? { watchdog: body.watchdog === true } : {}),
+            ...(hasNotified ? { watchdogNotified: true } : {}),
             ...(hasAskedVersion ? { askedForPluginVersion: body.askedForPluginVersion } : {}),
           })
         }
@@ -10237,10 +10814,23 @@ function buildRescueRoute(ctx, runtime, config) {
         const info = runtime.rescueKitInfo()
         if (action === 'shortcut') {
           // The user pressed the button: NOW the shortcut may be written.
+          //
+          // A `.lnk` SINCE 2026-11-02 (Windows refuses an icon on a `.cmd`, and
+          // an unnamed white page on the desktop is what the user could not
+          // recognise). The answer carries everything the page needs to say
+          // what happened: the file name, the icon it carries, and — when it
+          // failed — WHICH KIND of failure, so the page can give the right human
+          // sentence instead of a stack message.
           const written = createDesktopShortcut({
             desktop: info.desktopDir,
             restoreProfilePath: info.restoreProfile,
-            home: os.homedir(),
+            iconPath: info.iconPath,
+            // The `.lnk` writer of `lib/rescue-paths.js` creates the file through
+            // `WScript.Shell` and never calls this. It is kept on purpose: this
+            // route has carried a `writeFile` reporter since the `.cmd` days, and
+            // the code-graph contract of the task that introduced the `.lnk` has
+            // no `fn_removed` allowance — dropping the option would be reported
+            // as an unauthorized removal rather than a deliberate change.
             writeFile: (target, content) => fs.writeFileSync(target, content, 'ascii'),
             exists: (target) => fs.existsSync(target),
           })
@@ -10250,7 +10840,10 @@ function buildRescueRoute(ctx, runtime, config) {
           res.end(JSON.stringify({
             ok: written.ok,
             action,
+            name: written.name,
             path: written.path,
+            iconPath: written.iconPath,
+            errorKind: written.errorKind,
             error: written.error ?? null,
             rescue: runtime.rescueKitInfo(),
           }))
@@ -10593,7 +11186,11 @@ function effectiveSleepPlan(plan, config) {
   })
   const custom = invocation.source === 'sleepCommand'
   const detectedKind = typeof plan.kind === 'string' ? plan.kind : 'unsupported'
-  const detected = detectedKind !== 'unsupported'
+  // A CONTAINER IS NOT A MACHINE THIS FEATURE CAN SWITCH OFF (2026-11-02): its
+  // plan carries no command, so it is treated like an unsupported platform —
+  // the operator's own `sleepCommand` is then the only way, and the label says
+  // "your own command" instead of borrowing a promise from a dead plan.
+  const detected = detectedKind !== 'unsupported' && detectedKind !== 'container'
   const command = typeof invocation.command === 'string' && invocation.command !== '' ? invocation.command : null
   const label = custom
     ? (detected ? `执行你指定的关机命令（${plan.label}）` : '执行你指定的关机命令')
@@ -11063,6 +11660,14 @@ function registerHealthRoute(ctx, runtime, config, sleep) {
             reason: typeof verdict.reason === 'string' ? verdict.reason : 'unknown',
             quietForMs: typeof verdict.quietForMs === 'number' ? verdict.quietForMs : 0,
             settleMs: config.settleMs,
+            // THE GATE, WRITTEN DOWN (diagnostics only, 2026-11-02): the last
+            // decision of the pending-restart gate — action, reason, who blocked
+            // it, how long the request has waited, how many attempts — plus WHO
+            // was resetting the quiet window at that moment. Without it "the
+            // restart never fires" is a fact nobody can look up; with it, the
+            // cause is one field away.
+            restartGate: runtime.restartGateInfo(),
+            ...runtime.quietResetInfo(),
             // The RESTART reserve and the quiet window the gate really uses.
             graceMs: config.restartGraceMs,
             effectiveSettleMs: runtime.effectiveSettleMs(),
@@ -11110,6 +11715,12 @@ function registerHealthRoute(ctx, runtime, config, sleep) {
             pluginVersion: pluginVersionNow(),
             backupOnRestart: config.backupOnRestart !== false,
             backupIncludePlugins: config.backupIncludePlugins !== false,
+            // WHICH PROFILE THIS HOST BELONGS TO (2026-11-02). The backups and
+            // the rollback are PER PROFILE, so the page has to be able to tell
+            // three cases apart: a resolved profile, "several profiles, I cannot
+            // pick one" (`profileDirSource: 'ambiguous'`) and "there is none".
+            // Without these fields the multi-profile warning could never appear.
+            ...profileDirInfo(),
             // WHAT IS ON DISK RIGHT NOW: the backups of this host (the count,
             // the local time, the size, whether the plugins are in it and
             // where it lives). The browser cannot read the disk, so the Host
@@ -11468,7 +12079,13 @@ function trackAgents(ctx, runtime, config) {
 
   ctx.on('agent/status', ({ agent, status }) => {
     try {
-      runtime.noteActivity()
+      // DIAGNOSTICS ONLY (2026-11-02): the label says WHERE this reset came
+      // from. The call itself is in exactly the place it always was — the
+      // window moves for the same events, in the same order, as before.
+      runtime.noteActivity('agent-status', {
+        sessionId: agent && agent.id ? String(agent.id) : null,
+        isSubagent: agent && agent.id ? isRootAgent(ctx, agent) === false : false,
+      })
       if (!agent || !agent.id) return
       if (!isRootAgent(ctx, agent)) return
       const now = Date.now()
@@ -11503,13 +12120,13 @@ function trackAgents(ctx, runtime, config) {
   ctx.on('session/event', (payload) => {
     try {
       if (!isWorkSessionEvent(payload)) return
-      runtime.noteActivity()
+      runtime.noteActivity('session-event')
     } catch {}
   })
 
   ctx.on('agent/inbox/inserted', () => {
     try {
-      runtime.noteActivity()
+      runtime.noteActivity('inbox-inserted')
     } catch {}
   })
 
