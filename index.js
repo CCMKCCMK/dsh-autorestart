@@ -86,6 +86,7 @@ import {
   CONFIG_FILES,
   contentFingerprintOf,
   contentScopeOf,
+  countIncompleteBackups,
   createBackup,
   DEFAULT_MAX_BACKUPS,
   enabledBundlesOf,
@@ -107,6 +108,7 @@ import {
   removeIncompleteBackups,
   restoreBackup,
   ROLLBACK_LOCK_NAME,
+  sweepIncompleteBackups,
   ROLLBACK_REPORT_NAME,
   validateBackupLimit,
 } from './lib/backup.js'
@@ -4648,6 +4650,10 @@ const titleOfSummary = (item) => {
       dir,
       max: config.maxBackups,
       count: items.length,
+      // HOW MANY DIRECTORIES ARE NOT COPIES (2026-11-02): without this a machine
+      // with three directories and two copies looks like a broken count. It is
+      // not — one directory never finished, and this number names it.
+      incomplete: countIncompleteBackups(dir).incomplete,
       // The same two counts for the NEWEST copy: that is the one a user rolls
       // back to, and the one the settings page talks about.
       localized: items.length > 0 ? items[0].localized : 0,
@@ -8818,6 +8824,7 @@ export function buildLifecycleTools(runtime, config) {
           // on a non-Windows machine: what was removed, what was kept, and why
           // the sweep was skipped (Windows, no directory yet).
           watcherHygiene: { oneOf: [{ type: 'object' }, { type: 'null' }] },
+        backupHygiene: { oneOf: [{ type: 'object' }, { type: 'null' }] },
           quietResetBy: { type: 'string' },
           quietResetAt: { type: 'number' },
           quietResetSessionId: { oneOf: [{ type: 'string' }, { type: 'null' }] },
@@ -8906,6 +8913,7 @@ export function buildLifecycleTools(runtime, config) {
         // THE OLD ROLLBACK SCRIPT SWEEP (2026-11-02): what this boot removed
         // from the state directory, what it kept, and why it was skipped.
         watcherHygiene: runtime.watcherHygiene ?? null,
+        backupHygiene: runtime.backupHygiene ?? null,
         // The RESTART reserve (the extra wait after the last conversation
         // finished) and the quiet window the gate really uses.
         graceMs: runtime.graceMs(),
@@ -11844,6 +11852,7 @@ function registerHealthRoute(ctx, runtime, config, sleep) {
             // platform made it a no-op (`skipped` + `reason`). Without it the
             // answer to "are there leftovers?" would be a guess again.
             watcherHygiene: runtime.watcherHygiene ?? null,
+            backupHygiene: runtime.backupHygiene ?? null,
             // The RESTART reserve and the quiet window the gate really uses.
             graceMs: config.restartGraceMs,
             effectiveSettleMs: runtime.effectiveSettleMs(),
@@ -12474,6 +12483,33 @@ export function apply(ctx, rawConfig, options = {}) {
     }
   }
   runtime.watcherHygiene = watcherHygiene
+  // THE BACKUP DIRECTORIES THAT NEVER FINISHED (2026-11-02). The existing
+  // sweeper only ran from the first-install path (new boot + snapshots on), so
+  // an ordinary restart cleaned nothing and a directory left by a backup that
+  // died mid-write stayed forever — a real machine had three directories while
+  // the page said two copies. This one runs on EVERY boot.
+  let backupHygiene = null
+  try {
+    backupHygiene = sweepIncompleteBackups(backupsDirFor(resolveStateDir(config)))
+  } catch (error) {
+    backupHygiene = {
+      skipped: false,
+      reason: null,
+      removed: [],
+      kept: [],
+      scanned: 0,
+      bytes: 0,
+      error: error && error.message ? String(error.message) : String(error),
+    }
+  }
+  runtime.backupHygiene = backupHygiene
+  if (Array.isArray(backupHygiene.removed) && backupHygiene.removed.length > 0) {
+    log.warn('removed backup directories that never finished', {
+      count: backupHygiene.removed.length,
+      bytes: backupHygiene.bytes,
+      names: backupHygiene.removed,
+    })
+  }
   if (Array.isArray(watcherHygiene.removed) && watcherHygiene.removed.length > 0) {
     log.warn('removed rollback watcher scripts this platform cannot run', {
       count: watcherHygiene.removed.length,

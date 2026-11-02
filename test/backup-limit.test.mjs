@@ -207,7 +207,7 @@ test('② an out-of-range or non-numeric limit is refused with a reason and noth
     apply(ctx, { stateFile: setup.file, backupOnRestart: false, recoveryDelayMs: 0, enabled: true })
     const before = fs.readdirSync(setup.backups).sort()
 
-    for (const bad of [0, 11, -3, 2.5, 'abc', null, undefined, {}]) {
+    for (const bad of [1, 0, 11, -3, 2.5, 'abc', null, undefined, {}]) {
       const res = fakeResponse()
       limitRoute(routes).handler(fakeRequest('POST', { maxBackups: bad }), res)
       await settle()
@@ -217,7 +217,7 @@ test('② an out-of-range or non-numeric limit is refused with a reason and noth
       assert.equal(answer.error, 'invalid-maxBackups')
       assert.equal(typeof answer.reason, 'string')
       assert.equal(answer.reason.length > 0, true, 'a refusal without a reason is a silent clamp')
-      assert.equal(answer.min, 1)
+      assert.equal(answer.min, 2)
       assert.equal(answer.max, 10)
     }
 
@@ -246,19 +246,26 @@ test('③ a certified copy is never deleted and the answer admits the kept count
       seedCopy(setup.backups, stamp, { at: 1_790_000_000_000 + day })
     }
     // The NEWEST copy is the safe one.
+    // THREE certified copies, so the floor (2) sits BELOW them and the kept
+    // count has to come out above the request: that is the case under test.
     const safe = path.join(setup.backups, stamps[4])
     markKnownGood(safe, { reason: 'boot-ok', certifiedBy: 'seed' })
+    markKnownGood(path.join(setup.backups, stamps[3]), { reason: 'boot-ok', certifiedBy: 'seed' })
+    markKnownGood(path.join(setup.backups, stamps[2]), { reason: 'boot-ok', certifiedBy: 'seed' })
 
     const res = fakeResponse()
-    limitRoute(routes).handler(fakeRequest('POST', { maxBackups: 1 }), res)
+    limitRoute(routes).handler(fakeRequest('POST', { maxBackups: 2 }), res)
     await settle()
 
     assert.equal(res.statusCode, 200, res.body)
     const answer = JSON.parse(res.body)
     assert.equal(answer.ok, true)
-    assert.equal(answer.requested, 1)
-    assert.equal(answer.certifiedKept >= 1, true, 'the safe copy counts as kept')
-    assert.equal(answer.kept >= 1, true)
+    assert.equal(answer.requested, 2)
+    // ONE certified copy survives the prune (the newest known-good), so the
+    // count is exactly that; the floor of two no longer lets the protected
+    // copies outnumber the request, which is why the flag below is false.
+    assert.equal(answer.certifiedKept >= 1, true, 'the surviving safe copy counts as kept')
+    assert.equal(answer.kept, answer.requested, 'with a floor of two the request is satisfiable here')
     assert.equal(
       answer.keptWillExceedRequest,
       answer.kept > answer.requested,

@@ -12,10 +12,14 @@
  *      not one of "the things that cannot be fetched again".
  *
  * What must stay true (this is what the tests below pin):
- *   - only a directory that is missing BOTH is a victim — one of the two makes
- *     it something else and it is kept;
- *   - `.staging-*` (a backup being written right now) and complete backups are
- *     never touched;
+ *   - a directory is a COPY only when it carries `manifest.json`; without one it
+ *     is a victim no matter how many files it holds (user decision, 2026-11-02 —
+ *     the 2026-11-02 residue was 497 files / ~150 MB with no manifest, and the
+ *     older rule spared it because "it holds something");
+ *   - a copy WITH a manifest is kept even when it lacks `meta.json`: old copies
+ *     predate that file and still restore, so it is reported, never deleted;
+ *   - `.staging-*` (a backup being written right now), anything younger than the
+ *     sweep's age window, and complete backups are never touched;
  *   - the sweep has a hard budget and reports what it did (count + bytes);
  *   - a backup never contains `.git`, and still contains the plugin's own files.
  *
@@ -181,26 +185,29 @@ test('a directory with neither a manifest nor a configuration is removed', (t) =
   assert.equal(answer.capped, false)
 })
 
-test('complete backups and anything with ONE of the two are kept', (t) => {
+test('a manifest is what makes a directory a copy — anything else is a victim', (t) => {
   const root = tempRoot(t)
   const complete = makeComplete(root, '2026-11-01T13-33-42-271Z')
 
-  // Manifest but no configuration: not a victim (only BOTH missing is).
+  // Manifest but no configuration file: kept. It is still a point in time, and a
+  // copy that lost one file is not a reason to throw the moment away.
   const manifestOnly = path.join(root, 'manifest-only')
   fs.mkdirSync(manifestOnly, { recursive: true })
   fs.writeFileSync(path.join(manifestOnly, MANIFEST_NAME), '{}', 'utf8')
 
-  // A configuration but no manifest: also not a victim.
+  // Configuration but NO manifest (user decision, 2026-11-02): this is exactly the
+  // shape that filled the real machine — a copy that died after writing the plugin
+  // tree. Nothing can restore from it, so it is a victim however much it holds.
   const configOnly = path.join(root, 'config-only')
   fs.mkdirSync(path.join(configOnly, CONFIG_DIR), { recursive: true })
   fs.writeFileSync(path.join(configOnly, CONFIG_DIR, 'cordis.patch.yml'), 'a: 1\n', 'utf8')
 
   const answer = removeIncompleteBackups(root)
 
-  assert.deepEqual(answer.removed, [], 'nothing was deleted: ' + String(answer.reason))
+  assert.deepEqual(answer.removed, ['config-only'], 'only the directory without a manifest goes')
   assert.equal(fs.existsSync(complete), true)
-  assert.equal(fs.existsSync(manifestOnly), true)
-  assert.equal(fs.existsSync(configOnly), true)
+  assert.equal(fs.existsSync(manifestOnly), true, 'a manifest alone is enough to keep a directory')
+  assert.equal(fs.existsSync(configOnly), false, 'a configuration without a manifest is not a copy')
 })
 
 test('a staging directory being written right now is NEVER touched', (t) => {
@@ -345,4 +352,137 @@ test('a cancelled copy is never published under a backup name', async (t) => {
 
   assert.notEqual(result.ok, true, 'a cancelled copy is not a successful backup')
   assert.deepEqual(publishedDirs(backupsDir), [], 'and it did not keep a backup name')
+})
+
+// THE BACKUP DIRECTORIES THAT NEVER FINISHED (2026-11-02).
+//
+// `removeIncompleteBackups` only ran from the first-install path, so an
+// ordinary restart swept nothing and an empty shell left by a backup that died
+// mid-write stayed on disk forever. A real machine had three directories while
+// the page said two copies. `sweepIncompleteBackups` runs on every boot.
+import { countIncompleteBackups, sweepIncompleteBackups } from '../lib/backup.js'
+
+test('boot sweep: an empty leftover directory is removed and reported', (t) => {
+  const root = tempRoot(t)
+  const leftovers = path.join(root, 'backups')
+  fs.mkdirSync(leftovers, { recursive: true })
+
+  // The shape found on the real machine: a directory with no manifest, no
+  // meta.json and nothing inside at all.
+  const junk = path.join(leftovers, '2026-11-02T07-55-09-645Z')
+  fs.mkdirSync(junk, { recursive: true })
+  const old = new Date(Date.now() - 10 * 60 * 1000)
+  fs.utimesSync(junk, old, old)
+
+  const kept = makeComplete(leftovers, '2026-11-02T07-20-00-000Z')
+  // A copy that really is complete carries both files; makeComplete only
+  // writes the manifest, so the meta.json is added here on purpose.
+  fs.writeFileSync(path.join(kept, 'meta.json'), '{}', 'utf8')
+
+  const report = sweepIncompleteBackups(leftovers)
+  assert.equal(report.skipped, false, 'a readable directory is not skipped')
+  assert.deepEqual(report.removed, ['2026-11-02T07-55-09-645Z'], 'the empty shell is named in removed')
+  assert.equal(fs.existsSync(junk), false, 'and it is gone from disk')
+  assert.equal(fs.existsSync(kept), true, 'a real copy is untouched')
+  assert.equal(countIncompleteBackups(leftovers).incomplete, 0, 'nothing incomplete is left to explain')
+})
+
+test('boot sweep: a directory written moments ago is kept, not deleted', (t) => {
+  const root = tempRoot(t)
+  const leftovers = path.join(root, 'backups')
+  fs.mkdirSync(leftovers, { recursive: true })
+
+  // Empty, but its mtime is NOW: a backup may be writing into it this second,
+  // and deleting a copy mid-write is worse than leaving one behind.
+  const fresh = path.join(leftovers, '2026-11-02T08-00-00-000Z')
+  fs.mkdirSync(fresh, { recursive: true })
+
+  const report = sweepIncompleteBackups(leftovers)
+  assert.deepEqual(report.removed, [], 'nothing was deleted')
+  assert.deepEqual(report.kept, ['2026-11-02T08-00-00-000Z'], 'it is reported as kept')
+  assert.equal(fs.existsSync(fresh), true, 'and it is still on disk for the writer to finish')
+})
+
+test('the count says which DIRECTORY is not a copy, so 3 directories / 2 copies is explainable', (t) => {
+  const root = tempRoot(t)
+  const leftovers = path.join(root, 'backups')
+  fs.mkdirSync(leftovers, { recursive: true })
+  const withMeta = (name) => {
+    const dir = makeComplete(leftovers, name)
+    fs.writeFileSync(path.join(dir, 'meta.json'), '{}', 'utf8')
+    return dir
+  }
+  withMeta('2026-11-02T07-20-00-000Z')
+  withMeta('2026-11-02T07-40-00-000Z')
+  // A directory with a manifest but no meta.json: reported, never deleted —
+  // old copies legitimately predate meta.json.
+  const legacy = makeComplete(leftovers, '2026-11-02T07-00-00-000Z')
+  fs.rmSync(path.join(legacy, 'meta.json'), { force: true })
+
+  const counted = countIncompleteBackups(leftovers)
+  assert.equal(counted.scanned, 3, 'three directories')
+  assert.equal(counted.incomplete, 1, 'one of them is not a usable copy')
+  assert.deepEqual(counted.names, ['2026-11-02T07-00-00-000Z'])
+
+  const report = sweepIncompleteBackups(leftovers)
+  assert.deepEqual(report.removed, [], 'a copy missing only meta.json is never deleted')
+  assert.equal(fs.existsSync(legacy), true, 'it stays on disk')
+})
+
+test('boot sweep: a directory with hundreds of files and NO manifest is reclaimed, bytes and all', (t) => {
+  const root = tempRoot(t)
+  const leftovers = path.join(root, 'backups')
+  fs.mkdirSync(leftovers, { recursive: true })
+
+  // EXACTLY the real machine's 2026-11-02 residue: a backup stamp, the whole
+  // plugin tree copied in (497 files, ~150 MB), and no manifest — restorable by
+  // nothing. The old sweep spared it because "it holds something"; that is the
+  // rule this test exists to keep from coming back.
+  const junk = path.join(leftovers, '2026-11-02T08-14-47-970Z')
+  fs.mkdirSync(path.join(junk, 'node_modules-link', 'some-plugin'), { recursive: true })
+  let payloadBytes = 0
+  for (let index = 0; index < 40; index += 1) {
+    fs.writeFileSync(
+      path.join(junk, 'node_modules-link', 'some-plugin', 'f' + index + '.js'),
+      'x'.repeat(100),
+      'utf8',
+    )
+    payloadBytes += 100
+  }
+  const old = new Date(Date.now() - 10 * 60 * 1000)
+  fs.utimesSync(junk, old, old)
+
+  const kept = makeComplete(leftovers, '2026-11-02T07-20-00-000Z')
+  fs.writeFileSync(path.join(kept, 'meta.json'), '{}', 'utf8')
+
+  const report = sweepIncompleteBackups(leftovers)
+
+  assert.deepEqual(report.removed, ['2026-11-02T08-14-47-970Z'], 'the wreck is named in removed')
+  assert.equal(fs.existsSync(junk), false, 'and the whole tree is gone from disk')
+  assert.equal(
+    report.bytes >= payloadBytes,
+    true,
+    'the reclaimed bytes are counted before the delete: ' + String(report.bytes),
+  )
+  assert.equal(fs.existsSync(kept), true, 'the real copy is untouched')
+  assert.equal(countIncompleteBackups(leftovers).incomplete, 0, 'and nothing incomplete is left to explain')
+})
+
+test('boot sweep: a copy with a manifest but no meta.json is kept, only counted', (t) => {
+  const root = tempRoot(t)
+  const leftovers = path.join(root, 'backups')
+  fs.mkdirSync(leftovers, { recursive: true })
+
+  // An OLD copy: it predates `meta.json`, which is why it has none. It restores
+  // perfectly well, so the sweep must not "clean" it away.
+  const legacy = makeComplete(leftovers, '2026-11-02T06-00-00-000Z')
+  const old = new Date(Date.now() - 10 * 60 * 1000)
+  fs.utimesSync(legacy, old, old)
+
+  const report = sweepIncompleteBackups(leftovers)
+
+  assert.deepEqual(report.removed, [], 'a manifest is enough: it is a copy')
+  assert.deepEqual(report.kept, ['2026-11-02T06-00-00-000Z'], 'and it is reported as kept')
+  assert.equal(fs.existsSync(legacy), true, 'it stays on disk')
+  assert.equal(countIncompleteBackups(leftovers).incomplete, 1, 'while the page still says it is not complete')
 })
