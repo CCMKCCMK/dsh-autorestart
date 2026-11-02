@@ -264,6 +264,7 @@
       "othersSummary": "{n} more pre-restart snapshots (unverified, never restored automatically)",
       "identityHint": "A backup has one of two identities: ① “known good” — the copy a boot has proven; when something breaks, only a known-good copy is rolled back, and the first install creates one automatically. ② “this restart's snapshot” — taken right before every restart and not proven yet; old backups (unverified) and that snapshot are never rolled back automatically. At most {n} copies are kept together (the oldest goes first; a known-good copy is never deleted). A manual rollback asks for confirmation first, then restarts automatically.",
       "rollback": "Roll back to this copy",
+      "newestHint": "This is the state from before this restart. If this restart caused the problem, going back to this copy fixes it; if it was already broken before the restart, this copy cannot fix it either.",
       "rollbackConfirmTitle": "Roll back to this copy?",
       "rollbackConfirmBody": "The backup from {time} will be restored over the current state — **what you have now is replaced** (a snapshot of it is taken first, so this rollback can be undone).",
       "rollbackConfirmRestart": "A restart follows automatically; this page disconnects during it and works again afterwards.",
