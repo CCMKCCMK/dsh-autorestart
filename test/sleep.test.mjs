@@ -1677,8 +1677,8 @@ test('the section shows two titled groups, the restart one first', async () => {
   assert.equal(titles[0], '重启相关设置', 'the restart group must have a visible title')
   assert.equal(titles[1], '关机相关设置', 'the shutdown group must have a visible title')
   assert.equal(titles[2], '开机自启', 'the supervisor group must have a visible title')
-  assert.equal(titles[3], '出事了怎么办', 'the rescue group must have a visible title')
-  assert.equal(titles[4], '报告问题', 'the report group must have a visible title')
+  assert.equal(titles[3], '桌面救援入口', 'the rescue group must have a visible title')
+  assert.equal(titles[4], '遇到问题', 'the report group must have a visible title')
 
   // The restart group carries three controls: the wait, the two switches.
   const restartControls = walk(groups[0]).filter(

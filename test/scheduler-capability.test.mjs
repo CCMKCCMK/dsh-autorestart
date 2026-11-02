@@ -25,6 +25,7 @@ import {
   probeTrigger,
   readStartBoundary,
   SCHEDULER_BLOCKED,
+  SCHEDULER_NOT_APPLICABLE,
   SCHEDULER_OK,
   SCHEDULER_UNKNOWN,
   shouldWarnScheduler,
@@ -159,7 +160,13 @@ test('the probe is idempotent: a leftover task of an earlier run is cleaned firs
 test('a platform without one-off tasks is not applicable, not blocked', () => {
   const fake = fakeSchtasks();
   const result = probeSchedulerCapability({ platform: 'linux', exec: fake.exec, now: Date.now() });
-  assert.equal(result.scheduler, SCHEDULER_OK);
+  // THE ANSWER IS NO LONGER `ok` (2026-11-02): a green tick for a check that
+  // never ran is exactly what this probe must not produce. `ok` stays the word
+  // for "we registered a task, read it back and deleted it again".
+  assert.equal(result.scheduler, SCHEDULER_NOT_APPLICABLE);
+  assert.notEqual(result.scheduler, SCHEDULER_OK);
+  assert.equal(result.applicable, false);
+  assert.match(result.reason, /not applicable/);
   assert.equal(result.evidence.applicable, false);
   assert.equal(fake.calls.length, 0, 'nothing is created on a platform that does not use them');
 });
