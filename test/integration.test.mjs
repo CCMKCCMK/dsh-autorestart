@@ -526,7 +526,7 @@ test('the served index gets a boot-token heartbeat for dsh web pages', () => {
     },
   })
   apply(fake.ctx, { stateFile: file, recoveryDelayMs: 0, enabled: true })
-  assert.equal(routes.length, 14, '14 since the plugin-watch route (2026-11-01)')
+  assert.equal(routes.length, 15, '15 since the backup-limit route (2026-11-02)')
   assert.equal(routes[0].kind, 'exact')
   assert.equal(routes[0].path, '/__dsh_autorestart/health')
   assert.equal(routes[1].kind, 'exact')
@@ -584,7 +584,7 @@ test('autoReloadPage: false suppresses the heartbeat but keeps the health route'
     },
   })
   apply(fake.ctx, { stateFile: file, recoveryDelayMs: 0, enabled: true, autoReloadPage: false })
-  assert.equal(routes.length, 14, '14 since the plugin-watch route (2026-11-01)')
+  assert.equal(routes.length, 15, '15 since the backup-limit route (2026-11-02)')
   assert.equal(taps.length, 0, 'without the heartbeat there is nothing to inject')
   const html = taps.length === 0 ? '<html><head></head><body>app</body></html>' : taps[0]('<html><head></head><body>app</body></html>')
   assert.doesNotMatch(html, /data-dsh-autorestart-heartbeat/, 'the heartbeat must stay off')
@@ -752,7 +752,7 @@ test('the ?gate=1 probe refuses a restart while a conversation has queued inbox 
   agent.inbox = { nextTurn: [{ id: 'm1' }], nextStep: [] };
   const { fake, routes } = contextWithRoutes({ runningAgents: [agent] });
   apply(fake.ctx, { stateFile: file, recoveryDelayMs: 0, enabled: true });
-  assert.equal(routes.length, 14, 'the health route must be registered (14 routes since the plugin-watch route)');
+  assert.equal(routes.length, 15, 'the health route must be registered (15 routes since the backup-limit route)');
   const res = fakeResponse();
   routes[0].handler({ url: '/__dsh_autorestart/health?gate=1', socket: { remoteAddress: '127.0.0.1' } }, res);
   assert.equal(res.statusCode, 200);
@@ -803,7 +803,7 @@ test('the ?state=1 probe reports the pending-restart state a UI banner needs', (
   });
   const { fake, routes } = contextWithRoutes();
   apply(fake.ctx, { stateFile: file, recoveryDelayMs: 0, enabled: true });
-  assert.equal(routes.length, 14, 'the health route must be registered (14 routes since the plugin-watch route)');
+  assert.equal(routes.length, 15, 'the health route must be registered (15 routes since the backup-limit route)');
   const res = fakeResponse();
   routes[0].handler({ url: '/__dsh_autorestart/health?state=1', socket: { remoteAddress: '127.0.0.1' } }, res);
   assert.equal(res.statusCode, 200);
