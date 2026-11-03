@@ -17,7 +17,7 @@ Three small things, all around restarting.
 
 **1. The restart is queued.** An agent asks for a restart; the plugin does not cut off the conversations that are still running. It waits until every one of them is idle, restarts the host, and picks the interrupted work back up — the sessions resume and a goal is re-armed. When several conversations ask at once the requests are merged into one restart, and every requester is woken afterwards. A goal-carrying session cannot block the restart forever: its goal is disarmed before the restart (the running round still finishes) and re-armed after it.
 
-**2. It backs up before each restart.** The configuration and the local `link:` plugin directories are saved under `~/.dsh/storages/dsh-autorestart/backups/`. At most `maxBackups` copies are kept (default 2, range 2–10); old and incomplete ones are pruned.
+**2. It backs up before each restart.** The configuration and the local `link:` plugin directories are saved under `~/.dsh/storages/dsh-autorestart/backups/`. At most `maxBackups` copies are kept (default 2, range 2–10); old and incomplete ones are pruned. A snapshot that cannot be removed (for example because a file inside it is locked) is reported in `backupHygiene.error` rather than silently kept, so the count can briefly exceed the limit.
 
 **3. It clears the login cookies.** Every launch leaves a `dsh-auth-*` entry behind; they pile up until the request header overflows (~16 KB), the server answers 431, and the client can only say `Web authentication failed`. The plugin clears those stale credentials before each restart and records the outcome in `last-cookie-clear.json`.
 
