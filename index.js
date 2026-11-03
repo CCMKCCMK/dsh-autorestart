@@ -204,8 +204,10 @@ import {
   sweepLegacyWatcherScripts,
   writeTextFileAtomic,
 } from './lib/restart.js'
+import { sweepLegacyWatchdogArtifacts } from './lib/legacy-watchdog-cleanup.js'
 import { compareSemver } from './lib/semver.js'
 import { buildCookieClearCommand, readCookieClearReport, summarizeCookieClear } from './lib/cookie-clear.js'
+import { cleanupLegacyWatchdogArtifacts } from './lib/legacy-cleanup.js'
 import { isWorkSessionEvent } from './lib/activity.js'
 import {
   createQueuedTracker,
@@ -2789,6 +2791,26 @@ export function createRuntime(ctx, config, options = {}) {
     ? options.probeInstance
     : waitForHealthyInstance
   const stateFile = resolveStateFile(config)
+
+  // THE LEFTOVERS OF 0.8.6 (2026-11-03): a machine that upgraded from 0.8.6
+  // still carries the watchdog's one-off scheduled task (a systemd user unit
+  // on Linux) and its state files. The 0.9.0 code does not know them, so it
+  // cleans them up ONCE - here, where the state directory is known and before
+  // anything else reads or writes it.
+  try {
+    const legacy = cleanupLegacyWatchdogArtifacts({
+      stateDir: path.dirname(stateFile),
+      platform: env.platform,
+    })
+    if (legacy.removedFiles.length > 0 || legacy.removedUnits.length > 0) {
+      log.warn('the leftovers of the 0.8.6 watchdog were removed: '
+        + legacy.removedFiles.join(', ')
+        + (legacy.removedUnits.length > 0 ? ' / ' + legacy.removedUnits.join(', ') : ''))
+    }
+  } catch (error) {
+    // The cleanup never throws; this is only the belt to that pair of braces.
+    log.warn('the legacy cleanup could not run:', String(error))
+  }
 
   const loaded = readState(stateFile, Date.now())
   if (loaded.corrupt) {
@@ -11881,6 +11903,20 @@ export function apply(ctx, rawConfig, options = {}) {
     })
   } else if (watcherHygiene.error !== null) {
     log.warn('could not sweep the old rollback watcher scripts:', watcherHygiene.error)
+  }
+  // 0.8.x armed a one-shot task and wrote a few state files; 0.9.0 reads none of
+  // them, so the first boot of this version removes them once (a scheduled task
+  // pointing at a script this version no longer ships can only fail).
+  const legacyWatchdog = sweepLegacyWatchdogArtifacts({
+    stateDir: path.dirname(String(runtime.stateFile ?? '')),
+  })
+  if (legacyWatchdog.removedFiles.length > 0 || legacyWatchdog.removedUnits.length > 0) {
+    log.warn('removed what the old watchdog left behind', {
+      files: legacyWatchdog.removedFiles,
+      units: legacyWatchdog.removedUnits,
+    })
+  } else if (legacyWatchdog.error !== null) {
+    log.warn('could not clean up the old watchdog leftovers:', legacyWatchdog.error)
   }
 
   trackAgents(ctx, runtime, config)
