@@ -450,7 +450,7 @@ show up in the Plugin Manager and in the config editor.
 | `continuationText` | `''` | Overrides the default continuation prompt text. |
 | `backupOnRestart` | `true` | Snapshot the profile before every restart, so a restart that leaves the host unable to boot can be rolled back. |
 | `backupIncludePlugins` | `true` | Include the installed plugin tree in that snapshot (about 117 MB here, ~3 s). `false` keeps only the configuration files. |
-| `maxBackups` | `3` | How many snapshots are kept (the current one plus the two before it); older ones are deleted when a new one is written — **except the newest copy whose identity is `known-good`, which is never deleted**. |
+| `maxBackups` | `2` | How many snapshots are kept — **2 by default, settable to 2–10 in the settings page**; older ones are deleted when a new one is written — **except the newest copy whose identity is `known-good`, which is never deleted**. |
 | `rollbackTimeoutMs` | `90000` | How long the detached watcher waits for the new host before it restores the snapshot. |
 | `restartCommandTimeoutMs` | `30000` | How long the restart command may run before the plugin stops waiting for it. A command that starts the host in the foreground never returns — that is reported as "still running", not as a failure. |
 | `rollbackCopyTimeoutMs` | `120000` | How long ONE restore step (the configuration files, then the plugin tree) may take. A restore that does not finish in time is given up and the reason is written into the rollback report. |
@@ -677,8 +677,8 @@ it was started from, so a restart that leaves the host unable to boot can be und
   plugin restores nothing and says why: the report carries `no-known-good: <reason>`, the profile is
   left exactly as the failed restart left it, and no watcher is armed (a watcher with nothing to
   restore would only write the broken state back).
-- **How many are kept:** the newest `maxBackups` snapshots (default `3`: the current one plus the two
-  before it); older ones are deleted when a new one is written. The newest copy whose identity is
+- **How many are kept:** the newest `maxBackups` snapshots (**2** by default, settable to **2–10** in the
+  settings page); older ones are deleted when a new one is written. The newest copy whose identity is
   `known-good` is never deleted, whatever the limit says — it is the only kind an automatic rollback
   restores.
 - **How a failed boot is detected:** a small watcher runs **outside** the host process (so it survives

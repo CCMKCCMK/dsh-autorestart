@@ -187,7 +187,7 @@ session resume on boot, durable-goal re-arm, and an agent-callable idle-aware gr
 - **回滚目标是「有一次启动跟在它后面的那份」，不是「最新的一份」**（用户决定，2026-10-30）。每份备份旁边有一张 `meta.json`，**它只记事实**：什么时候拍的（`takenAt` / `at`）、由什么动作触发（`trigger`——`first-install` / `pre-restart` / `manual-rollback`）、这份是多少版本（`version`）、内容指纹（`contentFingerprint`）、以及那次启动的结果（`boot`：`started` 主机起来没有、`contentMatched` 跑的是不是这份内容、`loadFailures` 有没有插件加载失败）。**身份不写在磁盘上**：`known-good` / `snapshot` / `unknown` 是宿主**读取时按这些事实派生**的——有启动记录（或它是首装那份）→ `known-good`；后面还没有任何一次启动 → `snapshot`；读不到 `meta.json`、旧记录里也没有可用的启动记录 → `unknown`。**名字和「能不能被自动还原」是两道判据**：名字只看有没有启动记录；能不能被自动还原是更窄的第二道——那次启动**起来了**（`started`）**且跑的就是这份内容**（`contentMatched`），所以叫 `known-good` 不等于能自动还回去。这个身份记的是「拍完之后发生了什么」，**不是**对里面插件能不能用的评价。**这次重启前拍的那份永远不是回滚目标**，因为它可能正是坏掉的那一份（「改坏了插件再点重启」就是这个场景），要等后面那次启动证明过它才算数。第一次安装时会种子一份首装副本（`trigger: first-install`）；每次启动后（四项自检全过，或托管模式探活答了、且跑的就是这份内容）把那次重启前的快照记上 `boot`。
 - **没有可回滚的身份就一份都不还原**：找不到最新的 `known-good`（即上一次启动成功之后回写的那份）时，回滚什么都不做，报告里写 `no-known-good: <原因>`，profile 保持失败重启后的原样，看门狗也**不挂**（没有可还原的目标，挂上去只会再把坏配置写一遍）。
 - **可以手动回退到任意一份备份**（含更早、后面没有启动记录的那份，用户决定 2026-10-30）：设置页每行都有「回退到这一份」，点了先弹**二次确认**（写清还原哪一份、当前状态会被覆盖、还原后会自动重启），确认后才动，取消则什么都不发。服务端 `POST /__dsh_autorestart/rollback-to` 只收**备份目录名**（必须是本机列表里的那一份，路径 / 路径穿越直接拒绝），顺序是先存一份当前快照（`reason: before-manual-rollback`，所以这次回退本身还能再退回来）→ 再还原选中的那份 → 写 `last-manual-rollback.json` 回执 → 走既有重启流程请求重启（插件自己绝不 kill 进程）；当前状态存不下来、或看门狗正持有回滚锁时直接拒绝（409），不会出现还原了一半。
-- 开关：`backupOnRestart`（默认 `true`）、`backupIncludePlugins`（默认 `true`，关掉就只备配置文件）、`maxBackups`（默认 `3`：当前一份 + 之前两份；身份为 `known-good` 的那一份永远不删）、`rollbackTimeoutMs`（默认 `90000`）、`restartCommandTimeoutMs`（默认 `30000`）、`rollbackCopyTimeoutMs`（默认 `120000`）。
+- 开关：`backupOnRestart`（默认 `true`）、`backupIncludePlugins`（默认 `true`，关掉就只备配置文件）、`maxBackups`（默认 `2`，可在设置页设为 2–10 份；身份为 `known-good` 的那一份永远不删）、`rollbackTimeoutMs`（默认 `90000`）、`restartCommandTimeoutMs`（默认 `30000`）、`rollbackCopyTimeoutMs`（默认 `120000`）。
 
 ### 这台电脑不让建计划任务时（自动回滚就没了）
 
@@ -504,7 +504,7 @@ macOS 用同样的两个 POSIX `sh` 脚本；从未在真 Mac 上跑过，属于
 | `continuationText` | `''` | 覆盖默认续接提示文本 |
 | `backupOnRestart` | `true` | 每次重启前给 profile 拍快照；重启后起不来时能自动回退 |
 | `backupIncludePlugins` | `true` | 快照里是否带上已安装插件目录（本机约 117 MB、多约 3 秒）；关掉就只备配置文件 |
-| `maxBackups` | `3` | 保留几份快照（当前一份 + 之前两份）；写新的时自动删旧的——但身份为 `known-good` 的那一份永远不删 |
+| `maxBackups` | `2` | 保留几份快照（**默认 2 份，可在设置页设为 2–10 份**）；写新的时自动删旧的——但身份为 `known-good` 的那一份永远不删 |
 | `rollbackTimeoutMs` | `90000` | 看护脚本等新宿主多久（毫秒），超时就回退快照（**不会再拉起第二个宿主**） |
 | `restartCommandTimeoutMs` | `30000` | 重启命令最多让插件等多久（毫秒）。前台跑着宿主的命令永远不返回——那会报「还在运行」，不算失败 |
 | `rollbackCopyTimeoutMs` | `120000` | 拷回快照的**每一步**最多花多久（毫秒）：拷不完就放弃，并把原因写进回退报告 |
