@@ -252,9 +252,9 @@
     // "Backup" is the verb and BOTH options share the "configuration" base:
     // the plugins are an ADDITION to the configuration, never a rival of it.
     backupChoiceTitle: '重启前自动备份：要不要把已安装的插件也一起备份？',
-    backupChoiceBody: '每次重启前会快照当前配置，万一重启后起不来就能自动回退。',
+    backupChoiceBody: '每次重启前会快照当前配置，留一份可以手工翻回去的存档——插件不会自动使用它。',
     backupChoiceWithPlugins: '配置 + 已安装插件',
-    backupChoiceWithPluginsHint: '多约 3 秒、约 117 MB；插件把启动搞坏时也能回退。',
+    backupChoiceWithPluginsHint: '多约 3 秒、约 117 MB；插件把启动搞坏时，可以拿这份存档手工回退。',
     backupChoiceConfigOnly: '只备份配置',
     backupChoiceConfigOnlyHint: '瞬间完成、约 66 KB；插件问题无法回退，需要手动重装。',
     backupChoiceFootnote: '以后可在 设置 → 自动重启与关机 修改',
@@ -301,7 +301,7 @@
     'settings.backup.label': '重启前备份',
     'settings.backup.details': '详情',
     'settings.backup.section': '备份说明及手动备份操作',
-    'settings.backup.hint': '重启前自动存一份，重启后起不来时能退回去。存的是：你的设置（一定）；你自己写的、直接链接到源码目录的插件（连文件一起拷）；从网上下载装的插件（只记下装过哪些、什么版本，不拷文件，真出事时按清单重装）。',
+    'settings.backup.hint': '重启前自动存一份存档；插件不会自动还原，要回退得在下面自己点。存的是：你的设置（一定）；你自己写的、直接链接到源码目录的插件（连文件一起拷）；从网上下载装的插件（只记下装过哪些、什么版本，不拷文件，真出事时按清单重装）。',
     'settings.backupPlugins.label': '备份包含已安装插件',
     'settings.backupPlugins.hint': '关闭后只备份 DSH 自身状态，不含 profile 里的插件目录。',
     'settings.restartBanner.title': '这台机器现在还没有重启能力：本插件不会重启，也不会在重启前备份。点一下「帮我配好」，我自动推导并写入；配错了可以撤销。',
@@ -553,7 +553,7 @@
     // 插件这次没激活 —— 把这件事搬到前台，并且只给一个动作：只恢复这一个。
     'pluginFailure.title': "有两件事要你看一下",
         'pluginFailure.hint': "这些功能已经记下来了，之后可以在「插件」页里再恢复。",
-        'settings.description': "自动重启 DSH、守护插件，出问题能一键恢复。",
+        'settings.description': "自动重启 DSH、重启前备份；出问题有存档可查，不会自动还原。",
         'settings.restore': "恢复",
         // THE TWO SENTENCES THAT REPLACED THE PER-PLUGIN THIRD-PARTY LINE (user
     // correction, 2026-11-02). The old copy said "the backup holds only its name
@@ -707,9 +707,9 @@
     // "Backup" is the verb and BOTH options share the "configuration" base:
     // the plugins are an ADDITION to the configuration, never a rival of it.
     backupChoiceTitle: 'Automatic pre-restart backup: include the installed plugins too?',
-    backupChoiceBody: 'A snapshot of the current configuration is taken before every restart, so a host that fails to come back can be rolled back automatically.',
+    backupChoiceBody: 'A snapshot of the current configuration is taken before every restart - an archive you can roll back by hand; the plugin never uses it on its own.',
     backupChoiceWithPlugins: 'Configuration + installed plugins',
-    backupChoiceWithPluginsHint: 'About 3 seconds and 117 MB more; a plugin that breaks the boot can be rolled back too.',
+    backupChoiceWithPluginsHint: 'About 3 seconds and 117 MB more; if a plugin breaks the boot, you can roll back to this snapshot by hand.',
     backupChoiceConfigOnly: 'Configuration only',
     backupChoiceConfigOnlyHint: 'Instant, about 66 KB; plugin problems cannot be rolled back and need a manual reinstall.',
     backupChoiceFootnote: 'You can change this later in Settings → Auto-restart & shut down',
@@ -756,7 +756,7 @@
     'settings.backup.label': 'Backup before a restart',
     'settings.backup.details': 'Details',
     'settings.backup.section': 'What is backed up, and the manual backup steps',
-    'settings.backup.hint': 'A copy is taken before every restart, so a host that cannot boot again is rolled back. What it holds: your settings (always); plugins you wrote and linked from a source directory (copied file by file); plugins downloaded from the internet (only which ones and which version are recorded — never copied; they are reinstalled from that list).',
+    'settings.backup.hint': 'A copy is taken before every restart - an archive, not an automatic rollback: nothing is put back unless you click it below. What it holds: your settings (always); plugins you wrote and linked from a source directory (copied file by file); plugins downloaded from the internet (only which ones and which version are recorded - never copied; they are reinstalled from that list).',
     'settings.backupPlugins.label': 'Include the installed plugins in the backup',
     'settings.backupPlugins.hint': 'Off: only the state of DSH itself is backed up — the plugin directory of the profile is left out.',
     'settings.restartBanner.title': 'This machine has no restart capability right now: this plugin will not restart, and will not take a backup before a restart. Press "Set it up for me" and I derive and write it — and that can be undone.',
@@ -983,7 +983,7 @@
     // one action: put THIS one plugin back.
     'pluginFailure.title': "Two things worth a look",
         'pluginFailure.hint': "These are on record - you can restore them later from the Plugins page.",
-        'settings.description': "Restarts DSH, watches your plugins, and puts back the ones it can.",
+        'settings.description': "Restarts DSH and snapshots it before every restart; there is an archive to look at, and nothing is restored automatically.",
         'settings.restore': "Restore",
     'settings.thirdParty': "You did not write this plugin yourself, so it cannot be restored from the backup - it has to be reinstalled.",
         'settings.version': "version {version}",

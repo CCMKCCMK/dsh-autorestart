@@ -26,7 +26,7 @@ There is also a **countdown shutdown**: a moon button at the bottom of the sideb
 ## What it does not do
 
 - It does **not watch the host** and does **not decide** whether a restart came back.
-- It does **not restore anything on its own**. The backup is never applied automatically; it is there for you to inspect or roll back by hand.
+- It does **not restore anything on its own**. The backup is never applied automatically; it is there for you to inspect or roll back by hand. The one exception is the start-at-login supervisor, if you installed it: that separate process rolls the last snapshot back when the host refuses to start.
 - There is **nothing left to run by hand**. If the host will not start, use its own crash dialog or reinstall the plugin.
 
 ## Tools for the agent
