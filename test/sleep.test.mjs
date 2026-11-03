@@ -698,7 +698,7 @@ function fakeResponse() {
 }
 
 /** A request with a JSON body, good enough for `readJsonBody`. */
-function fakeRequest(method, body, headers = {}) {
+function fakeRequest(method, body, headers = { 'content-type': 'application/json' }) {
   const payload = body === undefined ? '' : JSON.stringify(body)
   return {
     method,

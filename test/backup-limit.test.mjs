@@ -114,6 +114,7 @@ function fakeRequest(method, body) {
   return {
     method,
     url: '/__dsh_autorestart/backup-limit',
+    headers: { 'content-type': 'application/json' },
     socket: { remoteAddress: '127.0.0.1' },
     on(event, handler) {
       if (event === 'data') handler(payload)

@@ -33,8 +33,10 @@ import {
   cancelRestart,
   clearSleep,
   disarmedRecord,
+  disarmedGoalEntry,
   entryFor,
   handoffRecord,
+  isForbiddenSessionId,
   markIdle,
   markPendingResume,
   markRunning,
@@ -44,6 +46,7 @@ import {
   recordOnboarding,
   recoverableSessions,
   requestRestart,
+  sessionEntry,
   setContextOverflow,
   setDisarmedGoal,
   setGoal,
@@ -420,7 +423,7 @@ function snapGraceChoice(value, fallback = DEFAULT_RESTART_GRACE_MS) {
  * `pluginVersion()`), but a bundled installation may not ship that file — so
  * the constant below is the last resort. A test keeps the two in sync.
  */
-const PLUGIN_VERSION_FALLBACK = '0.9.0'
+const PLUGIN_VERSION_FALLBACK = '0.9.1'
 
 /**
  * The version of the graceful-shutdown FEATURE, not the version of the package.
@@ -3305,6 +3308,11 @@ let queueDiagLog = { at: 0, requestedAt: 0 }
    * never break the restart gate.
    */
   const disarmGoal = (sessionId, agent) => {
+    // A session id like `__proto__` would land on the prototype of the
+    // session map: it is refused, and NOTHING is written.
+    if (isForbiddenSessionId(sessionId)) {
+      return { sessionId, disarmed: false, reason: 'invalid-session-id', error: 'invalid-session-id' }
+    }
     const target = agent || liveAgent(sessionId)
     if (!target) {
       return { sessionId, disarmed: false, reason: GOAL_BLOCK_REASONS.NO_AGENT, error: 'session-not-live' }
@@ -3426,6 +3434,16 @@ let queueDiagLog = { at: 0, requestedAt: 0 }
     if (sourceId === null) {
       return { ok: false, error: 'no-session', instruction: 'No source session: pass sessionId, or call this tool from the session that should be handed off.' }
     }
+    // A session id like `__proto__` would land on the prototype of the
+    // session map: it is refused, and NOTHING is written.
+    if (isForbiddenSessionId(sourceId)) {
+      return {
+        ok: false,
+        error: 'invalid-session-id',
+        sourceSessionId: sourceId,
+        detail: `"${sourceId}" is not a usable session id.`,
+      }
+    }
     const read = readSession(sourceId)
     if (!read.session) {
       return {
@@ -3458,7 +3476,7 @@ let queueDiagLog = { at: 0, requestedAt: 0 }
     const objective = goal && typeof goal === 'object'
       ? [goal.objective, goal.title, goal.description].find((value) => typeof value === 'string' && value.trim() !== '') ?? null
       : null
-    const entry = state.sessions && state.sessions[sourceId] ? state.sessions[sourceId] : null
+    const entry = sessionEntry(state, sourceId)
     const goalLabel = entry && entry.goal && entry.goal.goalId != null
       ? String(entry.goal.goalId)
       : (goal && goal.id != null ? String(goal.id) : null)
@@ -3636,7 +3654,7 @@ let queueDiagLog = { at: 0, requestedAt: 0 }
           })
           // WHY this goal is disarmed, written into the record next to the
           // timestamp: `disarmedAt` alone cannot tell a restart from a rescue.
-          const record = state.disarmedGoals && state.disarmedGoals[sessionId]
+          const record = disarmedGoalEntry(state, sessionId)
           if (record && typeof record === 'object') record.reason = reason
           disarmed.push(result)
         } else {
@@ -3934,7 +3952,7 @@ const titleOfSummary = (item) => {
       if (typeof restart.bySessionId === 'string' && restart.bySessionId) ids.add(restart.bySessionId)
     }
     for (const sessionId of ids) {
-      const entry = state.sessions ? state.sessions[sessionId] : undefined
+      const entry = sessionEntry(state, sessionId)
       if (!entry) continue
       entry.pendingResume = false
       entry.interrupted = false
@@ -7075,8 +7093,15 @@ const titleOfSummary = (item) => {
      */
     async recoverNow(sessionId, { force = false } = {}) {
       const target = typeof sessionId === 'string' && sessionId.trim() !== '' ? sessionId.trim() : null
+      // A session id like `__proto__` would land on the prototype of the
+      // session map: it is refused, and NOTHING is written.
+      if (target !== null && isForbiddenSessionId(target)) {
+        return [{ sessionId: target, action: 'refused', detail: 'invalid-session-id' }]
+      }
       if (force === true && target !== null) {
-        const entry = state.sessions && state.sessions[target] ? state.sessions[target] : null
+        // ONLY the own entry is read: a bare `state.sessions[target]` would
+        // hand out `Object.prototype` itself for the id `__proto__`.
+        const entry = sessionEntry(state, target)
         if (entry) {
           // An explicit retry re-checks the live evidence, so a stale record must
           // not keep the session out of recovery, and the attempt counter resets.
@@ -8428,10 +8453,11 @@ export function buildLifecycleTools(runtime, config) {
         }
       }
       if (sessionId && resume) {
+        const entry = sessionEntry(state, sessionId)
         markPendingResume(state, {
           sessionId,
           reason: 'agent-requested restart',
-          goalId: state.sessions[sessionId] && state.sessions[sessionId].goal ? state.sessions[sessionId].goal.goalId : undefined,
+          goalId: entry && entry.goal ? entry.goal.goalId : undefined,
           now,
         })
       }
@@ -8712,6 +8738,11 @@ export function buildLifecycleTools(runtime, config) {
       if (!sessionId) {
         return { ok: false, disarmed: false, reason: 'no-session' }
       }
+      // A session id like `__proto__` would land on the prototype of the
+      // session map: it is refused, and NOTHING is written.
+      if (isForbiddenSessionId(sessionId)) {
+        return { ok: false, disarmed: false, sessionId, reason: 'invalid-session-id' }
+      }
       const result = runtime.disarmGoal(sessionId, sessionId === callerId ? agent : undefined)
       const payload = {
         ok: true,
@@ -8759,6 +8790,11 @@ export function buildLifecycleTools(runtime, config) {
     ),
     async execute(args = {}) {
       const requested = typeof args.sessionId === 'string' ? args.sessionId.trim() : ''
+      // A session id like `__proto__` would land on the prototype of the
+      // session map: it is refused, and NOTHING is written.
+      if (isForbiddenSessionId(requested)) {
+        return { ok: false, results: [{ sessionId: requested, action: 'refused', detail: 'invalid-session-id' }] }
+      }
       const results = await runtime.recoverNow(requested !== '' ? requested : undefined, { force: args.force === true })
       return { ok: true, results }
     },
@@ -9438,6 +9474,75 @@ function readJsonBody(req, maxBytes = 64 * 1024) {
 }
 
 /**
+ * The content type of a request, lowercased and without its parameters.
+ *
+ * @param {object} req
+ * @returns {string}
+ */
+function requestContentType(req) {
+  const headers = req && typeof req.headers === 'object' && req.headers !== null ? req.headers : {};
+  const raw = headers['content-type'] ?? headers['Content-Type'] ?? '';
+  const value = Array.isArray(raw) ? String(raw[0] ?? '') : String(raw ?? '');
+  return value.split(';')[0].trim().toLowerCase();
+}
+
+/**
+ * The guard of every route that CHANGES state.
+ *
+ * A cross-site "simple request" (a form POST, or a fetch that sends
+ * `text/plain`) is sent by the browser WITHOUT a preflight, so a page on
+ * another site could reach a route that parks a goal, hands a session off or
+ * recovers one. A request that declares `application/json` is NOT a simple
+ * request: the browser asks the server first, and a server that answers
+ * anything but a CORS allow-list refuses it. So the content type is the
+ * switch that keeps another site from changing this host's state.
+ *
+ * The route answers 415 and changes NOTHING when the content type is not
+ * `application/json`.
+ *
+ * @param {object} req
+ * @param {object} res
+ * @returns {boolean} true when the request may go on
+ */
+function requireJsonContentType(req, res) {
+  if (requestContentType(req) === 'application/json') return true;
+  res.statusCode = 415
+  res.setHeader('content-type', 'application/json; charset=utf-8')
+  res.setHeader('cache-control', 'no-store')
+  res.end(JSON.stringify({
+    ok: false,
+    error: 'unsupported-media-type',
+    detail: 'This route changes state, so it only accepts application/json.',
+  }))
+  return false;
+}
+
+/**
+ * Refuse a session id that must never become a key of the session map.
+ *
+ * `__proto__` (and `constructor` / `prototype`) are inherited properties of
+ * every object: a session id like that would make the map hand out
+ * `Object.prototype` instead of a session, and the fields written on it would
+ * land in the prototype of the whole process. The route answers 400 and
+ * changes NOTHING.
+ *
+ * @param {object} res
+ * @param {string} sessionId
+ * @returns {boolean} true when the request may go on
+ */
+function refuseForbiddenSessionId(res, sessionId) {
+  res.statusCode = 400
+  res.setHeader('content-type', 'application/json; charset=utf-8')
+  res.setHeader('cache-control', 'no-store')
+  res.end(JSON.stringify({
+    ok: false,
+    error: 'invalid-session-id',
+    detail: `"${sessionId}" is not a usable session id.`,
+  }))
+  return false;
+}
+
+/**
  * The ids of the sessions that currently block a pending restart.
  *
  * @param {object} runtime
@@ -9487,9 +9592,18 @@ function buildParkRoute(ctx, runtime, config) {
         res.end('{"ok":false,"error":"method-not-allowed"}')
         return
       }
+      // A route that changes state only accepts JSON: a cross-site simple
+      // request (a form post, or text/plain) must not be able to reach it.
+      if (!requireJsonContentType(req, res)) return
       void readJsonBody(req).then((payload) => {
         const body = payload && typeof payload === 'object' ? payload : {}
         const sessionId = typeof body.sessionId === 'string' ? body.sessionId.trim() : ''
+        // A session id like `__proto__` would land on the prototype of the
+        // session map: it is refused here, before anything is written.
+        if (isForbiddenSessionId(sessionId)) {
+          refuseForbiddenSessionId(res, sessionId)
+          return
+        }
         const restart = body.restart === true
         // Without a session id every session that blocks a pending restart is
         // parked, so the restart can proceed.
@@ -9599,9 +9713,18 @@ function buildCancelRoute(ctx, runtime, config) {
         res.end('{"ok":false,"error":"method-not-allowed"}')
         return
       }
+      // A route that changes state only accepts JSON: a cross-site simple
+      // request (a form post, or text/plain) must not be able to reach it.
+      if (!requireJsonContentType(req, res)) return
       void readJsonBody(req).then((payload) => {
         const body = payload && typeof payload === 'object' ? payload : {}
         const sessionId = typeof body.sessionId === 'string' ? body.sessionId.trim() : ''
+        // A session id like `__proto__` would land on the prototype of the
+        // session map: it is refused here, before anything is written.
+        if (isForbiddenSessionId(sessionId)) {
+          refuseForbiddenSessionId(res, sessionId)
+          return
+        }
         const scope = typeof body.scope === 'string' && body.scope.trim() !== '' ? body.scope.trim() : 'mine'
         const answer = (statusCode, value) => {
           res.statusCode = statusCode
@@ -9751,9 +9874,18 @@ function buildRecoverRoute(ctx, runtime, config) {
         res.end('{"ok":false,"error":"method-not-allowed"}')
         return
       }
+      // A route that changes state only accepts JSON: a cross-site simple
+      // request (a form post, or text/plain) must not be able to reach it.
+      if (!requireJsonContentType(req, res)) return
       void readJsonBody(req).then(async (payload) => {
         const body = payload && typeof payload === 'object' ? payload : {}
         const sessionId = typeof body.sessionId === 'string' ? body.sessionId.trim() : ''
+        // A session id like `__proto__` would land on the prototype of the
+        // session map: it is refused here, before anything is written.
+        if (isForbiddenSessionId(sessionId)) {
+          refuseForbiddenSessionId(res, sessionId)
+          return
+        }
         const results = await runtime.recoverNow(sessionId !== '' ? sessionId : undefined, { force: body.force === true })
         res.statusCode = 200
         res.setHeader('content-type', 'application/json; charset=utf-8')
@@ -9802,9 +9934,18 @@ function buildHandoffRoute(ctx, runtime, config) {
         res.end('{"ok":false,"error":"method-not-allowed"}')
         return
       }
+      // A route that changes state only accepts JSON: a cross-site simple
+      // request (a form post, or text/plain) must not be able to reach it.
+      if (!requireJsonContentType(req, res)) return
       void readJsonBody(req).then(async (payload) => {
         const body = payload && typeof payload === 'object' ? payload : {}
         const sessionId = typeof body.sessionId === 'string' ? body.sessionId.trim() : ''
+        // A session id like `__proto__` would land on the prototype of the
+        // session map: it is refused here, before anything is written.
+        if (isForbiddenSessionId(sessionId)) {
+          refuseForbiddenSessionId(res, sessionId)
+          return
+        }
         if (sessionId === '') {
           res.statusCode = 400
           res.setHeader('content-type', 'application/json; charset=utf-8')
@@ -9883,6 +10024,9 @@ function buildManualRollbackRoute(ctx, runtime, config) {
         res.end('{"ok":false,"error":"method-not-allowed"}')
         return
       }
+      // A route that changes state only accepts JSON: a cross-site simple
+      // request (a form post, or text/plain) must not be able to reach it.
+      if (!requireJsonContentType(req, res)) return
       void readJsonBody(req).then(async (payload) => {
         const body = payload && typeof payload === 'object' ? payload : {}
         const result = await runtime.manualRollback({ name: body.name })
@@ -9964,6 +10108,9 @@ function buildPluginRestoreRoute(ctx, runtime, config) {
         res.end('{"ok":false,"error":"method-not-allowed"}')
         return
       }
+      // A route that changes state only accepts JSON: a cross-site simple
+      // request (a form post, or text/plain) must not be able to reach it.
+      if (!requireJsonContentType(req, res)) return
       void readJsonBody(req).then((payload) => {
         const body = payload && typeof payload === 'object' ? payload : {}
         const plugin = typeof body.plugin === 'string' ? body.plugin.trim() : ''
@@ -10212,6 +10359,9 @@ function buildAnnouncementsRoute(ctx, runtime, config) {
         res.end('{"ok":false,"error":"method-not-allowed"}')
         return
       }
+      // A route that changes state only accepts JSON: a cross-site simple
+      // request (a form post, or text/plain) must not be able to reach it.
+      if (!requireJsonContentType(req, res)) return
       void readJsonBody(req).then((payload) => {
         const body = payload && typeof payload === 'object' ? payload : {}
         const feature = typeof body.feature === 'string' ? body.feature.trim() : ''
@@ -10307,6 +10457,9 @@ function buildBackupLimitRoute(ctx, runtime, config) {
         res.end('{"ok":false,"error":"method-not-allowed"}')
         return
       }
+      // A route that changes state only accepts JSON: a cross-site simple
+      // request (a form post, or text/plain) must not be able to reach it.
+      if (!requireJsonContentType(req, res)) return
       void readJsonBody(req).then(async (payload) => {
         const body = payload && typeof payload === 'object' ? payload : {}
         const verdict = validateBackupLimit(body.maxBackups)
@@ -10387,6 +10540,9 @@ function buildChoiceRoute(ctx, runtime, config) {
         res.end('{"ok":false,"error":"method-not-allowed"}')
         return
       }
+      // A route that changes state only accepts JSON: a cross-site simple
+      // request (a form post, or text/plain) must not be able to reach it.
+      if (!requireJsonContentType(req, res)) return
       void readJsonBody(req).then(async (payload) => {
         const body = payload && typeof payload === 'object' ? payload : {}
         const hasInclude = Object.prototype.hasOwnProperty.call(body, 'includePlugins')
@@ -10585,6 +10741,9 @@ function buildSupervisorRoute(ctx, runtime, config) {
         res.end('{"ok":false,"error":"method-not-allowed"}')
         return
       }
+      // A route that changes state only accepts JSON: a cross-site simple
+      // request (a form post, or text/plain) must not be able to reach it.
+      if (!requireJsonContentType(req, res)) return
       void readJsonBody(req).then(async (payload) => {
         const body = payload && typeof payload === 'object' ? payload : {}
         const action = typeof body.action === 'string' ? body.action.trim() : ''
@@ -11132,6 +11291,9 @@ function buildSleepRoute(ctx, runtime, config, sleep) {
         res.end('{"ok":false,"error":"method-not-allowed"}')
         return
       }
+      // A route that changes state only accepts JSON: a cross-site simple
+      // request (a form post, or text/plain) must not be able to reach it.
+      if (!requireJsonContentType(req, res)) return
       void readJsonBody(req).then((payload) => {
         const body = payload && typeof payload === 'object' ? payload : {}
         const action = typeof body.action === 'string' ? body.action.trim() : ''
@@ -11657,7 +11819,7 @@ function trackAgents(ctx, runtime, config) {
       if (!isRootAgent(ctx, agent)) return
       const now = Date.now()
       if (status === 'running') {
-        const existing = state.sessions[String(agent.id)]
+        const existing = sessionEntry(state, String(agent.id))
         markRunning(state, {
           sessionId: String(agent.id),
           reason: 'turn',
@@ -11717,7 +11879,7 @@ function trackAgents(ctx, runtime, config) {
     try {
       if (!agent || !agent.id) return
       if (!isRootAgent(ctx, agent)) return
-      const entry = state.sessions[String(agent.id)]
+      const entry = sessionEntry(state, String(agent.id))
       if (entry && entry.running) {
         // An agent that disappears mid-turn is an interruption worth resuming later.
         entry.running = false
@@ -11738,7 +11900,7 @@ function trackAgents(ctx, runtime, config) {
       if (!agent || !agent.id) continue
       if (!isRootAgent(ctx, agent)) continue
       if (agent.status !== 'running') continue
-      const existing = state.sessions[String(agent.id)]
+      const existing = sessionEntry(state, String(agent.id))
       if (existing && (existing.pendingResume || existing.interrupted)) continue
       markRunning(state, { sessionId: String(agent.id), reason: 'turn', now })
       seeded += 1

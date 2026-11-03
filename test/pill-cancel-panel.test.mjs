@@ -659,6 +659,7 @@ async function callCancel(route, body, method = 'POST') {
   let payload = ''
   const req = {
     method,
+    headers: { 'content-type': 'application/json' },
     socket: { remoteAddress: '127.0.0.1' },
     on: (event, handler) => {
       if (event === 'data') handler(Buffer.from(JSON.stringify(body ?? {})))

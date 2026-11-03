@@ -178,6 +178,7 @@ function fakeRequest(body, { method = 'POST', remoteAddress = '127.0.0.1' } = {}
   return {
     method,
     url: '/__dsh_autorestart/handoff',
+    headers: { 'content-type': 'application/json' },
     socket: { remoteAddress },
     on(event, handler) {
       handlers[event] = handler

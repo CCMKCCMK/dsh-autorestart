@@ -133,6 +133,7 @@ function fakeRequest(method, body, url) {
   return {
     method,
     url: url || SLEEP_PATH,
+    headers: { 'content-type': 'application/json' },
     socket: { remoteAddress: '127.0.0.1' },
     on(event, handler) {
       if (event === 'data') handler(payload)
