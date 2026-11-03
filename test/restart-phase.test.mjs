@@ -15,6 +15,8 @@
  *      pretending to be busy.
  */
 
+// Every temporary directory this file creates is removed when the run ends.
+import './_tmp-guard.mjs'
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -388,7 +390,7 @@ test('a copy that is followed by a refused restart goes back to waiting', async 
   // checked. The fixture therefore certifies the copy by hand — the same thing a
   // real boot does once the call site passes its check result in.
   assert.equal(
-    markKnownGood(knownGoodDir, { reason: 'test', certifiedBy: 'manual-rollback' }).promoted,
+    markKnownGood(knownGoodDir, { intervention: false, reason: 'test', certifiedBy: 'manual-rollback' }).promoted,
     true,
     'the test copy is marked known-good',
   );

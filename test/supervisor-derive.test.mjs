@@ -11,6 +11,8 @@
  * the plugin's row, so "nothing was written" is an assertion, not a promise.
  */
 
+// Every temporary directory this file creates is removed when the run ends.
+import './_tmp-guard.mjs'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -21,10 +23,18 @@ import { apply } from '../index.js'
 
 const SUPERVISOR_PATH = '/__dsh_autorestart/supervisor'
 
-/** A temporary state file (the plugin writes its checkpoint there). */
+/**
+ * A temporary state file (the plugin writes its checkpoint there).
+ *
+ * IT RETURNS AN OBJECT, AND THAT MATTERS (2026-11-03): callers destructure
+ * `const { file } = tempStateFile(...)`, so returning a bare string handed them
+ * `undefined` - `stateFile` then fell back to the DEFAULT one, which is the machine's
+ * real `.dsh/storages/dsh-autorestart/state.json`. That is how a test run rewrote the
+ * user's own `access.json` / `watchdog-ready.json` with the fake port 1234.
+ */
 function tempStateFile(name) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-autorestart-derive-'))
-  return path.join(dir, name + '.json')
+  return { dir, file: path.join(dir, name + '.json') }
 }
 
 /** A fake Cordis context that records the routes. */

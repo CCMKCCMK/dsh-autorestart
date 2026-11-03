@@ -63,19 +63,22 @@ starts in between is never killed.
 
 ## Supported platforms
 
-One question decides everything: **is your machine one of the four environments below?**
+One question decides everything: **which environment below are you in, and has anybody actually run it there?**
 
-| Your machine | Supported | What you must know |
+| Your machine | Run on a real machine | What you must know |
 | --- | --- | --- |
-| **Windows desktop** (the DeepSeek Harness client) | **yes** | nothing to configure — `restartMode: app` is the default |
-| **`dsh web` on Windows** | **yes** | you must set `restartMode: command` **and** a `restartCommand` that really restarts this host |
-| **`dsh web` on WSL** | **yes** | same as above; remember the shutdown button switches off the **whole Windows machine**, not the distro |
-| **`dsh web` on Linux** | **yes** | same as above |
+| **Windows desktop** (the DeepSeek Harness client) | **yes — verified** | nothing to configure — `restartMode: app` is the default |
+| **`dsh web` on WSL, with `systemd --user`** | **yes — verified** | you must set `restartMode: command` **and** a `restartCommand` that really restarts this host; remember the shutdown button switches off the **whole Windows machine**, not the distro |
+| **`dsh web` on WSL, without `systemd --user`** | **not yet** | the same configuration as the row above; the automatic rollback falls back to a detached process of the plugin's own |
+| **`dsh web` on Windows** | **not yet** | the same configuration as the row above |
+| **`dsh web` on Linux** (not WSL) | **not yet — there is no such machine here** | the same configuration as the row above |
 
-The **WSL** and **Linux** rows come in two flavours — **with** and **without** `systemd --user`. That
-changes only *how* the automatic rollback is triggered (a systemd user timer versus a detached
-background process of the plugin's own); everything else is the same. The settings page always says
-which one your machine got, and it never promises a rollback it cannot deliver.
+The last three rows are **implemented and covered by unit tests, but no one has run them on a real host**;
+they take the same code path as the verified WSL row (`restartMode: command` plus your own restart
+command), yet "it should work that way" is not "it was verified there", so it is not claimed. The
+**with/without `systemd --user`** split changes only *how* the automatic rollback is triggered (a systemd
+user timer versus a detached background process of the plugin's own); everything else is the same. The
+settings page always says which one your machine got, and it never promises a rollback it cannot deliver.
 
 ### Out of scope — not tested, not supported
 
@@ -148,13 +151,17 @@ writes that sentence and the matching command into the settings page.
 configuration, another plugin, a bad upgrade) → go back to the last good state; if **only this
 plugin** is suspect → take this plugin out instead.
 
-**And use the scripts of YOUR platform** — a Linux machine has no `.cmd` file, and a Windows
-machine has no `.sh`:
+**And use the scripts of YOUR host** — a Linux machine has no `.cmd` file, and a Windows machine has
+no `.sh`. Pick by the host you are sitting in front of, not by a platform list:
 
-| Your machine | back to the last good state | take this plugin out |
+| Your host | back to the last good state | take this plugin out |
 |---|---|---|
 | **Windows** (the desktop app, `dsh web` on Windows) | double-click `scripts/restore-profile.cmd` | double-click `scripts/emergency-disable.cmd` |
-| **Linux / WSL / macOS** (`dsh web`) | `sh scripts/restore-profile.sh` | `sh scripts/emergency-disable.sh` |
+| **WSL / Linux** (`dsh web`) | `sh scripts/restore-profile.sh` | `sh scripts/emergency-disable.sh` |
+| **macOS** | `sh scripts/restore-profile.sh` | `sh scripts/emergency-disable.sh` |
+
+On macOS the same two POSIX `sh` scripts apply; they have never been run on a real Mac, so they are
+untested and nothing is promised.
 
 Two scripts per platform, and they do different jobs:
 

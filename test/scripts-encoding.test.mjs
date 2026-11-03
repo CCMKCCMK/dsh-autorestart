@@ -17,6 +17,8 @@
  * ordinary test run, and it reads the bytes itself: no PowerShell needed.
  */
 
+// Every temporary directory this file creates is removed when the run ends.
+import './_tmp-guard.mjs'
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -327,6 +329,23 @@ function bundlesOf(pkgPath) {
   }
 }
 
+/**
+ * The backup names the OLD (second-granularity) naming would produce for this second
+ * and the next one - planted as decoys, so a collision is deterministic instead of a
+ * race with the clock.
+ */
+function emergencyDecoys(pkg, count) {
+  const names = []
+  const pad = (value) => String(value).padStart(2, '0')
+  for (let offset = 0; offset < count; offset += 1) {
+    const at = new Date(Date.now() + offset * 1000)
+    const stamp = String(at.getFullYear()) + pad(at.getMonth() + 1) + pad(at.getDate())
+      + '-' + pad(at.getHours()) + pad(at.getMinutes()) + pad(at.getSeconds())
+    names.push(path.basename(pkg) + '.bak-emergency-' + stamp)
+  }
+  return names
+}
+
 /** The emergency backups written next to a package.json. */
 function emergencyBackups(pkg) {
   const base = path.basename(pkg) + '.bak-emergency-';
@@ -380,6 +399,67 @@ test('the emergency switch really takes the plugin out and puts it back (PowerSh
       ['dsh-autorestart', 'another-plugin'],
       'the backup is a real previous state, not an empty file',
     );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a write never overwrites a backup whose name is already there (PowerShell)', (t) => {
+  // THE DEFECT THIS PINS (2026-11-03): the backup name used to stop at the second, so a
+  // second write inside the same second wrote ON TOP OF the first backup. Two decoys are
+  // planted with the names the OLD format would produce for this second and the next one;
+  // a correct script leaves both untouched and picks a name of its own.
+  const probe = runPowerShell('emergency-toggle.ps1', ['-Action', 'status'], { probeOnly: true });
+  if (probe.started !== true || probe.code === null || probe.code === undefined) {
+    t.skip('powershell.exe is not available here');
+    return;
+  }
+  const { root, pkg } = tempProfile('ps-emergency-collide');
+  const dir = path.dirname(pkg);
+  const decoys = emergencyDecoys(pkg, 2);
+  try {
+    for (const decoy of decoys) fs.writeFileSync(path.join(dir, decoy), 'OLDER BACKUP', 'utf8');
+
+    const disabled = runPowerShell('emergency-toggle.ps1', ['-Action', 'disable', '-PackageJson', pkg]);
+    assert.equal(disabled.code, 0, 'disable must succeed: ' + disabled.out);
+
+    for (const decoy of decoys) {
+      assert.equal(
+        fs.readFileSync(path.join(dir, decoy), 'utf8'),
+        'OLDER BACKUP',
+        'the earlier backup ' + decoy + ' was overwritten',
+      );
+    }
+    const backups = emergencyBackups(pkg);
+    assert.equal(backups.length, decoys.length + 1, 'the new backup is a file of its own: ' + backups.join(', '));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a write never overwrites a backup whose name is already there (POSIX)', (t) => {
+  const { root, pkg } = tempProfile('sh-emergency-collide');
+  const dir = path.dirname(pkg);
+  const decoys = emergencyDecoys(pkg, 2);
+  try {
+    for (const decoy of decoys) fs.writeFileSync(path.join(dir, decoy), 'OLDER BACKUP', 'utf8');
+
+    const disabled = runPosixScript('emergency-disable.sh', ['--action', 'disable', '--package', pkg]);
+    if (disabled === null) {
+      t.skip('no POSIX shell (sh / WSL bash) is available here');
+      return;
+    }
+    assert.equal(disabled.code, 0, 'disable must succeed: ' + disabled.out);
+
+    for (const decoy of decoys) {
+      assert.equal(
+        fs.readFileSync(path.join(dir, decoy), 'utf8'),
+        'OLDER BACKUP',
+        'the earlier backup ' + decoy + ' was overwritten',
+      );
+    }
+    const backups = emergencyBackups(pkg);
+    assert.equal(backups.length, decoys.length + 1, 'the new backup is a file of its own: ' + backups.join(', '));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

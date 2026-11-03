@@ -209,6 +209,14 @@
     blockerMore: '…等 {n} 项',
     blockersTitleLine: '占用会话：{blockers}',
     durationSeconds: '{n} 秒',
+    // A CANCELLED QUEUED RESTART, IN PLAIN WORDS (user report, 2026-11-03): the request
+    // waited over two hours, then a host restart cancelled it and the page said nothing.
+    // No internal identifier may reach the screen.
+    'settings.restart.cancelledNote': '上次要的重启没有做成：你在 {at} 请求重启，等了 {waited}，它一直没有执行；这次宿主重启之后，那个请求已经被取消了。想重启的话，再点一次就行。',
+    'restart.waitedSeconds': '几秒',
+    'restart.waitedMinutes': '约 {n} 分钟',
+    'restart.waitedHours': '约 {n} 小时 {m} 分',
+    'restart.waitedHoursExact': '约 {n} 小时',
     durationMinutes: '{n} 分 {m} 秒',
     durationHours: '{n} 小时 {m} 分',
     // The COMPACT duration of the capsule: it can afford "16 分钟", not
@@ -293,7 +301,6 @@
     'settings.backup.label': '重启前备份',
     'settings.backup.details': '详情',
     'settings.backup.section': '备份说明及手动备份操作',
-    'settings.backup.recovery': '某个插件起不来？退回它的上一个版本',
     'settings.backup.hint': '重启前自动存一份，重启后起不来时能退回去。存的是：你的设置（一定）；你自己写的、直接链接到源码目录的插件（连文件一起拷）；从网上下载装的插件（只记下装过哪些、什么版本，不拷文件，真出事时按清单重装）。',
     'settings.backupPlugins.label': '备份包含已安装插件',
     'settings.backupPlugins.hint': '关闭后只备份 DSH 自身状态，不含 profile 里的插件目录。',
@@ -380,10 +387,9 @@
     // was a restatement of one of those two — or a number written into a
     // sentence, where it went stale the moment the dropdown changed it.
     'settings.backup.count': '当前 {n} 份，实际占用 {size}。',
-    // THE FOLD SAYS WHAT IS INSIDE IT (user decision, 2026-11-02): with the
-    // block collapsed, "某个插件起不来" was invisible — and that is the entry a
-    // user needs on the day a plugin breaks.
-    'settings.backup.sectionNote': '内含：某个插件起不来？退回上一个版本',
+    // NO "内含：…" LINE (user decision, 2026-11-02): its only job was to point at
+    // the per-plugin recovery while the fold was closed, and that entry is gone —
+    // a note advertising a deleted feature is worse than no note.
     // MORE THAN ONE PROFILE (2026-11-02): the host cannot tell which profile to
     // back up, so backups and rollbacks stop. Saying nothing would look like
     // "everything is fine".
@@ -502,7 +508,7 @@
     'settings.rescue.copyCommand': '复制命令',
     'settings.rescue.commandHint': '复制这条命令执行，效果和桌面上双击那个入口一样。',
     'settings.rescue.commandUnavailable': '这台机器上没有找到可用的救援命令。',
-    'settings.rescue.shortcutScope': '它只能把整个环境退回上一次好状态，不能只摘掉某一个插件；只想摘某个插件，请用上面「某个插件起不来」。',
+    'settings.rescue.shortcutScope': '它只能把整个环境退回上一次好状态，不能只摘掉某一个插件。',
     'settings.rescue.shortcutBlocked': '系统策略不允许创建快捷方式（比如组策略或权限限制）。把下面的脚本路径复制出来，手动放到桌面：',
     'settings.rescue.shortcutWriteFailed': '快捷方式没写成功：{message}。把下面的脚本路径复制出来，手动放到桌面：',
     'settings.rescue.shortcutFailed': '快捷方式没放成：{message}',
@@ -586,22 +592,12 @@
         'watchdog.hint': "后面想改主意，可以到「插件」页里找 dsh-autorestart 的设置。",
         'pluginFailure.hint': "这些功能已经记下来了，之后可以在「插件」页里再恢复。",
         'settings.description': "自动重启 DSH、守护插件，出问题能一键恢复。",
-        'settings.checkNow': "立即检查",
-        'settings.checking': "检查中…",
-        'settings.empty': "还没检查。点「立即检查」看看每个插件现在的状态。",
-        'settings.same': "正常",
-        'settings.different': "跟备份不一样",
-        'settings.missing': "备份里没有",
-        'settings.notInstalled': "没装上",
-        'settings.unknown': "没法判断（没有可比对的备份）",
         'settings.restore': "恢复",
         // THE TWO SENTENCES THAT REPLACED THE PER-PLUGIN THIRD-PARTY LINE (user
     // correction, 2026-11-02). The old copy said "the backup holds only its name
     // and version", which reads as "there is something in there" — and there is
     // nothing: third-party plugins are NOT backed up. Built-in ones are shipped
     // with DSH, so they need no backup and must not be reinstalled.
-    'settings.plugins.builtinNote': '另有 {n} 个内置插件：DSH 自带，不需要备份',
-    'settings.plugins.thirdPartyNote': '另有 {n} 个第三方插件：我们没有备份它们，真出事时需要重新安装',
     'settings.thirdParty': "这个插件不是你自己开发的，没法从备份恢复，需要重新安装。",
         'settings.version': "版本 {version}",
     'pluginFailure.dismiss': "知道了",
@@ -720,6 +716,11 @@
     blockerMore: '… and {n} more',
     blockersTitleLine: 'Blocking sessions: {blockers}',
     durationSeconds: '{n}s',
+    'settings.restart.cancelledNote': 'The restart you asked for did not happen: you requested it at {at}, waited {waited}, and it was never carried out; after the host restarted, that request was cancelled. If you still want it, just ask once more.',
+    'restart.waitedSeconds': 'a few seconds',
+    'restart.waitedMinutes': 'about {n} min',
+    'restart.waitedHours': 'about {n}h {m}m',
+    'restart.waitedHoursExact': 'about {n}h',
     durationMinutes: '{n}m {m}s',
     durationHours: '{n}h {m}m',
     // The COMPACT duration of the capsule: it can afford "16 min", not
@@ -804,7 +805,6 @@
     'settings.backup.label': 'Backup before a restart',
     'settings.backup.details': 'Details',
     'settings.backup.section': 'What is backed up, and the manual backup steps',
-    'settings.backup.recovery': 'A plugin will not start? Put that one back to its previous version',
     'settings.backup.hint': 'A copy is taken before every restart, so a host that cannot boot again is rolled back. What it holds: your settings (always); plugins you wrote and linked from a source directory (copied file by file); plugins downloaded from the internet (only which ones and which version are recorded — never copied; they are reinstalled from that list).',
     'settings.backupPlugins.label': 'Include the installed plugins in the backup',
     'settings.backupPlugins.hint': 'Off: only the state of DSH itself is backed up — the plugin directory of the profile is left out.',
@@ -885,7 +885,6 @@
     'text.missing': '(this text is missing yet)',
     'settings.backup.list': 'What is backed up right now',
     'settings.backup.count': '{n} copies right now, using {size}.',
-    'settings.backup.sectionNote': 'Contains: a plugin will not start? Put it back to the previous version',
     'settings.backup.multiProfile': 'More than one profile was found, so backups and rollbacks are paused: it cannot tell which one to back up. Fix it by starting with DSH_PROFILE set, or by keeping a single profile.',
     'settings.backup.keep': 'At most {n} copies are kept; the oldest one is deleted when there are more.',
     'settings.backup.kindsLocal': 'Both linked plugins (written by hand) and localized ones (their directory has a .git) are in the copy in full, so they can be rolled back.',
@@ -985,7 +984,7 @@
     'settings.rescue.copyCommand': 'Copy the command',
     'settings.rescue.commandHint': 'Copy this command and run it — the same effect as double-clicking the desktop entry.',
     'settings.rescue.commandUnavailable': 'No usable rescue command was found on this machine.',
-    'settings.rescue.shortcutScope': 'It can only put the WHOLE environment back to the last good state — it cannot take one plugin out; for that, use "A plugin will not start" above.',
+    'settings.rescue.shortcutScope': 'It can only put the WHOLE environment back to the last good state — it cannot take one plugin out.',
     'settings.rescue.shortcutBlocked': 'A system policy does not allow creating the shortcut (a group policy or a permission limit). Copy the script path below and put it on the desktop by hand:',
     'settings.rescue.shortcutWriteFailed': 'The shortcut was not written: {message}. Copy the script path below and put it on the desktop by hand:',
     'settings.rescue.shortcutFailed': 'The shortcut was not placed: {message}',
@@ -1070,17 +1069,7 @@
         'watchdog.hint': "Changed your mind later? Look for the dsh-autorestart settings on the Plugins page.",
         'pluginFailure.hint': "These are on record - you can restore them later from the Plugins page.",
         'settings.description': "Restarts DSH, watches your plugins, and puts back the ones it can.",
-        'settings.checkNow': "Check now",
-        'settings.checking': "Checking…",
-        'settings.empty': "Nothing checked yet. Press \"Check now\" to see where each plugin stands.",
-        'settings.same': "OK",
-        'settings.different': "Differs from the backup",
-        'settings.missing': "Not in the backup",
-        'settings.notInstalled': "Not installed",
-        'settings.unknown': "Cannot tell (nothing to compare against)",
         'settings.restore': "Restore",
-        'settings.plugins.builtinNote': 'The other {n} plugins are built-in: DSH ships them, so no backup is needed.',
-    'settings.plugins.thirdPartyNote': 'The other {n} plugins are third-party: we did NOT back them up, so reinstall them if something goes wrong.',
     'settings.thirdParty': "You did not write this plugin yourself, so it cannot be restored from the backup - it has to be reinstalled.",
         'settings.version': "version {version}",
     'pluginFailure.dismiss': "Got it",
@@ -1195,20 +1184,49 @@
    * ever sees a key name, in any language.
    *
    * @param {Function|null|undefined} t the Host's translator (may be missing)
-   * @returns {(key: string) => string}
+   * @returns {(key: string, params?: object) => string}
    */
   function makeTranslate(t) {
-    return (key) => {
+    /**
+     * `{name}` ANSWERED FROM `params` (user report, 2026-11-02).
+     *
+     * THE BUG THIS FIXES: this translator took ONE argument, so every call that
+     * passed replacement values had them silently dropped and the page printed
+     * the placeholder itself ("看门狗的触发方式：{tier}"). Three call sites did
+     * exactly that; the ones that substitute by hand were never affected.
+     *
+     * THE RULES, each one a decision:
+     *   - a placeholder with NO value stays as it is: blanking it would delete
+     *     information the sentence was written to carry;
+     *   - the value is inserted as literal text, so `$&` / `$1` are characters
+     *     and not replace patterns (hence split + join, never `replace`);
+     *   - every occurrence is replaced, not only the first;
+     *   - a `null` / `undefined` value counts as "no value", never as the word
+     *     `null` printed on screen.
+     */
+    const fillPlaceholders = (text, params) => {
+      if (typeof text !== 'string' || text === '') return text
+      if (params === null || params === undefined || typeof params !== 'object') return text
+      let out = text
+      for (const [name, value] of Object.entries(params)) {
+        if (value === null || value === undefined) continue
+        const placeholder = '{' + name + '}'
+        if (out.includes(placeholder) !== true) continue
+        out = out.split(placeholder).join(String(value))
+      }
+      return out
+    }
+    return (key, params) => {
       const name = typeof key === 'string' ? key : String(key ?? '')
       if (typeof t === 'function') {
         try {
           const value = t(name)
-          if (typeof value === 'string' && value !== '' && value !== name) return value
+          if (typeof value === 'string' && value !== '' && value !== name) return fillPlaceholders(value, params)
         } catch {
           // A broken translator must not break the surface.
         }
       }
-      return dictionaryText(name, currentLanguage())
+      return fillPlaceholders(dictionaryText(name, currentLanguage()), params)
     }
   }
 
@@ -1394,7 +1412,58 @@
       : fillTemplate(translate('durationHoursMinutesShort'), { n: hours, m: rest })
   }
 
+   /**
+    * A WAIT, SAID THE WAY A PERSON SAYS IT (user report, 2026-11-03).
+    *
+    * Precision is not the point, recognition is: "约 2 小时 21 分" is what makes a
+    * user believe the page looked at THEIR request. Seconds are rounded to words on
+    * purpose — "47 秒" invites a precision nobody needs.
+    */
+   function humanWait(ms, translate) {
+     const t = makeTranslate(translate)
+     const value = Number(ms)
+     if (Number.isFinite(value) !== true || value < 0) return ''
+     if (value < 60_000) return t('restart.waitedSeconds')
+     const totalMinutes = Math.floor(value / 60_000)
+     if (totalMinutes < 60) return fillTemplate(t('restart.waitedMinutes'), { n: totalMinutes })
+     const hours = Math.floor(totalMinutes / 60)
+     const rest = totalMinutes % 60
+     return rest === 0
+       ? fillTemplate(t('restart.waitedHoursExact'), { n: hours })
+       : fillTemplate(t('restart.waitedHours'), { n: hours, m: rest })
+   }
+
+   /** `2026-11-02T23:04:38+08:00` -> `2026-11-02 23:04:38` (the offset is the host's; no Date parsing). */
+   function humanRequestedAt(raw) {
+     const text = typeof raw === 'string' ? raw.trim() : ''
+     if (text.length < 19) return ''
+     return text.slice(0, 10) + ' ' + text.slice(11, 19)
+   }
+
+   /**
+    * THE ONE SENTENCE ABOUT A REQUEST THAT DIED (user decision, 2026-11-03).
+    *
+    * ONLY the newest request is looked at, and only the outcome "the host came back
+    * and settled it" is spoken about. A stale record must not follow the user around,
+    * and a request that simply completed is not news.
+    *
+    * @returns {{ text: string, at: string, waited: string }|null}
+    */
+   function cancelledRestartNote(info, translate) {
+     const request = info && typeof info === 'object' && info.restartRequest && typeof info.restartRequest === 'object'
+       ? info.restartRequest
+       : null
+     if (request === null) return null
+     if (request.state !== 'cancelled' || request.by !== 'boot-recovery') return null
+     const at = humanRequestedAt(request.requestedAtLocal)
+     const waited = humanWait(request.waitedMs, translate)
+     if (at === '' || waited === '') return null
+     const t = makeTranslate(translate)
+     return { text: fillTemplate(t('settings.restart.cancelledNote'), { at, waited }), at, waited }
+   }
+
   /* ------------------------------------------------------------------ *
+
    * The blocker lists: ONE rule for every surface that names them.
    *
    * The defect the real machine showed: the pending-restart bubble grew a
@@ -5795,6 +5864,22 @@
         '  color:var(--dsw-alias-label-primary);',
         '  word-break:break-all;',
         '}',
+        // THE REAL PICTURE, WHEN THE HOST SENT ONE (2026-11-02): the tile stops
+        // being a stand-in — no brand background, no 26px box — and shows the
+        // bytes the desktop shortcut carries. 16px keeps it on the text baseline.
+        '.dsh-autorestart-settings__shortcut-icon[data-icon-real="true"]{',
+        '  background:transparent;',
+        '  width:16px;',
+        '  height:16px;',
+        '  border-radius:2px;',
+        '}',
+        '.dsh-autorestart-settings__shortcut-icon-img{',
+        '  display:block;',
+        '  width:16px;',
+        '  height:16px;',
+        '  border-radius:2px;',
+        '  image-rendering:auto;',
+        '}',
         // THE SECOND CONFIRMATION of a manual rollback: a block that stands
         // apart from the list, because it is a question, not a fact.
         '.dsh-autorestart-settings__confirm{',
@@ -6423,14 +6508,6 @@
         // THIS panel (it is not a window overlay), so it is read here and
         // drawn here.
         const saveNotice = useSaveNotice()
-        // THE PER-PLUGIN RECOVERY LIVES HERE NOW (user report, 2026-11-02).
-        //
-        // It used to exist only inside the floating card of this plugin, and the
-        // card's "不用管" is remembered for that boot — so a user who dismissed it
-        // could never find "只恢复 X" again. The very same state and the very
-        // same calls are mounted in the backup fold below; the card keeps its
-        // copy untouched (dismissing it still only closes the card).
-        const pluginRecovery = usePluginRecovery(info)
 
         // The receipt lives exactly as long as this panel is on screen: a page
         // that is closed (or reopened) never shows a "Saved" of an earlier
@@ -6557,6 +6634,8 @@
         const backupsInfo = info && typeof info === 'object' && info.backups && typeof info.backups === 'object'
           ? info.backups
           : { dir: '', max: 0, count: 0, items: [] }
+        // WHAT HAPPENED TO THE LAST RESTART REQUEST, computed once (2026-11-03).
+        const cancelledRestart = cancelledRestartNote(info, props && typeof props.t === 'function' ? props.t : translate)
         const backupItems = Array.isArray(backupsInfo.items) ? backupsInfo.items : []
         // WHICH COPY THE ONE SENTENCE BELONGS TO (user decision, 2026-11-02):
         // resolved ONCE from the copies' own records, so the sentence follows the
@@ -6595,6 +6674,21 @@
         // of its own: the `.lnk` is still created, it just gets no IconLocation —
         // never somebody else's face, and nothing is written at runtime.
         const rescueIconPath = typeof rescueKit.iconPath === 'string' ? rescueKit.iconPath.trim() : ''
+        // THE SAME PICTURE THE DESKTOP CARRIES, DRAWN HERE (user requirement,
+        // 2026-11-02): the row used to show a made-up "DSH" tile, so the page and
+        // the `.lnk` on the desktop could look like two different things. The Host
+        // now sends the icon as a data URI built from THE SAME BYTES as the file
+        // it points `IconLocation` at, and this page renders that string as-is —
+        // no base64 lives in this bundle, so the two copies cannot drift apart.
+        //
+        // ONLY A PNG DATA URI IS ACCEPTED. Anything else (another media type, a
+        // remote URL, a missing field on an older Host) is treated as "no picture"
+        // and the row falls back to its text tile: a wrong `src` would render a
+        // broken-image marker, which is worse than saying nothing.
+        const rescueIconDataUri = (() => {
+          const raw = typeof rescueKit.iconDataUri === 'string' ? rescueKit.iconDataUri.trim() : ''
+          return raw.startsWith('data:image/png;base64,') ? raw : ''
+        })()
         // ONE SOURCE FOR THE ICON (user decision, 2026-11-02): the desktop `.lnk`
         // and this tile must come from the SAME host answer, and both must say
         // the same thing when there is none. The name travels with the path so
@@ -7056,6 +7150,23 @@
           'div',
           { className: 'dsh-autorestart-settings' },
           // THE RECEIPT: a `sticky` strip at the TOP of this panel. It is a
+            // WHAT HAPPENED TO THE RESTART YOU ASKED FOR (user report, 2026-11-03): it waited
+            // hours, a host restart cancelled it, and the page looked as if nothing had ever
+            // been requested. It comes first, because the next thing the user wants is to ask
+            // again — and that button is right below.
+            cancelledRestart ? h(
+              'div',
+              {
+                className: 'dsh-autorestart-settings__banner',
+                'data-dsh-autorestart-restart': 'cancelled-note',
+                role: 'status',
+              },
+              h(
+                'span',
+                { className: 'dsh-autorestart-settings__banner-text', 'data-dsh-autorestart-restart': 'cancelled-text' },
+                cancelledRestart.text,
+              ),
+            ) : null,
           // child of the panel (the DOM ancestor of the message IS the
           // settings section), so it can not float over the conversation area
           // again — and it stays visible while the settings are scrolled.
@@ -7342,14 +7453,6 @@
                   anyIntervened
                     ? t('settings.backup.section') + ' · ' + t('settings.backup.intervention.true')
                     : t('settings.backup.section'),
-                  // THE FOLD SAYS WHAT IS INSIDE IT (user decision,
-                  // 2026-11-02): collapsed by default, so the single-plugin
-                  // rollback was invisible to anyone who did not open it.
-                  h(
-                    'span',
-                    { className: 'dsh-autorestart-settings__summary-note', 'data-dsh-autorestart-backup': 'section-note' },
-                    t('settings.backup.sectionNote'),
-                  ),
                 ),
                 // THE CONTENT IS ALWAYS IN THE TREE (only `<details>` hides it):
                 // the panel is a few dozen nodes, and rendering them once keeps
@@ -7664,12 +7767,6 @@
                           pathNote,
                         ),
                   ),
-              // THE PLUGIN RECOVERY LIVES IN THIS FOLD (user report,
-              // 2026-11-02): "the floating card's 不用管 made it unfindable".
-              // The very same state and the very same route calls as the card —
-              // one implementation (`usePluginRecovery`), mounted here so it is
-              // reachable long after the card was dismissed.
-              ...pluginRecoveryItems(t, pluginRecovery),
               ),
                 )
               })(),
@@ -8178,10 +8275,28 @@
                           // gets, or nothing at all — never a made-up picture.
                           'data-icon-source': rescueIconName,
                           'data-icon-available': rescueIconAvailable ? 'true' : 'false',
+                          // WHETHER THE PICTURE ON SCREEN IS THE REAL ONE
+                          // (2026-11-02): true means the bytes below came from
+                          // the Host, so the tile drops its stand-in background
+                          // and shows the actual image.
+                          'data-icon-real': rescueIconDataUri === '' ? 'false' : 'true',
                           'aria-hidden': 'true',
                           title: rescueIconPath,
                         },
-                        'DSH',
+                        // THE REAL PICTURE, or the text tile when the Host sent
+                        // none. Never both: two icons on one row would look like
+                        // two different shortcuts.
+                        rescueIconDataUri === ''
+                          ? 'DSH'
+                          : h('img', {
+                            className: 'dsh-autorestart-settings__shortcut-icon-img',
+                            'data-dsh-autorestart-rescue': 'rescue-icon',
+                            src: rescueIconDataUri,
+                            alt: rescueShortcutName,
+                            width: 16,
+                            height: 16,
+                            draggable: 'false',
+                          }),
                       ),
                       h(
                         'span',
@@ -9661,219 +9776,6 @@
         return h(OverlayCard, { key: 'overlay-' + id, id, title, onClose, rows })
       }
 
-      // WHICH STATUS EACH PLUGIN IS IN, IN WORDS THAT DO NOT JUDGE IT.
-      //
-      // "different" means the files differ from the newest backup - it is a LEAD,
-      // not a verdict, and the panel must never upgrade it to "broken".
-      const SETTINGS_STATUS_KEY = {
-        same: 'settings.same',
-        different: 'settings.different',
-        missing: 'settings.missing',
-        'not-installed': 'settings.notInstalled',
-        unknown: 'settings.unknown',
-      }
-
-      /**
-       * The inventory rows of that route's answer, whichever wrapper it used.
-       *
-       * This lives INSIDE this closure on purpose: the pure model in the second
-       * module reads the same three wrappers, but it is registered on
-       * `globalThis` and only the exported helpers are reachable from here.
-       */
-      function pluginInventoryRows(inventory) {
-        if (inventory === null || typeof inventory !== 'object') return []
-        if (Array.isArray(inventory.plugins)) return inventory.plugins
-        if (Array.isArray(inventory.items)) return inventory.items
-        if (Array.isArray(inventory.entries)) return inventory.entries
-        return []
-      }
-
-      /**
-       * THE STATE OF "put one plugin back to its previous version".
-       *
-       * ONE implementation, mounted twice: inside the backup fold of the settings
-       * section (where a user looks after dismissing the floating card) and on
-       * the plugin's own config page. Nothing talks to the inventory route until
-       * the user presses the button, and "check now" really re-requests it.
-       *
-       * @param {object|null} info the shared state payload (it carries the routes)
-       * @returns {{rows: Array<object>|null, checking: boolean, restoring: string, note: string, load: Function, restore: Function}}
-       */
-      function usePluginRecovery(info) {
-        const [rows, setRows] = useState(null)
-        const [checking, setChecking] = useState(false)
-        const [restoring, setRestoring] = useState('')
-        const [note, setNote] = useState('')
-        const t = makeTranslate(translate)
-
-        const load = () => {
-          setChecking(true)
-          setNote('')
-          void (async () => {
-            try {
-              const response = await fetch(pluginInventoryUrlFor(info), {
-                method: 'GET',
-                headers: { accept: 'application/json' },
-              })
-              if (!response.ok) throw new Error('HTTP ' + response.status)
-              const body = await response.json()
-              setRows(pluginInventoryRows(body))
-            } catch (failure) {
-              setRows([])
-              setNote(describeError(failure))
-            } finally {
-              setChecking(false)
-            }
-          })()
-        }
-
-        const restore = (plugin) => {
-          if (restoring !== '') return
-          setRestoring(plugin)
-          setNote('')
-          void (async () => {
-            try {
-              const restored = await restorePluginOnce(plugin)
-              setNote(restored && restored.ok !== true
-                ? fillTemplate(t('pluginFailure.failed'), { plugin, reason: '' })
-                : fillTemplate(t('pluginFailure.restored'), { plugin, at: '' }))
-              load()
-            } catch (failure) {
-              setNote(fillTemplate(t('pluginFailure.failed'), { plugin, reason: describeError(failure) }))
-            } finally {
-              setRestoring('')
-            }
-          })()
-        }
-
-        return { rows, checking, restoring, note, load, restore }
-      }
-
-      /**
-       * THE WORDS AND ROWS of that block (pure: it draws, it changes nothing).
-       *
-       * A plugin the user wrote themselves gets "只恢复 X" — we hold its files.
-       * A third-party plugin gets the sentence `settings.thirdParty` and NO
-       * button: there is nothing in the backup to put back, and a button would
-       * promise something the backup cannot keep.
-       *
-       * @param {(key: string) => string} t
-       * @param {object} recovery the value of `usePluginRecovery`
-       * @returns {Array<object>} the nodes of the block, in order
-       */
-      function pluginRecoveryItems(t, recovery) {
-        const items = []
-        items.push(h('span', {
-          className: 'dsh-autorestart-settings__label',
-          'data-dsh-autorestart-recovery': 'title',
-        }, t('settings.backup.recovery')))
-        items.push(h('button', {
-          type: 'button',
-          className: 'dsh-autorestart-settings__button',
-          disabled: recovery.checking === true,
-          'data-dsh-autorestart-recovery': 'check',
-          onClick: () => { if (recovery.checking !== true) recovery.load() },
-        }, recovery.checking === true ? t('settings.checking') : t('settings.checkNow')))
-        if (recovery.note !== '') {
-          items.push(h('span', {
-            className: 'dsh-autorestart-settings__hint',
-            'data-dsh-autorestart-recovery': 'note',
-          }, recovery.note))
-        }
-        const rows = Array.isArray(recovery.rows) ? recovery.rows : null
-        if (rows === null || rows.length === 0) {
-          items.push(h('span', {
-            className: 'dsh-autorestart-settings__hint',
-            'data-dsh-autorestart-recovery': 'empty',
-          }, t('settings.empty')))
-          return items
-        }
-        // ONLY THE PLUGINS WE ACTUALLY HOLD FILES FOR ARE LISTED ONE BY ONE (user
-        // decision, 2026-11-02). The rest are merged into two sentences, and
-        // those two sentences say the OPPOSITE things the user needs to know:
-        //   - built-in plugins ship with DSH: nothing to back up, do not reinstall;
-        //   - third-party plugins are NOT in the backup at all: reinstall them.
-        // Saying "the backup holds only their name and version" was wrong — it
-        // implied the backup had something, and on this machine it held nothing.
-        const installOf = (row) => {
-          const install = row && typeof row.install === 'string' ? row.install : ''
-          if (install !== '') return install
-          // An older Host does not send `install`: fall back to the one bit it
-          // does send, so nothing silently disappears from the page.
-          return row && row.linked === true ? 'link' : 'npm'
-        }
-        // WHICH ROWS ARE LISTED ONE BY ONE. The rule is "the ones we can actually
-        // put back", because that is the only list that is useful AND true:
-        //   - a hand-written / linked plugin  -> listed, with 只恢复 X;
-        //   - a plugin whose files ARE in the copy (an older install shape) ->
-        //     also listed: merging it into "we did not back them up" would be a
-        //     lie about a copy that holds it (the dsh-codekg report, 2026-11-02);
-        //   - everything else -> one sentence per kind, below.
-        const hasCopy = (row) => {
-          const status = row && typeof row.status === 'string' ? row.status : ''
-          return status === 'same' || status === 'different'
-        }
-        const mine = rows.filter((row) => installOf(row) === 'link' || hasCopy(row))
-        const builtinCount = rows.filter((row) => installOf(row) === 'builtin' && !hasCopy(row)).length
-        const thirdPartyCount = rows.filter((row) => installOf(row) === 'npm' && !hasCopy(row)).length
-        if (mine.length === 0) {
-          items.push(h('span', {
-            className: 'dsh-autorestart-settings__hint',
-            'data-dsh-autorestart-recovery': 'none-of-yours',
-          }, t('settings.empty')))
-        } else {
-          items.push(h('ul', {
-            className: 'dsh-autorestart-settings__plugins',
-            'data-dsh-autorestart-recovery': 'list',
-          }, mine.map((row, index) => {
-            const name = row && typeof row.name === 'string' ? row.name : ''
-            const status = row && typeof row.status === 'string' ? row.status : 'unknown'
-            const version = row && typeof row.version === 'string' ? row.version : ''
-            const cells = [
-              h('span', {
-                key: 'name',
-                className: 'dsh-autorestart-settings__plugin-name',
-                'data-dsh-autorestart-recovery': 'name',
-              }, name),
-              h('span', {
-                key: 'status',
-                className: 'dsh-autorestart-settings__plugin-status',
-                'data-dsh-autorestart-recovery': 'status',
-              }, t(SETTINGS_STATUS_KEY[status] || 'settings.unknown')),
-            ]
-            if (status !== 'same') {
-              cells.push(h('button', {
-                type: 'button',
-                key: 'restore',
-                className: 'dsh-autorestart-settings__button',
-                disabled: recovery.restoring !== '',
-                'data-dsh-autorestart-recovery': 'restore',
-                'data-plugin': name,
-                onClick: () => recovery.restore(name),
-              }, fillTemplate(t('pluginFailure.restore'), { plugin: name })))
-            }
-            return h('li', {
-              key: 'plugin-' + index + '-' + name,
-              className: 'dsh-autorestart-settings__plugin-row',
-              'data-dsh-autorestart-recovery': 'row',
-            }, cells)
-          })))
-        }
-        if (builtinCount > 0) {
-          items.push(h('span', {
-            className: 'dsh-autorestart-settings__hint',
-            'data-dsh-autorestart-recovery': 'builtin',
-          }, fillTemplate(t('settings.plugins.builtinNote'), { n: builtinCount })))
-        }
-        if (thirdPartyCount > 0) {
-          items.push(h('span', {
-            className: 'dsh-autorestart-settings__hint',
-            'data-dsh-autorestart-recovery': 'third-party',
-          }, fillTemplate(t('settings.plugins.thirdPartyNote'), { n: thirdPartyCount })))
-        }
-        return items
-      }
-
       const SETTINGS_STYLE = {
         section: {
           display: 'flex',
@@ -9948,18 +9850,11 @@
        */
       function SettingsPanel() {
         const info = useSharedInfo(true)
-        // THE BLOCK ITSELF IS SHARED (user report, 2026-11-02): the settings
-        // section of this plugin mounts exactly this one inside its backup fold,
-        // so "只恢复 X" has ONE implementation and cannot drift apart between the
-        // two places. Nothing talks to the inventory route until the button is
-        // pressed, and "check now" really re-requests the route.
-        const recovery = usePluginRecovery(info)
         const t = makeTranslate(translate)
 
         const items = []
         items.push(h('strong', { key: 'settings-title' }, 'dsh-autorestart'))
         items.push(h('p', { key: 'settings-description', style: SETTINGS_STYLE.description }, t('settings.description')))
-        items.push(...pluginRecoveryItems(t, recovery))
 
         return h('section', { 'data-dsh-autorestart-settings': 'dsh-autorestart', style: SETTINGS_STYLE.section }, items)
       }

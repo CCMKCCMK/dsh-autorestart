@@ -194,11 +194,9 @@
       "label": "重启前备份",
       "details": "详情",
       "section": "备份说明及手动备份操作",
-      "recovery": "某个插件起不来？退回它的上一个版本",
       "hint": "重启前自动存一份，重启后起不来时能退回去。存的是：你的设置（一定）；你自己写的、直接链接到源码目录的插件（连文件一起拷）；从网上下载装的插件（只记下装过哪些、什么版本，不拷文件，真出事时按清单重装）。",
       "list": "现在备份了什么",
       "count": "当前 {n} 份，实际占用 {size}。",
-      "sectionNote": "内含：某个插件起不来？退回上一个版本",
       "multiProfile": "检测到多个 profile，备份和回滚已暂停：它不知道该备份哪一个。解决办法：启动时指定 DSH_PROFILE，或者只保留一个 profile。",
       "keep": "最多保留 {n} 份，超出自动删最旧的那份。",
       "kindsLocal": "链接安装（自己写的）和本地化过的插件（目录里有 .git）都已完整备份，可以回档。",
@@ -363,7 +361,7 @@
       "copyCommand": "复制命令",
       "commandHint": "复制这条命令执行，效果和桌面上双击那个入口一样。",
       "commandUnavailable": "这台机器上没有找到可用的救援命令。",
-      "shortcutScope": "它只能把整个环境退回上一次好状态，不能只摘掉某一个插件；只想摘某个插件，请用上面「某个插件起不来」。",
+      "shortcutScope": "它只能把整个环境退回上一次好状态，不能只摘掉某一个插件。",
       "shortcutBlocked": "系统策略不允许创建快捷方式（比如组策略或权限限制）。把下面的脚本路径复制出来，手动放到桌面：",
       "shortcutWriteFailed": "快捷方式没写成功：{message}。把下面的脚本路径复制出来，手动放到桌面：",
       "shortcutFailed": "快捷方式没放成：{message}",
@@ -386,21 +384,12 @@
       "dismiss": "关闭"
     },
     "description": "自动重启 DSH、守护插件，出问题能一键恢复。",
-    "checkNow": "立即检查",
-    "checking": "检查中…",
-    "empty": "还没检查。点「立即检查」看看每个插件现在的状态。",
-    "same": "正常",
-    "different": "跟备份不一样",
-    "missing": "备份里没有",
-    "notInstalled": "没装上",
-    "unknown": "没法判断（没有可比对的备份）",
     "restore": "恢复",
-    "plugins": {
-      "builtinNote": "另有 {n} 个内置插件：DSH 自带，不需要备份",
-      "thirdPartyNote": "另有 {n} 个第三方插件：我们没有备份它们，真出事时需要重新安装"
-    },
     "thirdParty": "这个插件不是你自己开发的，没法从备份恢复，需要重新安装。",
-    "version": "版本 {version}"
+    "version": "版本 {version}",
+    "restart": {
+      "cancelledNote": "上次要的重启没有做成：你在 {at} 请求重启，等了 {waited}，它一直没有执行；这次宿主重启之后，那个请求已经被取消了。想重启的话，再点一次就行。"
+    }
   },
   "meta": {
     "title": "dsh-autorestart — 重启不断线",
@@ -471,6 +460,10 @@
       "deferredNote": "等它结束会自动继续 · 已等 {count} 个会话",
       "deferredNoteZero": "等它结束会自动继续",
       "back": "已回来"
-    }
+    },
+    "waitedSeconds": "几秒",
+    "waitedMinutes": "约 {n} 分钟",
+    "waitedHours": "约 {n} 小时 {m} 分",
+    "waitedHoursExact": "约 {n} 小时"
   }
 }

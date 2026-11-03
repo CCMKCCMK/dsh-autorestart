@@ -1,10 +1,14 @@
 # Changelog
 
-## 未发布 —— 修正：重启一直没触发、重启「截止时间」概念拆除、备份清单如实记账（2026-11-02）
+## 0.8.6 — 2026-11-03
+
+本版把 2026-10-30 的首批改动与之后累积的六批改动一并发布（0.8.6 在此之前只写进过 CHANGELOG，从未发布）。逐批见下。
+
+### 修正：重启一直没触发、重启「截止时间」概念拆除、备份清单如实记账（2026-11-02）
 
 这一轮全部围绕「界面/日志说了假话」和「等不到的重启」两件事。
 
-### 1. 重启永不触发：目标驱动的会话把安静窗口无限重置
+#### 1. 重启永不触发：目标驱动的会话把安静窗口无限重置
 
 **症状**：`/health?state=1` 显示 `allowRestart: false`、`quietForMs` 一直很小、`blockedBy` 里挂着一条**目标驱动**的会话，重启等了几十分钟也没发生。
 
@@ -12,7 +16,7 @@
 
 **修法**：新增两个诊断字段（`restartGate` / `quietResetBy`），把「闸为什么没开、安静窗口是被谁重置的」直接写进 `state` 载荷：一眼能看出是「有人在跑」还是「跑完又立刻起下一轮」。行为不变，可见性补齐。
 
-### 2. 重启等待不再有「截止时间」（按用户口径：一直等，直到所有会话空闲）
+#### 2. 重启等待不再有「截止时间」（按用户口径：一直等，直到所有会话空闲）
 
 **症状**：状态里出现 `deadlineAt` / `deadlineInMs` / `deadlineCutsTheRequest`，页面/日志里出现「截止时间已过」。读者（包括维护者本人）一律理解为「请求作废了」——**但它从来没作废过**：默认配置下这些数字一个都不影响结果，只是把人吓一跳。
 
@@ -24,13 +28,13 @@
 - `deferSoftMs` / `deferHardMs` / `deferPolicy` **读入但完全无效**，仅为兼容旧配置文件保留（建议下一版删除）；
 - `forceRestartWhenBusy` 保留、默认关闭，语义明确为「**会打断正在运行的会话**」，不再被当作截止时间。
 
-### 3. 急救开关在「只剩一个 bundle 的 profile」上写坏 JSON（Windows 救援路径不可用）
+#### 3. 急救开关在「只剩一个 bundle 的 profile」上写坏 JSON（Windows 救援路径不可用）
 
 **症状**：`emergency-toggle.ps1 -Action enable` 在单 bundle 场景下拼出的 JSON 多/少一个逗号，脚本自校验失败 → 自己回滚 → `exit 1`。也就是「Windows 上出事了想急救，开关根本打不开」。
 
 **修法**：修正逗号插入位置；并把它钉成断言（修好之前那条断言是红的），避免再次悄悄回归。
 
-### 4. 备份清单没记账 → 界面误报「备份里没有」
+#### 4. 备份清单没记账 → 界面误报「备份里没有」
 
 **症状**：`dsh-codekg` 的文件明明在 `node_modules-link/dsh-codekg` 里，界面却说「备份里没有这个插件」。
 
@@ -38,23 +42,91 @@
 
 **修法**：manifest 新增 `plugins: [{ name, version, install }]`（只记真正拷进 `node_modules-link/` 的成功项，版本取副本自己的 `package.json`）；读取端顺序改成 **manifest → 扫目录 → 活档标志**，老副本没有该字段时扫目录兜底。真机实测：同一份备份上，`dsh-codekg` 由「备份里没有」变成「跟备份不一样」。
 
-### 5. 插件列表收敛：只列自研，内置/第三方各一句（文案纠正）
+#### 5. 插件列表收敛：只列自研，内置/第三方各一句（文案纠正）
 
 - 逐条列出的只有**能真正回退的**插件（链接安装的，或副本里确实有文件的），各自带「已在备份里 / 跟备份不一样 / [只恢复 X]」；
 - **内置插件**：「另有 N 个内置插件：DSH 自带，不需要备份」；
 - **第三方插件**：「另有 N 个第三方插件：**我们没有备份它们**，真出事时需要重新安装」；
 - 删掉「备份里只有名字和版本」这类**暗示备份里有东西**的说法（中英都改）。
 
-### 6. 桌面快捷方式图标与设置页同源
+#### 6. 桌面快捷方式图标与设置页同源
 
 `.lnk` 的 `IconLocation` 与设置页显示的图标现在来自**同一个** host 字段（`rescue.iconPath`，同一次存在性校验）；取不到图标时两边都明说「没有」，`.lnk` 省略图标而不是失败。同时修好了桌面定位：优先读注册表 `User Shell Folders\Desktop`，并按 GBK 解码 `reg.exe` 输出（否则桌面在 `G:\桌面` 这类中文路径上会被判成「找不到」而回落到猜的 C 盘目录）。
 
-### 7. 桌面救援快捷方式图标改用插件自带 icon（不再借用 DSH 可执行文件）
+#### 7. 桌面救援快捷方式图标改用插件自带 icon（不再借用 DSH 可执行文件）
 
 桌面救援快捷方式的图标现在是插件随包的 `assets/icon.ico`，**不再拿 DSH 自己的可执行文件顶替**——桌面上看到的是「救援工具」，不是那个已经坏掉的程序。包内没有这个图标文件时，`.lnk` 仍然会创建，只是不写 `IconLocation`（也就没有「图标路径不存在 → `Save()` 抛异常 → 快捷方式建不出来」这条风险）；运行期不会生成图标，也不回退到别的程序的脸。非 Windows 平台不提供桌面快捷方式，设置页给的是可复制的还原脚本命令。
 
+#### 8. 排队重启在会话静默后永不触发（轮询器把自己停了）
 
-## 未发布 —— 修正：恢复插件后的可用性没有被验证
+**症状**：点了重启，界面说「已排队」；后来所有会话确实静默了，重启却一直没发生。`/health?state=1` 里 `restartGate.at` **冻在某一刻不再前进**（真机读数：`at` 停在 `23:09:21`、`waitedMs ≈ 719640`，也就是 12 分钟没再评估过一次），而重启请求的记录文件一直写着 `pending`。
+
+**根因**：`tick()` 的停止条件把「还有没有排队中的请求」判给了**内存里的意图**。会话静默后内存意图被清掉 → `queuedRestartRecord()` 答 `null` → 轮询器认为「没有在等的请求」→ `stopPolling()` 自己退出 → **闸门从此再没被评估过**。记录文件还在说 pending，但已经没有人去读它了。
+
+**修法**（两处，各自只认事实）：
+- `queuedRestartRecord()` 直接读 `readRestartRequestRecord(stateDirOf())`，把 `queued` / `deferred` 当作 pending，**不再去问 `restartRequestInfo()`**——那个函数是给界面**汇报**用的，不该承担「现在该不该继续轮询」的判据；
+- `summarizeRestartRequest()` 在内存意图已消失（`live === null`）但记录仍是非终态时回 `pending: true`：状态载荷不会因为意图没了，就把「还在排队」说成「没有请求」。
+
+**可观测性（用户明确要求）**：闸门的判定结果（`allowRestart` / `quietForMs` / `blockedBy` / `reason`）被写进状态，下次打开 `?state=1` 就能看见「为什么还没放行、是谁在挡」，不再只留在日志里。
+
+> 附一条测试侧结论（见 `docs/real-machine-verification-0.8.6.md` 的证伪实验）：上面第二处修法被回归测试钉住（把它回退掉，断言立刻变红）；**第一处没有被任何测试覆盖**——因为第二处让「汇报函数」自己也能答 pending，旧写法的第一处照样工作。第一处仍然保留：它的价值不是「再算一遍同一件事」，而是**不让轮询器依赖一个汇报用的函数**（当初的 bug 恰恰就是轮询器去问汇报器、汇报器答错）。
+
+#### 9. 删掉「某个插件起不来？退回它的上一个版本 / 立即检查」入口
+
+**为什么删**（用户决定，2026-11-02，原话意思是「没法定位具体哪个插件坏了」）：这个入口只能按「跟备份不一样」把插件列出来，那是一个**线索**，不是**诊断**。留一个做不到的承诺，比没有这个入口更糟。
+
+**删了什么**：客户端与 web 端挂的是同一块，所以删一次两端都没了——整块 `pluginRecoveryItems`（标题、`立即检查` 按钮、「还没检查。点『立即检查』看看每个插件现在的状态。」空态、逐插件行与「只恢复 X」按钮、「另有 N 个内置/第三方插件」两句）、驱动它的 `usePluginRecovery` 钩子、`pluginInventoryRows` 与 `SETTINGS_STATUS_KEY`，`client.js` 净减 **214 行**；两个挂载点（设置页的备份折叠区、插件配置页）一并删除。
+
+**词典同步收口**：12 个键 × 中英两份 = 22 条，镜像键数 **406 → 394**（两份逐键一致）；另删掉两处指向它的「引子」——折叠标题下的「内含：某个插件起不来？退回上一个版本」，以及桌面救援说明里「只想摘某个插件，请用上面『某个插件起不来』」这半句（英文镜像同步改）。删完在 `client.js` 与两份镜像里 grep，全部 0 命中。
+
+**没有动后端**：浮动故障卡自己的恢复路径（`pluginInventoryUrlFor` / `restorePluginOnce` / `PluginFailurePanel` / `pluginFailure.restore`）全部保留且仍在调用——删掉的只是「在设置页/配置页列出所有插件并逐个回退」这个入口。
+
+#### 10. 桌面快捷方式的图标从来自愈不了（重启多少次都还是旧图标），顺带修掉「跑测试会改写用户真桌面」
+
+**真机症状**：`.lnk` 的 `IconLocation` 一直停在旧图标 `…\shortcut-icon-9c245e5b.ico`，写入时间是 `2026-11-02 23:02:33`——**宿主已经重启、新代码已经加载之后，它仍然指着旧图标**。也就是说「图标改用插件自带 icon」这件事，只对**当时点过按钮**的人成立。
+
+**根因**：`createDesktopShortcut` 在全仓只有一个调用点（`index.js` 里 `POST action === 'shortcut'` 那条路由）。启动路径**从不写 `.lnk`**，所以旧快捷方式不会随着版本更新被纠正——重启一百次也不会自愈。
+
+**修法**：`lib/rescue-paths.js` 新增 `readShortcutLink()` 与 `syncShortcutIcon()`：读回 `.lnk` 的 `TargetPath` / `IconLocation`，与「本版本应该用的图标」比较，**只有不同才写**；写完用 `SHChangeNotify` 让壳刷新图标缓存；`TargetPath` 原样保留（快捷方式仍然指向 `restore-profile.cmd`）。`index.js` 启动路径加一次校准，整段用 `try/catch` 包住——校准失败绝不拖累启动。图标文件名按内容哈希算，代码里没有硬编码 sha。
+
+**真机读数**：修后 `IconLocation = …\storages\dsh-autorestart\shortcut-icon-1902bb15.ico,0`，`TargetPath` 仍是 `restore-profile.cmd`；第二次 sync 返回 `already-current`（幂等，不重复写）。
+
+**顺带修掉的更糟问题**：在加这层 guard 之前，**跑一遍全量测试会把用户真实桌面上的 `.lnk` 改写**成 `%TEMP%` 里的图标——实测读到 `…\Temp\dsh-autorestart-it-recover-now-idle-…\shortcut-icon-1902bb15.ico`。测试环境的东西跑到用户桌面上去了。已加 `isInsideTempDir()`：**临时目录里的图标永远不会被写进真快捷方式**。
+
+#### 11. 排队重启被作废之后，用户完全看不见发生了什么
+
+**真机症状**：`2026-11-02 23:04:38` 请求的重启一直排队，等了 `8473292 ms`（约 **2 小时 21 分**）从未执行；宿主重启后，新实例的 boot-recovery 把它判成 `cancelled`（理由含 `stale-never-executed`）。而**设置页上什么都没有**——用户看到的是「没有排队重启」，就好像他从来没点过。
+
+**修法**：设置页顶部加一条可见提示（`role=status`，标记 `data-dsh-autorestart-restart="cancelled-note"`，文本节点 `cancelled-text`），只有当最近一次请求 `state === 'cancelled' && by === 'boot-recovery'` 时出现。内容三件事：请求时间（`2026-11-02 23:04:38`）、人话时长（`约 2 小时 21 分`；≥60 分说「约 N 小时 M 分」、<60 秒说「几秒」）、以及「想重启再点一次就行」。
+
+**不漏内部标识符**：`reason` 字段根本不参与渲染；测试逐串断言页面上不出现 `boot-recovery` / `stale-never-executed` / `deferred` / `queued` / `attempts`。**也不常驻**：从未请求、仍在排队、正常完成、用户自己取消、被别人取消——五种情形各有断言，都不画。
+
+#### 12. `health.backups.available` **恒为 0**（不是偶尔算错，是永远算不出别的数）
+
+**真机症状**：`health` 报 `backups.available: 0`，而磁盘上两份备份都在，其中一份 `intervention: false` + `certifiedBy: full-checks` 的那份**确实可还原**。
+
+**根因**：`available` 是在一份**给页面看的投影**上判资格，而那份投影里**没有 `boot`、也没有 `trigger`** 这两个键（键不出现，不是 `null`）。资格判据要的正是一份副本「启动记录」是否证明它起来过、内容是否匹配——投影把证据裁掉了，所以判据永远拿不到料，结果**常数 0，永远不会变成别的数**。而真正的证据一直在读路径里（`readBackupMeta` 会翻译旧记录：旧 seed → `first-install`，旧签 + 指纹匹配 → 一段可用的启动事实），`listBackupIdentities` 也带着这两个字段。
+
+**修法**：先取完整记录 `identities`，投影 `items` 仍由它派生（**投影字段一个都没增**），`available` 改在 `identities` 上统计——与看门狗、回退助手**同一个函数**，不再是两套尺子。
+
+**为什么长期没被发现**：**没有任何一条测试断言过 `available` 的取值**。已补 4 条：根因复现（投影喂判据必为假）、三份同形副本的逐份计数、与 selector 同判据（两集合必须一致）、seed 靠 `trigger` 仍算可用；并做了证伪——把实现改回旧写法，其中 3 条立刻变红。
+
+#### 13. 测试套件把临时目录漏在 `%TEMP%` 里（跑了几个月，攒下 13 万个目录）
+
+**症状**：本机 `%TEMP%` 下的可用空间在慢慢变少，但没有任何一处报错——因为每次测试都"成功"。
+
+**真实规模**（先把估算纠对）：先前只数了一个前缀，得到 `34448 个 / 4.17 GB`，**那是低估**。按本插件实际用到的**六种前缀**统计——`dsh-autorestart-*`、`dsh-restart-request-*`、`dsh-ar-*`、`dsh-ledger-*`、`dsh watchdog <label> `（含空格）、`ar-*`——实测共 **131,151 个目录 / 1,219,987 个文件 / 14,350 MB**。
+
+**根因**：测试里到处 `fs.mkdtempSync(path.join(os.tmpdir(), <前缀>))`，但**没有任何一处负责删**。测试成功也漏、失败也漏；`node --test` 跑一次就多一批，几个月下来就是这个量级。
+
+**修法**：新增 `test/_tmp-guard.mjs`——包装 `fs.mkdtempSync` / `fs.mkdtemp`，把落在 `os.tmpdir()` 下、且带本插件前缀的结果记进**本进程的集合**，在 `process.on('exit')` 里逐个删；同时导出 `cleanupTempDirsNow()` 供需要提前清的地方兜底。67 个测试文件首行加一行 `import './_tmp-guard.mjs'`。
+
+**证据（干净窗口）**：`131151 → 跑完全量 → 131151`，**新增 = 0**；失败场景同样清——在一份副本里加一条必失败的测试，跑完 delta 仍为 **0**（说明守卫不靠"测试成功"这条路生效）。
+
+**历史残留已清理**：两轮共删约 **12.9 万个**目录（123,788 + 5,215 + 2），**失败 0**；可用空间 **92.7 GB → 108.17 GB（释放 15.5 GB）**；`%TEMP%` 顶层目录 **5,942 → 725**；本插件六种前缀剩余 **0**。
+
+
+### 修正：恢复插件后的可用性没有被验证
 
 旧版本在恢复插件时，只把备份里的文件拷回原位，**不检查恢复出来的插件能不能正常加载**；恢复完成后即记为成功。实测中出现过「报告成功、插件仍是坏的」以及「把一份本来就坏的备份当成可以回滚的那份」两种情况。
 
@@ -63,7 +135,7 @@
 - 恢复目标只在这类 `known-good` 备份里选；**一份都没有时不动手**，并在报告里写明原因；
 - 每个备份记录它**凭什么**被写成 `known-good`（比对内容指纹），拿不出这份记录的旧备份一律不采信。
 
-## 未发布 — 修掉测试的「墙上时钟依赖」
+### 修掉测试的「墙上时钟依赖」
 
 **症状**：同一份代码，08:56 全量 999/999 绿，09:01 变三条红（`integration.test.mjs` 的「boot pass restores…」、`plugin-recover.test.mjs` 的「THE BOOT PASS ONLY LOOKS…」与「a clean previous boot writes no report at all」）。
 
@@ -77,11 +149,11 @@
 - 实测：修复前 09:01 三条红 → 修复后 **09:04 全量 1001/1001 绿（exit 0）**；拷问脚本显示钉死后 mtime = `2026-11-01T00:00:01.100Z`，距 bootAt 恒 +3598.9 秒，与真实时间无关。
 - 断言**一条没删、一条没放宽**，只是把 fixture 的时间来源从"现在"换成"它描述的那一刻"。
 
-## 未发布 — 收敛：启动只提示不改文件、按需恢复单个插件、守夜人全部删除
+### 收敛：启动只提示不改文件、按需恢复单个插件、守夜人全部删除
 
 > **这一节取代下面「报错型插件故障：自动换回好版本、只重启一次、写出可读报告」那节里的自动恢复部分。** 那节的检测、纯函数和报告格式都还在用；被拿掉的是「启动时自己动手 + 自己请求重启」。
 
-### 用户拍板（2026-11-01）
+#### 用户拍板（2026-11-01）
 
 三件事，两件是"少做"，一件是"补上缺的那半"：
 
@@ -89,7 +161,7 @@
 2. **把提醒搬到前台** —— 原来"检测到了"这件事只落在 health 字段和日志里，用户看不见。现在弹出来：哪个插件坏了、报了什么错，并给**一个**选项「只把这一个插件恢复到上一个备份版本」。
 3. **守夜人（sentry）全部删掉** —— 与「关就是关」冲突，不再维护。
 
-### ① 启动路径：只读、只写报告，不动文件、不请求重启
+#### ① 启动路径：只读、只写报告，不动文件、不请求重启
 
 - 启动时改调新函数 `detectPluginRecovery()`（`lib/plugin-recover.js`）：读**上一次启动**的日志 → `findPluginFailures` 解析 → `mergeFailuresByPlugin` 归并 → 写 `<stateDir>/last-plugin-recovery.json` → 暴露 health 字段。
 - **启动路径不再调用 `applyPluginRecovery`，也不再调用 `requestRestart`**（单测钉住：恢复前后 profile 里每个文件的 sha256 不变、没有 `<plugin>.broken-*` 证据目录、`state.restart === null`）。
@@ -97,7 +169,7 @@
 - `plugin-recovery.json`（attempt 预算 / handled 指纹）**启动路径也不再写**：自动恢复没了，这两个记账就没有读者了。
 - `runPluginRecovery()` / `collectPluginRecovery()` 保留导出（现有集成测试直接驱动它们，且逻辑本身没错），但**启动流程不再调用**。
 
-### ② 新增按需入口：只恢复一个插件
+#### ② 新增按需入口：只恢复一个插件
 
 - `POST /__dsh_autorestart/plugin-restore`，body `{ "plugin": "<name>" }`。
 - 返回 `{ ok, plugin, mode, restoredFrom, restoredAt, backupKind, needsRestart }`（另带 `changed` / `evidence` / `at` / `reason`）。
@@ -107,14 +179,14 @@
 - 每次尝试写 `<stateDir>/plugin-restore-history.json`（最多 20 条，最新在前）；health 新增 `pluginRestore` 字段带最近一条。`pluginRecovery` 的形状**保持不变**（`continuum_status` 的严格 output schema 也没动）。
 - 这一条路径**跳过**自动恢复的两个循环守卫（`duplicate` / `needs-human`）：那两条是"机器该不该自己动手"，人再点一次不是循环；幂等检查仍在保护磁盘。
 
-### ③ 前台弹窗（`client.js`）
+#### ③ 前台弹窗（`client.js`）
 
 - 新增 `PluginFailurePanel`，挂在 `conversation.input.dock`（和安装提问、新功能公告同一个位置：不盖界面、不碰倒计时）。
 - 显示：标题「有插件没加载成功」、每个插件的名字 + 它报的错（最多 3 条，其余只报数量）、备份时间、以及每个插件一个按钮「只恢复 <plugin>」。没有可用备份时按钮不出现，直接说"只能手动处理"。
 - 点完就地显示结果：恢复成功（重启后生效）/ 已经和备份一致 / 恢复失败的原因。
 - 新增中英词条 12 条（`pluginFailure.*`）。
 
-### ④ 守夜人删除
+#### ④ 守夜人删除
 
 - 删除 `lib/sentry.js`、`lib/sentry-install.js`、`supervisor/sentry.js`、`test/sentry.test.mjs`、`test/sentry-install.test.mjs`、`docs/sentry.md`（共 6 份）。
 - `README.md` / `docs/README.zh.md` 的"未接线备用件"段落改写成「已移除（2026-11-01，用户拍板：与『关就是关』冲突，不再维护）」。
@@ -124,16 +196,16 @@
   - `lib/watchdog.js` 里"用尽次数"的失败文案由「rely on the sentry」改成「no further rollback will be attempted」，如实描述现在的行为：看门狗是**最后一道自动步骤**，它放弃之后就得人来看报告（同时把该处注释补上这个理由）；
   - `test/watchdog.test.mjs` 里那条 `/sentry/` 断言不再是「指向谁接手」，改成**正向断言新文案** + **反向断言旧词已不存在**（`doesNotMatch(/sentry/i)`）——断言没有删，只是跟着文案走。
 
-## 未发布 — 报错型插件故障：自动换回好版本、只重启一次、写出可读报告
+### 报错型插件故障：自动换回好版本、只重启一次、写出可读报告
 
-### 缺口
+#### 缺口
 
 「坏法」有两种，原来只接住了其中一种：
 
 - **进程级**（宿主根本起不来，比如 `EADDRINUSE`）——已有看门狗 + 重启前快照负责，这次不动；
 - **报错型**（宿主起来了，但某个插件 entry **静默没激活**，功能直接 404）——原来**没有任何人管**：日志里明明写着 `<plugin>: failed to import: <error>`，界面却一切正常，用户只会看到某个功能"莫名其妙没了"。
 
-### 现在
+#### 现在
 
 - **检测**（新增 `lib/plugin-failure.js`，纯函数）：`findPluginFailures(text, { sinceMs, logAt })` 认得四种真实日志行 —— `dsh: warning: N entry did not activate`（总括行，不点名）、`<plugin>: failed to import: <err>`、`<plugin>: import failed ...`、`- <plugin>: loading`（审计时还停在 loading，等于没激活）。**不认识的行一律忽略**：尤其**故意不认**进程级启动失败那段 `startup failed: ... / Failed plugins (1): ... / Error: EADDRINUSE` 转储 —— 那是看门狗的活，两个机制抢同一件事只会互相打。
 - **恢复**（新增 `lib/plugin-recover.js`）：拿最近一次身份为 `known-good` 的备份里该插件换回现场。
@@ -148,7 +220,7 @@
 - **接入启动流程**（`index.js`）：启动后、写 ready 标记之前跑一次 —— 读日志 → 检测 → 计划 → 恢复 → 写 `<stateDir>/last-plugin-recovery.json`（`{ at, atIso, failures[], actions[{plugin,mode,restoredFrom,restoredAt,backupKind}], restartRequested, needsHuman }`，其中 `restoredAt` / `backupKind` **取备份自己的 meta**，回答"恢复到了哪个时点"）。
 - **可见**：health 路由新增 `pluginRecovery` 字段（没发生过就是 `null`），`continuum_status` 工具同样返回它，并**同步写进工具 output schema**（严格 schema 下漏声明一个字段会让整个工具报废）。
 
-### 分工（写进 README 与中文 README）
+#### 分工（写进 README 与中文 README）
 
 | 故障 | 谁负责 |
 |---|---|
@@ -157,18 +229,18 @@
 
 两条路径不共享状态、不互相触发：`pluginRecovery` 只描述"报错型"的事。
 
-### 验证
+#### 验证
 
 - `node --test plugins/dsh-autorestart/test/*.test.mjs` → **1067 / 1067 全绿**（基线 1017，本次 +50）。
 - 新增单测：`test/plugin-failure.test.mjs`（四种行、无关文本 → 空数组、进程级转储 → 空数组、`sinceMs` 窗口、指纹稳定/去重、超长截断）、`test/plugin-recover.test.mjs`（四条分支、改名参数断言、幂等、attempt=1 允许 / attempt=2 拒绝、报告字段与 meta 来源、日志挑选）、`test/integration.test.mjs` 追加 10 条（端到端恢复与报告、四种"不重启"、只读上一轮日志、health 字段与工具 schema）。
 
-## 未发布 — 链接安装的插件现在也进备份、也能被还原
+### 链接安装的插件现在也进备份、也能被还原
 
-### 缺口（实测发现的真问题，不是为实验造的）
+#### 缺口（实测发现的真问题，不是为实验造的）
 
 profile 的 `node_modules` 里有 **5 个插件是符号链接/联接**（`dsh-autorestart`、`dsh-codekg`、`dsh-github-guard`、`dsh-release-board`、`dsh-secret-vault`，都指向 `Documents\deepseek-harness\default-workspace\plugins\<name>`），而身份为 `known-good` 的备份里 **118 个真副本、0 个链接插件**：备份把链接本身记下来了，链接**背后的内容一个字节都没有**。后果是**负责救命的 dsh-autorestart 自己也救不回来**。
 
-### 现在
+#### 现在
 
 - **备份**（`lib/backup.js`）：新增 `collectLinkedPlugins`（只收 `dsh.profile.bundles` 里启用的、指向目录的 reparse point），`manifest.json` 新增 `links: [{name, target, kind, exists, readable, copied, files, bytes}]` + `linkFiles` / `linkBytes`，链接的**内容**另存 `node_modules-link/<name>/`（不和真副本混在一起）。本机实测 5 个插件 1216 个文件 / 69.5 MB。清单只加字段、不改名 —— 三个读者（还原脚本、看门狗、`lib/rescue.js`）都不受影响。
 - **还原**（`scripts/restore-profile.ps1`，仍是纯 ASCII 无 BOM）：新增 `-ForceLinkPlugins` 开关；**默认档**保留健康的链接（开发目录继续“改完即生效”），**force 档**用备份内容顶替。每个链接插件都打印一行结论 `kept` / `replaced` / `target-missing` / `no-backup`（**不许静默跳过**），顶替原因写进 `links-restore.txt`。
@@ -177,22 +249,22 @@ profile 的 `node_modules` 里有 **5 个插件是符号链接/联接**（`dsh-a
   - `fs.cpSync` 往一个**带死链接**的 `node_modules` 里写会直接把 Node 进程打死（Windows，`0xC0000409`，无栈无消息），而 `fs.existsSync` 对死链接返回 **false** —— 现在先按 `lstat` 认出死链接、清掉再复制；
   - `rescue-strings.zh.json` 的 `restore.snapshotSuffix` 有 2 个占位符、调用只传 1 个参数 → 快照配置坏了的时候脚本不是报「这份快照不是 profile」而是格式化报错直接挂掉。
 
-## 0.8.6 — 2026-10-30
+### 2026-10-30 的首批改动
 
-### 看门狗：修掉「只许跑一次 / 拉起前不通行证 / 报告不落盘」三个毛病（用户拍板：只改看门狗，守夜人不进主线）
+#### 看门狗：修掉「只许跑一次 / 拉起前不通行证 / 报告不落盘」三个毛病（用户拍板：只改看门狗，守夜人不进主线）
 
 - **① 看门狗任务用真 node 启动，不再拿客户端当解释器。** 注册一次性任务时原来是手拼命令：`'"' + process.execPath + '" "…watchdog.mjs" …'`。在桌面版里 `process.execPath` 就是 `DeepSeek Harness.exe`（Electron 客户端），于是这个"看门狗"每次都会**再开一整个客户端**，看门狗根本没跑过。现在统一走 `buildWatchdogTaskCommand`（`lib/watchdog-schedule.js`）：解析到**真 node**（进程本身是 node → 安装目录自带的 runtime node → PATH），解析不到就**拒绝注册**并把原因写进日志，**绝不退回 exe**。Windows 计划任务把程序与参数交给 XML 的 `<Command>` / `<Arguments>`（不再 `cmd /c` 套壳，引号不会被吃掉）；systemd 那档拿 `[node, script, --state-dir, …]` 数组；detached 那档拿按 `CommandLineToArgvW` 规则加引号的命令行。
 - **② 每一轮拉起之前先清 `dsh-auth-*` 通行证 cookie。** 清理顺序固定在 `lib/watchdog.js` 里：还原快照 → **清 cookie** → 拉起 → 等 ready。带着 71 个过期 cookie 拉起来就是再死一次（Cookie 头撑过 16 KB → 431 → 客户端报 "Web authentication failed"）。清理脚本永不阻塞救援（自己 exit 0），但**结果一定写进报告**：清不掉绝不能看起来像清过。
 - **③ 失败也一定落报告。** 无论 recovered / not-needed / abandoned / decided / failed / 次数用尽，每一轮都写 `<stateDir>/last-watchdog-report.json`（哪一档、`healthCheck`、试了几次、每次的 `restored` / `cookieClear` / `relaunched` / `ready` / 退避、以及为什么停）。
 - **可在有上限的次数内重试，不再"只许一次"**：`maxAttempts`（默认 **3** 次，硬上限 **10** 次 —— `lib/watchdog.js` 的 `DEFAULT_MAX_ATTEMPTS` / `MAX_ATTEMPTS_CEILING`）声明在 pending 标记里；每轮开始前重新问那三个问题（ready / 有实例活着 / health 应答），两次尝试之间的退避是 **15s → 45s**（封顶 45s，`DEFAULT_BACKOFF_MS = [15000, 45000]`；尝试次数更多时沿用最后一档）。快照只在第一轮还原（同一快照再拷一遍改变不了什么），**cookie 每次拉起前都清**。
 
-### cookie 清理：可覆盖 / 可观测 / 可自证
+#### cookie 清理：可覆盖 / 可观测 / 可自证
 
 - **删除条件放宽**：`host_key = '127.0.0.1' AND name LIKE 'dsh-auth-%'`，**不再要求 `path = '/'`**。官方代码总是写 `Path=/`，但漏删一个 cookie 它照样会发到 127.0.0.1、照样占满 16 KB 头；多删一个的代价只是一次重新登录。
 - **可观测**：清理脚本把结果写成 `<stateDir>/last-cookie-clear.json`（`{at, atIso, ok, removed, reason}`，`.tmp` + rename 原子写），插件健康路由新增 `cookieClear` 字段暴露「上次清理结果」。**不谎报当前 cookie 张数**：运行中的浏览器锁着 cookie 库，所以 `live` 恒为 `null`，`liveNote` 写明原因；"还没清理过"和"清理失败"是两个不同答案，都不当成成功。
 - **可自证**：版本号升到 **0.8.6**；`health` 的 `version` 与 `package.json` 一致（`pluginVersion()` / `PLUGIN_VERSION_FALLBACK` / 包版本三者对齐，有单测钉住），真机上一眼能看出新代码是否真的被加载。
 
-### 覆盖边界（这次也写进 README 与中文 README）
+#### 覆盖边界（这次也写进 README 与中文 README）
 
 看门狗是一个**窗口**，不是常驻保安：它只在**我们自己要重启宿主**的那一刻布防，宿主起来后立刻撤掉。**窗口之外没有任何人看着** —— 凌晨被系统杀掉的宿主、手动双击启动即崩的客户端、早上发现 0 进程，都不会被拉回来（插件随宿主一起死了，也没有一次性项被注册过）；那时只剩 `scripts/restore-profile.cmd` 可以手动双击。看门狗也只还原一份快照 + 拉起宿主，修不了宿主自己的 bug。
 

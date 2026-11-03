@@ -1,3 +1,5 @@
+// Every temporary directory this file creates is removed when the run ends.
+import './_tmp-guard.mjs'
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';

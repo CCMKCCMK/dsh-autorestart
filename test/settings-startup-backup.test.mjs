@@ -16,6 +16,8 @@
  * never walked.
  */
 
+// Every temporary directory this file creates is removed when the run ends.
+import './_tmp-guard.mjs'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -1444,11 +1446,13 @@ test('the whole backup explanation is one fold, closed by default', async () => 
   ]) {
     assert.equal(inside.has(gone), false, `"${gone}" is not drawn any more, so it cannot be inside the fold`)
   }
-  // ...and the per-plugin recovery too, which lives in its own key space.
+  // THE PER-PLUGIN RECOVERY IS GONE (user decision, 2026-11-02): it listed
+  // plugins by "differs from the backup", which cannot tell anyone WHICH plugin
+  // is broken, so it promised a diagnosis it could not deliver.
   assert.equal(
-    walk(folds[0]).filter((node) => node.props && node.props['data-dsh-autorestart-recovery'] === 'title').length,
-    1,
-    'the per-plugin recovery is inside the same fold',
+    walk(folds[0]).filter((node) => node.props && node.props['data-dsh-autorestart-recovery']).length,
+    0,
+    'nothing of the old per-plugin recovery is drawn inside the fold',
   )
   // ...and the switches are NOT inside it: a switch inside a closed fold is a
   // setting nobody finds.
@@ -1793,7 +1797,12 @@ function inventoryFixture() {
   }
 }
 
-test('the per-plugin recovery is inside the backup fold, and 只恢复 X really posts', async () => {
+test('the per-plugin recovery is GONE — no title, no 立即检查, no list', async () => {
+  // USER DECISION (2026-11-02), in their words: "没法定位具体哪个插件坏了".
+  // The block listed every plugin the copy holds and offered 只恢复 X, but it
+  // could only say "this differs from the backup" — which is a lead, not a
+  // diagnosis. It has been removed from BOTH surfaces (the backup fold and the
+  // config page) because they mount the same block.
   const mounted = mountSettings({
     inventory: inventoryFixture(),
     info: {
@@ -1804,77 +1813,34 @@ test('the per-plugin recovery is inside the backup fold, and 只恢复 X really 
   })
   const panel = await mounted.settled('dsh-autorestart')
 
-  // The block is inside the fold, under its own title, and it does NOT talk to
-  // the route until the button is pressed.
-  const folds = backupFold(panel)
-  assert.equal(
-    walk(folds[0]).filter((node) => node.props && node.props['data-dsh-autorestart-recovery'] === 'title').length,
-    1,
-    'the recovery block lives inside the one fold',
+  assert.deepEqual(
+    marked(panel, 'data-dsh-autorestart-recovery'),
+    [],
+    'not one node of the old block is drawn, in the fold or anywhere else',
   )
-  const title = walk(folds[0]).find((node) => node.props && node.props['data-dsh-autorestart-recovery'] === 'title')
-  assert.equal(textOf(title), '某个插件起不来？退回它的上一个版本')
+  const text = textOf(panel)
+  assert.equal(text.includes('某个插件起不来'), false, 'the old title is not on the page')
+  assert.equal(text.includes('立即检查'), false, 'and neither is the check button')
+  assert.equal(text.includes('还没检查。点「立即检查」'), false, 'nor the deleted "nothing checked yet" hint')
+  assert.equal(text.includes('只恢复'), false, 'nor a per-plugin restore button')
+  // AND NOTHING TALKS TO THE INVENTORY ROUTE: the fetch went with the block, so a
+  // page that draws the fold no longer asks the Host for a plugin inventory.
   assert.equal(
     mounted.fetches.filter((entry) => String(entry.url).includes('/plugin-inventory')).length,
     0,
-    'nothing is asked until the user presses 立即检查',
+    'no inventory request is made by the settings page',
   )
 
-  const check = walk(panel).find((node) => node.props && node.props['data-dsh-autorestart-recovery'] === 'check')
-  assert.equal(textOf(check), '立即检查')
-  check.props.onClick()
-  await new Promise((resolve) => setTimeout(resolve, 5))
-  const checked = mounted.render('dsh-autorestart')
-  assert.equal(
-    mounted.fetches.filter((entry) => String(entry.url).includes('/plugin-inventory')).length,
-    1,
-    'one request, when the button was pressed',
-  )
-
-  const rows = marked(checked, 'data-dsh-autorestart-recovery')
-  const names = rows.filter((node) => node.props['data-dsh-autorestart-recovery'] === 'name').map(textOf)
-  // ONLY the plugins we hold files for are listed one by one (user decision,
-  // 2026-11-02): a plugin the copy does not hold is merged into its sentence
-  // instead. `npm-but-in-copy` IS listed — the copy has its files.
-  assert.deepEqual(
-    names,
-    ['my-linked-plugin', 'npm-but-in-copy', 'fine-plugin'],
-    'the plugins the copy holds have rows',
-  )
-
-  const restores = rows.filter((node) => node.props['data-dsh-autorestart-recovery'] === 'restore')
-  assert.equal(restores.length, 1, 'only the plugin we hold files for offers a restore')
-  assert.equal(textOf(restores[0]), '只恢复 my-linked-plugin', 'the button names the plugin')
-
-  // THE TWO SENTENCES (user correction, 2026-11-02). The old wording
-  // ("备份里只有名字和版本，重装即可") implied the copy held something; it holds
-  // nothing, so the third-party line has to say exactly that.
-  const thirdParty = rows.filter((node) => node.props['data-dsh-autorestart-recovery'] === 'third-party')
-  assert.equal(thirdParty.length, 1, 'one sentence for the third-party plugins')
-  assert.equal(
-    textOf(thirdParty[0]),
-    '另有 1 个第三方插件：我们没有备份它们，真出事时需要重新安装',
-    'it says we did NOT back them up, and that they are reinstalled',
-  )
-  const builtin = rows.filter((node) => node.props['data-dsh-autorestart-recovery'] === 'builtin')
-  assert.equal(builtin.length, 1, 'one sentence for the built-in plugins')
-  assert.equal(
-    textOf(builtin[0]),
-    '另有 1 个内置插件：DSH 自带，不需要备份',
-    'and the built-in line says no backup is needed — not "reinstall it"',
-  )
-  // The old wording is GONE, in both languages.
-  const everything = textOf(checked)
-  assert.equal(everything.includes('备份里只有名字和版本'), false, 'the misleading sentence is gone')
-  assert.equal(everything.includes('only their name and version'), false, 'and so is its English twin')
-
-  restores[0].props.onClick()
-  await new Promise((resolve) => setTimeout(resolve, 5))
-  const posts = mounted.fetches.filter(
-    (entry) => String(entry.url).includes('/plugin-restore') && entry.init && entry.init.method === 'POST',
-  )
-  assert.equal(posts.length, 1, 'exactly one restore request')
-  assert.deepEqual(JSON.parse(posts[0].init.body), { plugin: 'my-linked-plugin' })
+  // THE COPY IS GONE TOO, IN BOTH LANGUAGES (a key nobody can reach is a key
+  // that comes back the day somebody re-adds the node).
+  const clientSource = fs.readFileSync(new URL('../client.js', import.meta.url), 'utf8')
+  for (const key of ['settings.backup.recovery', 'settings.checkNow', 'settings.empty']) {
+    assert.equal(clientSource.includes("'" + key + "'"), false, key + ' is not in the bundle')
+    for (const lang of ['zh', 'en']) {
+      const mirror = fs.readFileSync(new URL('../locale/' + lang + '.json', import.meta.url), 'utf8')
+      assert.equal(mirror.includes(key), false, key + ' is not in locale/' + lang + '.json')
+    }
+  }
 })
 
 /* ------------------------------------------------------------------ *
@@ -2134,13 +2100,20 @@ test('the profile warning reads whichever shape the Host sends — and claims no
   assert.equal(await warned({ profile: { dir: '', source: 'unknown' } }), 1, 'an empty dir cannot be backed up either')
 })
 
-test('the collapsed backup fold says what is inside it', async () => {
+test('the collapsed backup fold advertises nothing that was deleted', async () => {
+  // The summary used to carry "内含：某个插件起不来？退回上一个版本" — a pointer to
+  // the per-plugin recovery. That entry is gone (user decision, 2026-11-02), so
+  // the pointer went with it: a note advertising a deleted feature is worse than
+  // no note at all.
   const mounted = mountSettings({ info: configured() })
   const panel = await mounted.settled('dsh-autorestart')
   const note = marked(panel, 'data-dsh-autorestart-backup')
     .filter((node) => node.props['data-dsh-autorestart-backup'] === 'section-note')
-  assert.equal(note.length, 1, 'the summary carries the line')
-  assert.equal(textOf(note[0]), '内含：某个插件起不来？退回上一个版本', 'so the entry point is visible while folded')
+  assert.deepEqual(note, [], 'the summary carries no note any more')
+  const summary = marked(panel, 'data-dsh-autorestart-backup')
+    .find((node) => node.props['data-dsh-autorestart-backup'] === 'section-summary')
+  assert.notEqual(summary, undefined, 'the fold is still there, and still named')
+  assert.equal(textOf(summary).includes('某个插件起不来'), false, 'and it no longer names the deleted entry')
 })
 
 test('the shortcut icon and the desktop .lnk come from one answer', async () => {
@@ -2184,6 +2157,123 @@ test('the shortcut icon and the desktop .lnk come from one answer', async () => 
     1,
     'the shortcut itself is still offered',
   )
+})
+
+test('the watchdog rows are filled in, not printed as {tier} / {result}', async () => {
+  // THE SCREEN THE USER SAW (2026-11-02): "看门狗的触发方式：{tier}" — the
+  // translator took one argument, so the replacement values were dropped and the
+  // placeholder itself was printed. This asserts the RENDERED text, not just the
+  // translator, so the same class of bug cannot come back through another path.
+  const mounted = mountSettings({
+    info: {
+      instance: { isDesktopApp: true, platform: 'win32' },
+      supervisor: { mode: 'app', installed: false, startup: { mode: 'desktop' } },
+      rescue: rescueKit(),
+      watchdog: { tier: 'scheduled-task', available: true, report: { result: 'ok' } },
+    },
+  })
+  const panel = await mounted.settled('dsh-autorestart')
+  const tierLine = rescueText(panel, 'watchdog-tier')
+  const lastLine = rescueText(panel, 'watchdog-last')
+  assert.notEqual(tierLine, '', 'the tier line is drawn when the Host reports a tier')
+  assert.equal(tierLine.includes('{tier}'), false, `no raw placeholder on screen: ${tierLine}`)
+  assert.equal(tierLine.includes('{'), false, `no stray brace either: ${tierLine}`)
+  assert.equal(tierLine.startsWith('看门狗的触发方式：'), true, `and it still says what it is: ${tierLine}`)
+  assert.equal(lastLine.includes('{result}'), false, `no raw placeholder on screen: ${lastLine}`)
+  assert.equal(lastLine.includes('{'), false, `no stray brace either: ${lastLine}`)
+})
+
+/* ------------------------------------------------------------------ *
+ * THE SAME PICTURE ON THE PAGE AS ON THE DESKTOP (user requirement,
+ * 2026-11-02): the row used to draw a made-up "DSH" tile, so the page
+ * and the `.lnk` could look like two different things. The Host now
+ * sends the icon as a data URI built from the same bytes it points
+ * `IconLocation` at; the page renders that string and nothing else.
+ * ------------------------------------------------------------------ */
+
+/** A tiny but well-formed PNG data URI, standing in for the Host's answer. */
+const RESCUE_PNG_URI = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8AARQAF/gG9Vw7HAAAAAElFTkSuQmCC'
+
+test('the page draws the very bytes the desktop shortcut carries', async () => {
+  const mounted = mountSettings({
+    info: {
+      instance: { isDesktopApp: true, platform: 'win32' },
+      supervisor: { mode: 'app', installed: false, startup: { mode: 'desktop' } },
+      rescue: rescueKit({ iconDataUri: RESCUE_PNG_URI, iconDataUriHash: 'bc9efa63' }),
+    },
+  })
+  const panel = await mounted.settled('dsh-autorestart')
+  const images = marked(panel, 'data-dsh-autorestart-rescue')
+    .filter((node) => node.props['data-dsh-autorestart-rescue'] === 'rescue-icon')
+  assert.equal(images.length, 1, 'exactly one picture, next to the file name')
+  const image = images[0]
+  assert.equal(image.type, 'img', 'and it is an <img>, not a coloured box with text in it')
+  // THE PUBLISHED STRING, CHARACTER FOR CHARACTER — the page must not rebuild,
+  // re-encode or shorten it, or the two copies would stop being the same bytes.
+  assert.equal(image.props.src, RESCUE_PNG_URI, 'the src is the Host string itself')
+  assert.equal(image.props.src.startsWith('data:image/png;base64,'), true, 'as a PNG data URI')
+  assert.equal(image.props.alt, 'DSH 出事了双击这里.lnk', 'the alt is the file it puts on the desktop')
+  assert.equal(image.props.width, 16, 'sized to sit on the text baseline')
+  assert.equal(image.props.height, 16)
+  // THE STAND-IN IS GONE: one icon per row, and the tile says it is the real one.
+  const tile = marked(panel, 'data-dsh-autorestart-rescue')
+    .find((node) => node.props['data-dsh-autorestart-rescue'] === 'shortcut-icon')
+  assert.equal(tile.props['data-icon-real'], 'true', 'the tile declares that the picture is real')
+  assert.equal(textOf(tile).includes('DSH'), false, 'and the made-up "DSH" text is not drawn beside it')
+})
+
+test('without the Host field the row falls back to text and draws no broken image', async () => {
+  const mounted = mountSettings({
+    info: {
+      instance: { isDesktopApp: true, platform: 'win32' },
+      supervisor: { mode: 'app', installed: false, startup: { mode: 'desktop' } },
+      // An older Host: `iconPath` only, no bytes. Nothing may throw, nothing may
+      // show a broken-image marker, and the rest of the row stays intact.
+      rescue: rescueKit(),
+    },
+  })
+  const panel = await mounted.settled('dsh-autorestart')
+  assert.deepEqual(
+    marked(panel, 'data-dsh-autorestart-rescue')
+      .filter((node) => node.props['data-dsh-autorestart-rescue'] === 'rescue-icon'),
+    [],
+    'no <img> when the Host sent no bytes',
+  )
+  const tile = marked(panel, 'data-dsh-autorestart-rescue')
+    .find((node) => node.props['data-dsh-autorestart-rescue'] === 'shortcut-icon')
+  assert.equal(tile.props['data-icon-real'], 'false', 'the tile says the picture is the stand-in')
+  assert.equal(textOf(tile), 'DSH', 'and it is the text tile, as before')
+  assert.equal(rescueText(panel, 'shortcut-name'), 'DSH 出事了双击这里.lnk', 'the file name is still there')
+})
+
+test('a data URI that is not a PNG is ignored instead of half-rendered', async () => {
+  // DEFENSIVE ON PURPOSE: a wrong media type would render a broken image, and a
+  // remote URL would let the page fetch something the plugin did not ship.
+  for (const bad of ['data:image/svg+xml;base64,PHN2Zy8+', 'https://example.invalid/icon.png', 'not a data uri']) {
+    const mounted = mountSettings({
+      info: {
+        instance: { isDesktopApp: true, platform: 'win32' },
+        supervisor: { mode: 'app', installed: false, startup: { mode: 'desktop' } },
+        rescue: rescueKit({ iconDataUri: bad }),
+      },
+    })
+    const panel = await mounted.settled('dsh-autorestart')
+    assert.deepEqual(
+      marked(panel, 'data-dsh-autorestart-rescue')
+        .filter((node) => node.props['data-dsh-autorestart-rescue'] === 'rescue-icon'),
+      [],
+      'refused: ' + bad.slice(0, 32),
+    )
+  }
+})
+
+test('no base64 icon is baked into the bundle — the picture always comes from the Host', () => {
+  // THE POINT OF THE WHOLE CHANGE: two copies of the same image that are allowed
+  // to be edited separately drift. An inlined constant would do exactly that, so
+  // its absence is pinned here rather than trusted to review.
+  const source = fs.readFileSync(new URL('../client.js', import.meta.url), 'utf8')
+  assert.equal(source.includes('iVBORw0KGgo'), false, 'no PNG payload is written into client.js')
+  assert.equal(source.includes('data:image/png;base64,'), true, 'the prefix it accepts is named, not inlined')
 })
 
 // ---------------------------------------------------------------------------
@@ -2384,3 +2474,117 @@ function functionBodyOfSettings() {
   // down, so the slice runs to the end of the file rather than a fixed window.
   return source.slice(start)
 }
+
+/* ------------------------------------------------------------------ *
+ * THE RESTART YOU ASKED FOR AND NEVER GOT (user report, 2026-11-03).
+ *
+ * REAL READINGS: two sessions asked at 23:04:38; it queued to 01:25:51
+ * (waitedMs 8473292 ≈ 2 h 21 min) and never ran; the next boot's recovery
+ * cancelled it (reason "…stale-never-executed…", by "boot-recovery"), and the
+ * page said NOTHING — it looked as if the user had never asked at all.
+ * ------------------------------------------------------------------ */
+
+/** The payload the real machine produced, minus the fields the page does not read. */
+function cancelledRequest(overrides = {}) {
+  return {
+    state: 'cancelled',
+    by: 'boot-recovery',
+    reason: 'the boot settled this request: stale-never-executed (queued 8473292 ms ago (> 1800000 ms) and never executed)',
+    requestedAtLocal: '2026-11-02T23:04:38+08:00',
+    waitedMs: 8473292,
+    attempts: 0,
+    ...overrides,
+  }
+}
+
+/** The text of the cancelled-restart note, or '' when it is not drawn. */
+function cancelledNoteText(panel) {
+  const node = marked(panel, 'data-dsh-autorestart-restart')
+    .find((item) => item.props['data-dsh-autorestart-restart'] === 'cancelled-text')
+  return node === undefined ? '' : textOf(node)
+}
+
+const CANCELLED_INTERNAL = ['boot-recovery', 'stale-never-executed', 'deferred', 'queued', 'attempts']
+
+test('a request the next boot cancelled is ON THE PAGE, with the time and the wait', async () => {
+  const mounted = mountSettings({
+    info: {
+      instance: { isDesktopApp: true, platform: 'win32' },
+      supervisor: { mode: 'app', installed: false, startup: { mode: 'desktop' } },
+      restartRequest: cancelledRequest(),
+    },
+  })
+  const panel = await mounted.settled('dsh-autorestart')
+  const said = cancelledNoteText(panel)
+  assert.notEqual(said, '', 'the note is drawn — that is the whole point of the change')
+  assert.equal(said.includes('约 2 小时 21 分'), true, 'the wait in words a person uses: ' + said)
+  assert.equal(said.includes('2026-11-02 23:04:38'), true, 'and the moment the user asked: ' + said)
+  assert.equal(said.includes('取消'), true, 'it says the request was cancelled')
+  assert.equal(said.includes('再点一次'), true, 'and what to do next')
+  for (const secret of CANCELLED_INTERNAL) {
+    assert.equal(said.includes(secret), false, '"' + secret + '" must never reach a user: ' + said)
+  }
+})
+
+test('the wait is said the way a person says it, at every boundary', async () => {
+  const cases = [
+    [8473292, '约 2 小时 21 分'],
+    [3600000, '约 1 小时'],
+    [600000, '约 10 分钟'],
+    [60000, '约 1 分钟'],
+    [59999, '几秒'],
+    [5000, '几秒'],
+  ]
+  for (const [waitedMs, expected] of cases) {
+    const mounted = mountSettings({
+      info: {
+        instance: { isDesktopApp: true, platform: 'win32' },
+        supervisor: { mode: 'app', installed: false, startup: { mode: 'desktop' } },
+        restartRequest: cancelledRequest({ waitedMs }),
+      },
+    })
+    const panel = await mounted.settled('dsh-autorestart')
+    const said = cancelledNoteText(panel)
+    assert.equal(said.includes(expected), true, waitedMs + ' ms should read as "' + expected + '": ' + said)
+  }
+})
+
+test('nothing else gets a permanent note', async () => {
+  const cases = [
+    ['never asked', {}],
+    ['still queued', { restartRequest: { state: 'queued', by: null, requestedAtLocal: '2026-11-02T23:04:38+08:00', waitedMs: 90000 } }],
+    ['finished normally', { restartRequest: { state: 'done', by: 'user', requestedAtLocal: '2026-11-02T23:04:38+08:00', waitedMs: 90000 } }],
+    ['cancelled by the user', { restartRequest: cancelledRequest({ by: 'user' }) }],
+    ['cancelled, but not by a boot', { restartRequest: cancelledRequest({ by: 'watchdog' }) }],
+  ]
+  for (const [label, extra] of cases) {
+    const mounted = mountSettings({
+      info: {
+        instance: { isDesktopApp: true, platform: 'win32' },
+        supervisor: { mode: 'app', installed: false, startup: { mode: 'desktop' } },
+        ...extra,
+      },
+    })
+    const panel = await mounted.settled('dsh-autorestart')
+    assert.equal(cancelledNoteText(panel), '', label + ': no note may be drawn')
+  }
+})
+
+test('the English mirror says the same thing, also without internal words', async () => {
+  const mounted = mountSettings({
+    language: 'en',
+    info: {
+      instance: { isDesktopApp: true, platform: 'win32' },
+      supervisor: { mode: 'app', installed: false, startup: { mode: 'desktop' } },
+      restartRequest: cancelledRequest(),
+    },
+  })
+  const panel = await mounted.settled('dsh-autorestart')
+  const said = cancelledNoteText(panel)
+  assert.notEqual(said, '', 'the English note is drawn too')
+  assert.equal(said.includes('about 2h 21m'), true, 'the wait in English words: ' + said)
+  assert.equal(said.includes('2026-11-02 23:04:38'), true, 'the same moment, same format')
+  for (const secret of CANCELLED_INTERNAL) {
+    assert.equal(said.includes(secret), false, '"' + secret + '" must never reach a user: ' + said)
+  }
+})

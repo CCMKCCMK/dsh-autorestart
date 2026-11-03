@@ -20,6 +20,8 @@
  *      cannot be "green in tests because nothing checks the file".
  */
 
+// Every temporary directory this file creates is removed when the run ends.
+import './_tmp-guard.mjs'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -157,8 +159,11 @@ test('②the page and the .lnk name the plugin icon, and the host executable is 
     )
     assert.equal(path.dirname(reported.iconPath), stateDir, 'the copy lives in the plugin state directory')
     assert.equal(fs.existsSync(reported.iconPath), true, 'and it is a file that really exists: ' + reported.iconPath)
+    // THE COPY IS THE PICTURE THE RESOLVER PICKED (2026-11-02): since the user
+    // approved the branded "rescue" icon, the source is that file rather than the
+    // plain artwork, so the comparison is against the resolver's own answer.
     assert.equal(
-      fs.readFileSync(reported.iconPath).equals(fs.readFileSync(shippedIcoPath())),
+      fs.readFileSync(reported.iconPath).equals(fs.readFileSync(pluginShortcutIcon({ pluginDir: process.cwd() }))),
       true,
       'the copy carries exactly the icon this package ships',
     )

@@ -3,6 +3,8 @@
  * recorded on `restart.requesters`, released together on cancel, and woken by the
  * single boot recovery pass (which now drains several batches per boot).
  */
+// Every temporary directory this file creates is removed when the run ends.
+import './_tmp-guard.mjs'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'

@@ -323,8 +323,16 @@ if [ "$DRY_RUN" -eq 1 ]; then
 fi
 
 # --- Back up, then write ---
-stamp=$(date -u +%Y%m%d-%H%M%S)
+# NEVER OVERWRITE AN EARLIER BACKUP (2026-11-03): the stamp carries milliseconds, and
+# when that name is still taken a serial number is appended. Before this the stamp
+# stopped at the second, so two writes inside one second left ONE backup.
+stamp=$(date -u +%Y%m%d-%H%M%S-%3N)
 backup="$pkg.bak-emergency-$stamp"
+serial=1
+while [ -e "$backup" ]; do
+  serial=$((serial + 1))
+  backup="$pkg.bak-emergency-$stamp-$serial"
+done
 if ! cp -- "$pkg" "$backup"; then
   fail "$(fmt "$(t 'emergency.backupFailed' 'the backup failed - the original file was not touched: {0}')" "$backup")"
 fi

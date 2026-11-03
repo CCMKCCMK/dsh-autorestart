@@ -2,12 +2,15 @@
 
 DSH 起不来的时候，这个文件夹里的东西**不用 DSH 自己**就能救自己。
 
-## 按平台挑文件（**别拿错平台的**）
+## 按宿主挑文件（**别拿错宿主的**）
 
-| 你的机器 | 还原 profile | 摘掉本插件 |
+| 你的宿主 | 还原 profile | 摘掉本插件 |
 |---|---|---|
 | **Windows**（桌面客户端 / Windows 上的 `dsh web`） | 双击 `restore-profile.cmd` | 双击 `emergency-disable.cmd` |
-| **Linux / WSL / macOS**（托管端） | `sh scripts/restore-profile.sh` | `sh scripts/emergency-disable.sh` |
+| **WSL / Linux**（托管端） | `sh scripts/restore-profile.sh` | `sh scripts/emergency-disable.sh` |
+| **macOS** | `sh scripts/restore-profile.sh` | `sh scripts/emergency-disable.sh` |
+
+macOS 用同样的两个 POSIX `sh` 脚本；从未在真 Mac 上跑过，属于未验，不作承诺。
 
 Linux/WSL 的机器上**没有** `.cmd` 文件，Windows 的机器上**没有** `.sh` —— 设置页的
 「出事了怎么办」只显示**这台机器上真有的**那两个路径，不会给你一条走不通的死路。

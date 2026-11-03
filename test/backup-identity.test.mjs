@@ -26,6 +26,8 @@
  *      other two kinds.
  */
 
+// Every temporary directory this file creates is removed when the run ends.
+import './_tmp-guard.mjs'
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -193,7 +195,7 @@ test('③ pruning NEVER removes the newest known-good copy', (t) => {
   // since the criterion is part of the identity, it names that too: a copy with a
   // source and no criterion is the historical pollution, not a safe copy.
   assert.equal(
-    markKnownGood(path.join(backups, stamps[0]), {
+    markKnownGood(path.join(backups, stamps[0]), { intervention: false,
       reason: 'boot-ok',
       version: '0.8.5',
       certifiedBy: 'full-checks',
@@ -242,7 +244,7 @@ test('⑤ markKnownGood promotes a copy and keeps its version', async (t) => {
   // it AND which criterion was applied, so the meta can answer "why is this copy
   // safe?" afterwards.
   assert.equal(
-    markKnownGood(snapshot.dir, {
+    markKnownGood(snapshot.dir, { intervention: false,
       reason: 'boot-ok',
       version: '0.8.5',
       certifiedBy: 'full-checks',
@@ -505,7 +507,7 @@ test('⑦ the four proving sources stay distinguishable', async (t) => {
     // (the default is two copies since 2026-11-02).
     const backup = await createBackup({ slimBackup: false, profileDir: profile, backupsDir: backups, includePlugins: false, now: 2_000 + index, maxBackups: 20 });
     assert.equal(backup.ok, true);
-    assert.equal(markKnownGood(backup.dir, { reason: 'r-', certifiedBy: source }).promoted, true);
+    assert.equal(markKnownGood(backup.dir, { intervention: false, reason: 'r-', certifiedBy: source }).promoted, true);
     const meta = readBackupMeta(backup.dir);
     // THE OLD SOURCE NAME SURVIVES THE ROUND TRIP, because it is derived from the
     // facts on read — but what stands on disk is the observation itself.
@@ -565,12 +567,12 @@ test('⑦ markKnownGood promotes NOTHING without evidence, and does not rewrite 
   assert.match(legacy.reason, /no boot record/i);
 
   // Explicitly "none" is the same answer, with its own wording.
-  const explicitNone = markKnownGood(backup.dir, { reason: 'boot-ok', certifiedBy: CERTIFIED_BY.NONE });
+  const explicitNone = markKnownGood(backup.dir, { intervention: false, reason: 'boot-ok', certifiedBy: CERTIFIED_BY.NONE });
   assert.equal(explicitNone.promoted, false);
   assert.match(explicitNone.reason, /does not record a boot/i);
 
   // A made-up source does not sneak through either.
-  const invented = markKnownGood(backup.dir, { reason: 'boot-ok', certifiedBy: 'boot-ok' });
+  const invented = markKnownGood(backup.dir, { intervention: false, reason: 'boot-ok', certifiedBy: 'boot-ok' });
   assert.equal(invented.promoted, false);
 
   assert.equal(fs.readFileSync(metaFile, 'utf8'), before, 'meta.json is byte-for-byte unchanged');
@@ -583,7 +585,7 @@ test('⑦ markKnownGood on a directory with nothing in it refuses instead of thr
   const empty = path.join(backups, 'not-a-backup');
   fs.mkdirSync(empty, { recursive: true });
 
-  const refused = markKnownGood(empty, { reason: 'boot-ok', certifiedBy: CERTIFIED_BY.FULL_CHECKS });
+  const refused = markKnownGood(empty, { intervention: false, reason: 'boot-ok', certifiedBy: CERTIFIED_BY.FULL_CHECKS });
   assert.equal(refused.promoted, false, 'there is nothing to promote');
   assert.match(refused.reason, /neither a readable meta.json nor a manifest/i);
   assert.equal(fs.existsSync(path.join(empty, META_NAME)), false, 'and nothing was invented on disk');

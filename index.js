@@ -78,6 +78,7 @@ import {
   backupPluginDirIn,
   BACKUP_LIMIT_MAX,
   BACKUP_LIMIT_MIN,
+  backupLimitInfo,
   // WHAT PUT A COPY ON DISK, AND WHAT THE BOOT AFTER IT REPORTED (2026-11-02):
   // the fact vocabulary that replaced the old "is this copy safe" register. The
   // call sites below state these instead of a stamp.
@@ -96,9 +97,13 @@ import {
   DEFAULT_MAX_BACKUPS,
   enabledBundlesOf,
   isRestoreEligible,
+  isUsableRestorePoint,
   KIND_KNOWN_GOOD,
   KIND_SNAPSHOT,
   latestKnownGood,
+  LEGACY_RESTORE_REFUSAL,
+  normalizeRestoreRefusal,
+  RESTORE_REFUSAL,
   LINKS_DIR,
   listBackupIdentities,
   listBackups,
@@ -142,6 +147,7 @@ import {
   ensureShortcutIcon,
   rescueInfo,
   rescueScriptPaths,
+  syncShortcutIcon,
 } from './lib/rescue-paths.js'
 import {
   emptyCapabilities,
@@ -315,6 +321,19 @@ const DEFAULT_RESTART_GRACE_MS = 0
  * the wait is still going on.
  */
 const LONG_WAIT_LOG_INTERVAL_MS = 60000
+/**
+ * HOW LONG A QUEUED RESTART MAY GO UNMENTIONED (user decision, 2026-11-02:
+ * "this is a silent failure, and last time I could not even find out why").
+ *
+ * Past this, every tick logs ONE line naming the gate decision, the sessions
+ * that still hold the restart and what keeps resetting the quiet window - at
+ * most once a minute per request, so a 3 s poll does not flood the log. Silence
+ * is what cost the user two rounds last time; a repeated line is the lesser
+ * evil, and the interval keeps it readable.
+ */
+const RESTART_QUEUE_SILENCE_MS = 60000
+/** At most one queue diagnostic per minute per request (see `queueDiagLog`). */
+const RESTART_QUEUE_DIAG_INTERVAL_MS = 60000
 
 /**
  * The marker the plugin writes when it has decided the restart ITSELF.
@@ -757,8 +776,16 @@ function buildConfigSchema() {
         .description('After boot, record what the loaded plugins provide and compare it with the previous record'),
       watchDelayMs: schemastery.number().step(1).min(0).default(8000)
         .description('How long the watch waits after boot so plugins that load late are not reported as gone'),
-      maxBackups: schemastery.number().step(1).min(1).default(DEFAULT_MAX_BACKUPS)
-        .description('How many snapshots are kept (default 3: the current one plus the two before it). Older ones are deleted automatically, except the newest one and the one whose restart record says the instance came up with matching content; the first-install snapshot is kept only while there is room.'),
+      // THE RANGE AND THE DEFAULT COME FROM ONE PLACE (2026-11-02): this line used
+      // to say `.min(1)` with a default of 2 while its own description said
+      // "default 3", the validator refused anything below 2 and the dropdown
+      // offered 2..10 - four numbers, one setting. `BACKUP_LIMIT` in lib/backup.js
+      // is the only source now, and a test pins that changing it moves all of them.
+      maxBackups: schemastery.number().step(1)
+        .min(BACKUP_LIMIT_MIN)
+        .max(BACKUP_LIMIT_MAX)
+        .default(DEFAULT_MAX_BACKUPS)
+        .description('How many snapshots are kept (2 by default, 2 to 10 allowed). Older ones are deleted automatically, except the newest one and the one whose restart record says the instance came up with matching content; the first-install snapshot is kept only while there is room.'),
       rollbackTimeoutMs: schemastery.number().min(1000).default(90000)
         .description('Milliseconds the detached watcher waits for the relaunched host before it restores the snapshot.'),
       // The watchdog: the process that waits for the relaunched host and puts
@@ -1464,8 +1491,53 @@ function resolveStateFile(config) {
   const home = process.env.DSH_HOME && process.env.DSH_HOME.trim() !== ''
     ? process.env.DSH_HOME
     : path.join(os.homedir(), '.dsh')
-  return path.join(home, 'storages', 'dsh-autorestart', 'state.json')
+  const resolved = path.join(home, 'storages', 'dsh-autorestart', 'state.json')
+  assertNotTheRealUserStateFileUnderTest(resolved)
+  return resolved
 }
+
+/**
+ * REFUSE TO LET A TEST RUN WRITE INTO THE REAL USER STATE DIRECTORY (2026-11-03).
+ *
+ * A test that forgot to pass `stateFile` fell through to the default above and wrote
+ * the machine's own `access.json` / `watchdog-ready.json` - with the test's fake port
+ * (1234) in them. The watchdog reads that port to decide whether the host is alive, so
+ * a test run could leave it probing a port that does not exist. Same class of accident
+ * as the desktop shortcut one (`isInsideTempDir` in lib/rescue-paths.js).
+ *
+ * This is LOUD on purpose: a silent skip would hide the missing `stateFile` for ever.
+ *
+ * @param {string} resolved the state file the default rules produced
+ */
+function assertNotTheRealUserStateFileUnderTest(resolved) {
+  if (!process.env.NODE_TEST_CONTEXT) return
+  // READ ONCE AT MODULE LOAD, NOT NOW: a test is allowed to redirect the home
+  // directory (`USERPROFILE` / `HOME`) to imitate another machine, and reading that
+  // redirect here would move BOTH sides of the comparison to the test's own fake
+  // home - the guard would then fire on a harmless write. The value below is
+  // captured when this module is imported, before any test body can change it.
+  const homedir = REAL_USER_HOME_AT_LOAD
+  if (homedir === '') return
+  const real = path.join(homedir, '.dsh', 'storages', 'dsh-autorestart', 'state.json')
+  const normal = (value) => path.resolve(value).replace(/[\\/]+$/, '').toLowerCase()
+  if (normal(resolved) !== normal(real)) return
+  throw new Error(
+    'refusing to use the REAL user state directory while running tests: '
+    + real
+    + ' - pass an explicit stateFile (a temporary directory) instead. '
+    + 'Writing here would overwrite the user\'s access.json / watchdog-ready.json '
+    + 'with the fake port a test uses, and the watchdog would then probe the wrong port.',
+  )
+}
+
+/** The real user home as it was when this module loaded (see the guard above). */
+const REAL_USER_HOME_AT_LOAD = (() => {
+  try {
+    return typeof os.homedir === 'function' ? os.homedir() : ''
+  } catch {
+    return ''
+  }
+})()
 
 /**
  * The directory the plugin owns its durable state in.
@@ -2197,7 +2269,7 @@ export async function seedFirstInstallBackup(runtime, config = {}, overrides = {
    * @returns {object}
    */
   const failed = (error) => {
-    const value = { result: 'no-known-good', at: Date.now(), dir: null, bytes: null, error: String(error) }
+    const value = { result: RESTORE_REFUSAL.NO_USABLE_BACKUP, at: Date.now(), dir: null, bytes: null, error: String(error) }
     try {
       runtime.log.warn('the first-install backup could not be written: this machine has nothing to roll back to', { error: String(error) })
     } catch {}
@@ -2787,6 +2859,32 @@ export function summarizeRestartRequest({ restart = null, record = null, now = D
   if (last === null) {
     return { state: 'none', pending: false, reason: null, by: null, at: null, atLocal: null, note: 'no restart was ever requested' }
   }
+  // THE REQUEST IS STILL QUEUED EVEN THOUGH THE INTENT IS GONE (t26).
+  //
+  // A record that says `queued` or `deferred` is the user's request, and the
+  // interface must keep saying so after the in-memory intent has been lost - that
+  // is exactly when the page said "nothing is queued" and the user believed it.
+  const recordedFate = typeof last.result === 'string' ? last.result : ''
+  if (recordedFate === RESTART_REQUEST_STATES.QUEUED || recordedFate === RESTART_REQUEST_STATES.DEFERRED) {
+    const deferred = recordedFate === RESTART_REQUEST_STATES.DEFERRED
+    const requestedAt = Number.isFinite(last.requestedAt) ? last.requestedAt : null
+    return {
+      state: recordedFate,
+      pending: true,
+      reason: deferred && typeof last.reason === 'string' ? last.reason : null,
+      by: deferred && typeof last.by === 'string' ? last.by : null,
+      at: deferred && Number.isFinite(last.at) ? last.at : null,
+      atLocal: deferred && typeof last.atLocal === 'string' ? last.atLocal : null,
+      requestedAt,
+      requestedAtLocal: requestedAt === null ? null : localIsoTime(requestedAt),
+      waitedMs: requestedAt === null ? null : Math.max(0, at - requestedAt),
+      waitsUntilIdle: true,
+      requesters: Array.isArray(last.requesters) ? last.requesters : [],
+      note: deferred
+        ? 'the gate postponed this restart and the request is kept; it is retried until the conversations are done'
+        : 'this restart is still queued; it runs as soon as the idle gate allows it',
+    }
+  }
   // No live request: the record of the LAST one is the whole answer.
   return {
     state: last.result === RESTART_REQUEST_STATES.CANCELLED
@@ -3022,6 +3120,8 @@ export function createRuntime(ctx, config, options = {}) {
    * changed) logs right away.
    */
   let longWaitLog = { at: 0, requestedAt: 0 }
+/** The last "this restart is still queued" line: one per minute per request. */
+let queueDiagLog = { at: 0, requestedAt: 0 }
 
   /**
    * When the diagnostic line of the restart gate was logged last.
@@ -3117,7 +3217,25 @@ export function createRuntime(ctx, config, options = {}) {
    *   was about, when the caller knows
    */
   const noteActivity = (source = 'session-event', detail = {}) => {
-    lastActivityAt = Date.now()
+    const now = Date.now()
+    // A ROUTINE HEARTBEAT IS NOT WORK (2026-11-02). The host pulses
+    // `agent/status` every few seconds per session; the docstring above always
+    // claimed those pulses do not reach here, and they did (see the
+    // `agent/status` hook: `runtime.noteActivity('agent-status', ...)`). Since
+    // `quietSince()` reads this marker, every pulse re-armed the settle window -
+    // a 10 s window could never fill against a 2-3 s heartbeat, so the restart
+    // never fired. The heartbeat is still recorded for the diagnostics (who
+    // reset the window, and when); it just does not count as work.
+    if (source === 'agent-status') {
+      quietReset = {
+        by: source,
+        at: now,
+        sessionId: detail.sessionId === undefined || detail.sessionId === null ? null : String(detail.sessionId),
+        isSubagent: detail.isSubagent === true,
+      }
+      return
+    }
+    lastActivityAt = now
     quietReset = {
       by: source,
       at: lastActivityAt,
@@ -4371,6 +4489,80 @@ const titleOfSummary = (item) => {
     return { ...record, snapshotTaken: false, snapshotMissing: true }
   }
 
+  /**
+   * THE QUEUED RESTART AS A STANDING STATE, NOT A TOAST (user decision, 2026-11-02:
+   * "the bubble disappears when the page refreshes, so I thought it was not queued
+   * at all").
+   *
+   * Re-derived on every read, so a page that remounts tomorrow still shows it. The
+   * field names are the contract with the settings page (ui-dev renders them; this
+   * file only promises them):
+   *   pending        true while a request is queued
+   *   since          when it was asked for (ms epoch) | null
+   *   waitedMs       how long ago that was
+   *   overThreshold  waitedMs >= thresholdMs: show it loudly
+   *   thresholdMs    60000 - sent so the page does not hard-code it
+   *   gateAction     allow | wait | none (what the gate last decided)
+   *   gateReason     the gate's own reason word
+   *   waitingReason  waiting-for-conversations | waiting-for-quiet | restarting | no-restart-pending
+   *   blockedBy      [{ sessionId, reason, label }]
+   *   blockedByName  ["<label> (running)"] - ready for a sentence
+   *   quietResetBy   what last reset the quiet window ('agent-status' = heartbeat)
+   *   quietResetAt   when it last happened
+   *   quietForMs     how quiet it is right now
+   *   settleMs       how quiet it has to be
+   *   canRestartNow  the page may offer "restart now"
+   *   restartNowTool the tool that bypasses the gate
+   *   summary        ONE human sentence for logs and for the page
+   */
+  const restartQueueStatus = (now = Date.now()) => {
+    const info = restartRequestInfo()
+    const pending = !!(info && info.pending === true)
+    const since = info && Number.isFinite(info.requestedAt) ? info.requestedAt : null
+    const waitedMs = since === null ? 0 : Math.max(0, now - since)
+    const record = lastGateRecord
+    const gateAction = record && typeof record.action === 'string' ? record.action : 'none'
+    const blocked = record && Array.isArray(record.blockedBy) ? record.blockedBy : []
+    const blockedBy = blocked.map((entry) => ({
+      sessionId: entry && entry.sessionId !== undefined ? entry.sessionId : null,
+      reason: entry && typeof entry.reason === 'string' ? entry.reason : 'busy',
+      label: entry && typeof entry.label === 'string' ? entry.label : ((entry && entry.sessionId) || null),
+    }))
+    const blockedByName = blockedBy.map((entry) => (entry.label || entry.sessionId || '?') + ' (' + entry.reason + ')')
+    let waitingReason = 'no-restart-pending'
+    if (pending) {
+      if (state.phase === 'restarting') waitingReason = 'restarting'
+      else if (blockedBy.length > 0) waitingReason = 'waiting-for-conversations'
+      else waitingReason = 'waiting-for-quiet'
+    }
+    const overThreshold = pending && waitedMs >= RESTART_QUEUE_SILENCE_MS
+    const summary = pending
+      ? 'the restart has been queued for ' + describeWait(waitedMs)
+        + (blockedByName.length > 0
+          ? ' because ' + blockedByName.join(', ') + ' has not finished'
+          : ' and is waiting for ' + Math.max(0, effectiveSettleMs() - Math.max(0, now - quietSince())) + ' ms of quiet')
+      : 'no restart is queued'
+    return {
+      pending,
+      since,
+      waitedMs,
+      overThreshold,
+      thresholdMs: RESTART_QUEUE_SILENCE_MS,
+      gateAction,
+      gateReason: record && typeof record.reason === 'string' ? record.reason : null,
+      waitingReason,
+      blockedBy,
+      blockedByName,
+      quietResetBy: quietReset.by,
+      quietResetAt: quietReset.at,
+      quietForMs: Math.max(0, now - quietSince()),
+      settleMs: effectiveSettleMs(),
+      canRestartNow: pending,
+      restartNowTool: 'continuum_restart',
+      summary,
+    }
+  }
+
   /** The honest answer about the restart request (queued / deferred / cancelled). */
   const restartRequestInfo = () => summarizeRestartRequest({
     restart: state.restart,
@@ -4651,7 +4843,16 @@ const titleOfSummary = (item) => {
    */
   const backupsInfo = () => {
     const dir = backupsDirFor(stateDirOf())
-    const items = listBackupIdentities(dir).map((item) => ({
+    // THE FULL RECORDS, KEPT APART FROM THE PROJECTION (2026-11-03).
+    //
+    // `available` used to be counted on the PROJECTED items below, which carry the
+    // fields the settings page needs and nothing else - no `boot`, no `trigger`. The
+    // qualifier (`isUsableRestorePoint`) needs exactly those two, so it could never
+    // say yes on a projection: the number was a constant 0 no matter how many
+    // restorable copies were on disk. The projection stays as it is (the health
+    // payload does not grow internal facts); the COUNT is taken from these records.
+    const identities = listBackupIdentities(dir)
+    const items = identities.map((item) => ({
       name: item.name,
       dir: item.dir,
       at: item.at,
@@ -4701,7 +4902,32 @@ const titleOfSummary = (item) => {
     return {
       dir,
       max: config.maxBackups,
+      // TWO COUNTED THINGS, NAMED SEPARATELY (2026-11-02): the page printed
+      // "current N copies" from the copies that have a manifest, while the prune
+      // counted EVERY directory in the backups root - so a machine with an
+      // unfinished directory showed one number and behaved like another. `count`
+      // keeps its old meaning (readable copies); the two numbers a sentence may
+      // quote are now here, named:
+      //   available   - copies that can be restored right now, i.e. the ones the
+      //                 system may act on (`isUsableRestorePoint`); "how many
+      //                 fallbacks do I have" must count this one;
+      //   directories - everything in the backups root, unfinished included;
+      //                 this is what the prune counts against the limit.
+      // COUNTED ON THE FULL RECORDS, NOT ON THE PROJECTION (2026-11-03).
+      //
+      // This line used to read `items.filter(...)`. `items` is the projection the
+      // settings page reads, and it carries neither `boot` nor `trigger` - the two
+      // facts `isUsableRestorePoint` needs - so the number was a constant 0 on every
+      // machine, however many restorable copies it held. Same qualifier as the
+      // watchdog (`lib/watchdog.js`) and the rollback helper (`lib/backup.js`), now
+      // fed the records that actually contain the evidence.
+      available: identities.filter((entry) => isUsableRestorePoint(entry) === true).length,
+      directories: items.length + countIncompleteBackups(dir).incomplete,
       count: items.length,
+      // THE RANGE AND THE DEFAULT, SENT INSTEAD OF HARD-CODED (2026-11-02): the
+      // page must not carry its own copy of 2..10 - that is how the numbers
+      // drifted apart in the first place. It reads this block.
+      limit: backupLimitInfo(),
       // HOW MANY DIRECTORIES ARE NOT COPIES (2026-11-02): without this a machine
       // with three directories and two copies looks like a broken count. It is
       // not — one directory never finished, and this number names it.
@@ -4739,6 +4965,30 @@ const titleOfSummary = (item) => {
    * @returns {Promise<{ ok: boolean, status: number, error?: string|null, receipt?: object }>}
    */
   const manualRollback = async ({ name } = {}) => {
+    // THIS PATH DOES NOT CHECK WHETHER THE COPY IS A GOOD RESTORE POINT, AND THAT
+    // IS A PRODUCT DECISION, NOT AN OVERSIGHT (user decision, 2026-11-02).
+    //
+    // Every other restore path asks the system's own question first - "does this
+    // copy's record say the instance came up with matching content, and was no
+    // rescue needed" (`isUsableRestorePoint` in lib/backup.js) - because nobody is
+    // choosing, so the system must choose safely. Here somebody IS choosing: the
+    // user, looking at the list with the facts written next to each copy, saying
+    // "put that one back". Refusing because a stamp is missing, or because that
+    // copy's own boot failed, would be the plugin overriding the person who can see
+    // the situation. The user picked: which copy is restored is their call and
+    // their consequence.
+    //
+    // SO: no eligibility gate, no "are you sure" duplication of the page's own
+    // confirmation, and no quiet upgrade of this path to the automatic rule. It is
+    // pinned by a test (`test/manual-rollback-exemption.test.mjs`) that an
+    // intervened-on copy is still accepted here - if somebody adds a gate, that test
+    // goes red and this comment is the argument they have to answer.
+    //
+    // WHAT IT DOES KEEP: the plain-name check below (the listing is the allow-list,
+    // so a name from outside it cannot walk the filesystem), and the undo copy taken
+    // before anything is overwritten (see the `pruneEnabled: false` snapshot below -
+    // taking the undo copy must not prune, or the copy it exists to protect could be
+    // deleted by its own creation).
     const requested = typeof name === 'string' ? name.trim() : ''
     if (requested === '') {
       return { ok: false, status: 400, error: 'a backup name is required' }
@@ -5609,6 +5859,24 @@ const titleOfSummary = (item) => {
    * @param {{ rolledBack: boolean, reason: string, backupDir?: string|null, restored?: string[] }} details
    * @returns {boolean} whether the report was written
    */
+  /**
+   * A REPORT WRITTEN BY AN OLDER BUILD SPEAKS THE OLD WORD (2026-11-02).
+   *
+   * `no-known-good` was renamed to `no-usable-backup` for a reason worth keeping:
+   * the old token claimed the copies on disk were "not good", while all the code
+   * knows is that none was USABLE (no record of a boot). Report files written
+   * before the rename still carry the old word, and a reader that shrugged at it
+   * would turn history into "unknown error" - the rename must not cost the user
+   * their past. Only a LEADING token is rewritten; the sentence after it is left
+   * exactly as it was written.
+   */
+  const normalizeReportReason = (reason) => {
+    if (typeof reason !== 'string' || reason === '') return '';
+    const colon = reason.indexOf(':');
+    if (colon <= 0) return reason;
+    if (reason.slice(0, colon).trim() !== LEGACY_RESTORE_REFUSAL) return reason;
+    return normalizeRestoreRefusal(LEGACY_RESTORE_REFUSAL) + reason.slice(colon);
+  }
   const writeRestartReport = (details) => {
     const file = path.join(stateDirOf(), RESTART_REPORT_NAME)
     try {
@@ -5651,8 +5919,8 @@ const titleOfSummary = (item) => {
     const targetDir = knownGood && typeof knownGood.dir === 'string' ? knownGood.dir : ''
     if (targetDir === '') {
       log.error('the restart failed and no copy has a restart record saying it came up, so there is nothing to roll back to:', reason)
-      writeRestartReport({ rolledBack: false, reason: 'no-known-good: ' + reason, backupDir: null, restored })
-      return { rolledBack: false, restored, error: 'no-known-good' }
+      writeRestartReport({ rolledBack: false, reason: RESTORE_REFUSAL.NO_USABLE_BACKUP + ': ' + reason, backupDir: null, restored })
+      return { rolledBack: false, restored, error: RESTORE_REFUSAL.NO_USABLE_BACKUP }
     }
     if (typeof profileDir !== 'string' || profileDir === '') {
       log.error('the restart failed and the profile directory is unknown:', reason)
@@ -5708,7 +5976,7 @@ const titleOfSummary = (item) => {
     const targetDir = knownGood && typeof knownGood.dir === 'string' ? knownGood.dir : ''
     if (targetDir === '') {
       log.warn('no copy has a restart record saying it came up with matching content: the automatic rollback is not armed')
-      return { ok: false, method: 'none', error: 'no-known-good', scriptPath: null, verified: 'nothing', pid: null }
+      return { ok: false, method: 'none', error: RESTORE_REFUSAL.NO_USABLE_BACKUP, scriptPath: null, verified: 'nothing', pid: null }
     }
     if (typeof profileDir !== 'string' || profileDir === '') {
       log.warn('the profile directory is unknown: the automatic rollback is not armed')
@@ -6590,12 +6858,80 @@ const titleOfSummary = (item) => {
     }
   }
 
+  /**
+   * The queued request from its own record, or null when nothing is queued.
+   *
+   * `restartRequestInfo()` already answers "is a restart queued" for the
+   * interface; this is the same answer, used by the poller itself, so the timer
+   * and the page can never disagree about whether a request is pending.
+   */
+  const queuedRestartRecord = () => {
+    try {
+      // THE RECORD FILE IS THE TRUTH (user decision, 2026-11-02, t26).
+      //
+      // The in-memory intent and the queued record come apart - that is the exact
+      // state the user's machine sat in for twelve minutes: the record said
+      // `pending`, the intent was gone. Asking `restartRequestInfo()` first cannot
+      // see that, because it answers `pending: true` only while the intent exists;
+      // the poller therefore adopted nothing and killed itself. So read the FILE,
+      // and treat the two live fates (queued / deferred) as still-pending.
+      const record = readRestartRequestRecord(stateDirOf())
+      if (record === null || typeof record !== 'object') return null
+      const fate = typeof record.result === 'string' ? record.result : ''
+      if (fate !== RESTART_REQUEST_STATES.QUEUED && fate !== RESTART_REQUEST_STATES.DEFERRED) return null
+      return record
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Rebuild the in-memory restart intent from the queued record.
+   *
+   * `restartDecision` needs `state.restart` to decide anything at all (it answers
+   * `no-restart-pending` otherwise), so a queued request whose intent went away
+   * could never be executed. Adopting it restores the ONLY thing the gate reads:
+   * when it was asked for. It is logged once, because an adopted request is a
+   * repair, and repairs should be visible.
+   */
+  const adoptQueuedRestart = (info) => {
+    const requestedAt = Number.isFinite(info && info.requestedAt) ? info.requestedAt : Date.now()
+    state.restart = {
+      requestedAt,
+      attempt: 0,
+      notBefore: 0,
+      adopted: true,
+    }
+    persist()
+    log.warn(
+      `the restart was still queued but its in-memory record was gone; it was adopted (asked for ${new Date(requestedAt).toISOString()}) so the idle gate can decide again`,
+      { requestedAt },
+    )
+  }
+
   /** One decision tick while a restart is pending. */
   const tick = () => {
     if (disposed) return
     if (!state.restart) {
-      stopPolling()
-      return
+      // THE QUEUE OUTLIVES THE IN-MEMORY INTENT (bug, 2026-11-02).
+      //
+      // This branch used to stop the poller and return whenever `state.restart`
+      // was gone - but the queued request lives in its own record
+      // (`last-restart-request.json`), and `pending` there can be true while the
+      // intent is empty. Once that happened the timer was DEAD: no gate
+      // evaluation, no log, nothing. That is the "silent failure" the user hit -
+      // the restart stayed queued for twelve minutes with `restartGate.at` frozen
+      // at the moment the intent went away.
+      //
+      // The fix is the contract: while a request is pending there is ALWAYS a
+      // timer, and the gate keeps deciding. When only the record is left, the
+      // intent is rebuilt from it so the gate has something to decide about.
+      const queued = queuedRestartRecord()
+      if (queued === null) {
+        stopPolling()
+        return
+      }
+      adoptQueuedRestart(queued)
     }
     const now = Date.now()
     const busy = busyAgents()
@@ -6662,6 +6998,49 @@ const titleOfSummary = (item) => {
     // why. It is rate limited (once a minute) so the 3s poll does not flood
     // the log, and it is the first thing to look at when "the restart never
     // happens" is reported.
+    // NOTHING ABOUT A QUEUED RESTART STAYS UNMENTIONED (user decision, 2026-11-02:
+    // "this is a silent failure - last time I could not even find out why").
+    //
+    // The line below is rate limited for the whole plugin; this one is about the
+    // REQUEST. Once it has been queued longer than RESTART_QUEUE_SILENCE_MS, the
+    // tick says - at most once a minute per request - what the gate decided, who
+    // still holds the restart, and what keeps resetting the quiet window. That is
+    // the sentence whose absence made the last incident uninvestigable.
+    try {
+      const queuedInfo = restartRequestInfo()
+      if (queuedInfo && queuedInfo.pending === true) {
+        const queuedAt = Number.isFinite(queuedInfo.requestedAt) ? queuedInfo.requestedAt : now
+        const queuedFor = Math.max(0, now - queuedAt)
+        const lastAt = queueDiagLog.requestedAt === queuedAt ? queueDiagLog.at : 0
+        if (queuedFor >= RESTART_QUEUE_SILENCE_MS && now - lastAt >= RESTART_QUEUE_DIAG_INTERVAL_MS) {
+          queueDiagLog = { at: now, requestedAt: queuedAt }
+          const names = busy.map((entry) => (entry && (entry.label || entry.name || entry.sessionId)) || '?')
+          log.warn(
+            `the restart has been queued for ${describeWait(queuedFor)}: gate=${decision.reason || decision.action}`
+              + `, blockedBy=[${names.join(', ') || 'nothing'}]`
+              + `, quietForMs=${Math.max(0, now - quietSince())} of settleMs=${effectiveSettleMs()}`
+              + `, quietResetBy=${quietReset.by}`
+              + (busy.length === 0 ? ' - nobody is working; the quiet window has simply not filled yet' : ''),
+            {
+              queuedForMs: queuedFor,
+              gateAction: decision.action,
+              gateReason: decision.reason,
+              blockedBy: busy.map((entry) => ({
+                sessionId: entry && entry.sessionId !== undefined && entry.sessionId !== null ? String(entry.sessionId) : null,
+                reason: entry && typeof entry.reason === 'string' ? entry.reason : 'busy',
+                label: entry && typeof entry.label === 'string' ? entry.label : null,
+              })),
+              quietForMs: Math.max(0, now - quietSince()),
+              settleMs: effectiveSettleMs(),
+              quietResetBy: quietReset.by,
+              quietResetAt: quietReset.at,
+            },
+          )
+        }
+      }
+    } catch (error) {
+      log.warn('could not describe the queued restart:', String(error))
+    }
     if (now - lastDecisionLogAt >= LONG_WAIT_LOG_INTERVAL_MS) {
       lastDecisionLogAt = now
       log.info(
@@ -7146,6 +7525,9 @@ const titleOfSummary = (item) => {
     recordRestartRequestFate,
     dropRestartRequest,
     restartRequestInfo,
+    // THE STANDING QUEUE STATE (2026-11-02): pending / waitedMs / overThreshold /
+    // blockedBy / quietResetBy / summary - see `restartQueueStatus`.
+    restartQueueStatus,
     restartRequestSummary,
     restartRequestOutcome,
     requestSnapshotCancel,
@@ -7213,9 +7595,16 @@ const titleOfSummary = (item) => {
         backupDir: typeof report.backupDir === 'string' ? report.backupDir : null,
         // WHY the restart failed. Without it the interface can only say "it was
         // rolled back", which is the half of the story the user needs most.
-        reason: typeof report.reason === 'string'
-          ? report.reason
-          : (typeof report.rollbackError === 'string' ? report.rollbackError : ''),
+        // AN OLD REPORT SPEAKS THE OLD WORD (2026-11-02): `no-known-good:` was
+        // renamed to `no-usable-backup:` because the old word judged the copies
+        // ("not good") when all the code knows is that none was USABLE. A report
+        // written before the rename still has to read as the same conclusion, so
+        // the token is normalized here instead of surfacing as an unknown error.
+        reason: normalizeReportReason(
+          typeof report.reason === 'string'
+            ? report.reason
+            : (typeof report.rollbackError === 'string' ? report.rollbackError : ''),
+        ),
         crashLog: typeof report.crashLog === 'string' ? report.crashLog : null,
         crashTail: tail.length > 4000 ? tail.slice(-4000) : tail,
       }
@@ -9028,6 +9417,11 @@ export function buildLifecycleTools(runtime, config) {
           // field is declared here because this schema is strict — an undeclared
           // key would refuse the whole tool.
           restartRequest: { type: 'object' },
+        // THE QUEUED RESTART AS A STANDING STATE (2026-11-02): pending, waitedMs,
+        // overThreshold, blockedBy, quietResetBy, summary. Declared here because
+        // this route answers with a STRICT schema: an undeclared key is a test
+        // failure, which is exactly how the missing field would be noticed.
+        restartQueue: { type: 'object' },
           // The access link of the running instance (with the boot token).
           accessUrl: { type: 'string' },
           environment: { type: 'object' },
@@ -9051,6 +9445,12 @@ export function buildLifecycleTools(runtime, config) {
         // reason, who ended it and when). This is the answer to "I asked for a
         // restart and nothing happened, and nothing said why".
         restartRequest: runtime.restartRequestInfo(),
+        // THE STANDING STATE OF THE QUEUE (user decision, 2026-11-02): pending,
+        // for how long, what the gate decided, who holds it and what keeps
+        // resetting the quiet window - re-derived on every read, so the page can
+        // show it after a remount instead of a toast that vanishes. See
+        // `restartQueueStatus` for the field contract.
+        restartQueue: runtime.restartQueueStatus(),
         gateAllow: verdict.allow,
         quietForMs: Math.round(verdict.quietForMs),
         // DIAGNOSTICS (2026-11-02): what the gate decided the last time it ran
@@ -12537,7 +12937,14 @@ export function apply(ctx, rawConfig, options = {}) {
   // The one-time install choice lives in the profile row config (the single
   // source of truth). Only when the row does not set the key at all does the
   // degraded fallback file get a say.
-  const stateDir = resolveStateDir(config)
+  //
+  // RESOLVED FROM THE RAW CONFIG (2026-11-03): `normalizeConfig` only copies the
+  // keys the plugin publishes in its defaults, so `stateFile` - a diagnostic knob
+  // that is deliberately not published - was dropped before this line. The three
+  // choice files were therefore always read from the DEFAULT state directory, even
+  // when the caller had pointed the plugin somewhere else: a test run read and
+  // rewrote the user's real directory. `rawConfig` still carries `stateFile`.
+  const stateDir = resolveStateDir(rawConfig)
   const choice = resolveBackupIncludePlugins(rawConfig, stateDir)
   config.backupIncludePlugins = choice.includePlugins
   // The same rule for the pre-restart backup itself: the profile row decides,
@@ -12684,6 +13091,31 @@ export function apply(ctx, rawConfig, options = {}) {
       armedAt: intent.armedAt,
     })
     sleep.restore()
+  }
+  // THE DESKTOP SHORTCUT FOLLOWS THE ICON THIS BUILD SHIPS (2026-11-03).
+  //
+  // The real-machine report: the `.lnk` on the desktop kept pointing at
+  // `shortcut-icon-9c245e5b.ico` (the old flame) while the plugin's health said
+  // `shortcut-icon-1902bb15.ico`. Restarting the host changed nothing, because
+  // nothing ever re-read the file: the `.lnk` was written ONLY when the user pressed
+  // the button in the settings page.
+  //
+  // So a start now compares what the file says with what this build would use, and
+  // rewrites the field only when they differ. Idempotent on purpose: a normal start
+  // must not touch the desktop file or refresh the shell for nothing.
+  try {
+    const kit = runtime.rescueKitInfo()
+    const synced = syncShortcutIcon({ linkPath: kit.shortcutPath, iconPath: kit.iconPath })
+    if (synced.changed) {
+      log.info('the desktop shortcut now wears this build\'s icon', {
+        iconLocation: synced.iconLocation,
+        targetPath: synced.targetPath,
+      })
+    } else if (synced.error !== null) {
+      log.info('the desktop shortcut was left alone', { reason: synced.reason, error: synced.error })
+    }
+  } catch (error) {
+    log.warn('the desktop shortcut icon could not be checked:', String(error))
   }
   if (runtime.isNewBoot && config.resumeOnBoot) {    runtime.recoverTimer = ctx.timeout(() => {
       recoverAfterRestart(ctx, runtime, config)

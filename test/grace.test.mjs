@@ -19,6 +19,8 @@
  *   - reported by the status interfaces (`graceMs` + `quietForMs`).
  */
 
+// Every temporary directory this file creates is removed when the run ends.
+import './_tmp-guard.mjs'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -272,7 +274,7 @@ test('with a grace of ten seconds the restart waits for it', (t) => {
   assert.equal(late.gate.quietForMs, 10100)
 })
 
-test('new activity during the wait starts the timer over', (t) => {
+test('a heartbeat does not restart the grace window, but real work holds it back', (t) => {
   const clock = patchNow({ value: 1_700_000_000_000 }, t)
   const { ctx, routes, fire } = createContext()
   apply(ctx, {
@@ -283,22 +285,40 @@ test('new activity during the wait starts the timer over', (t) => {
     restartGraceMs: 10000,
   })
 
-  // Five seconds in, a conversation starts working again.
+  // FIVE SECONDS IN, the interface synchronises: `agent/status` fires. That is a
+  // heartbeat, not work (user decision, 2026-11-02): it must NOT move
+  // `lastActivityAt`, so the window keeps counting from the real activity.
   clock.value += 5000
-  fire('agent/status', { agent: { id: 'sess-a' }, status: 'running' })
+  fire('agent/status', { agent: { id: 'sess-a' }, status: 'idle' })
 
-  // Ten seconds after the START would be five seconds after the new
-  // activity: the grace is not over yet.
+  // Five seconds later the window is exactly ten seconds old - it filled, and the
+  // heartbeat did not hold it open.
   clock.value += 5000
-  const early = gateVerdictOf(routes)
-  assert.equal(early.allowRestart, false, 'the new activity must start the timer over')
-  assert.equal(early.gate.quietForMs, 5000)
+  const filled = gateVerdictOf(routes)
+  assert.equal(filled.gate.quietForMs, 10000, 'the heartbeat must not re-arm the window')
+  assert.equal(filled.allowRestart, true, 'so the grace is over and the restart may go')
 
-  // Ten seconds after the new activity: the grace is over.
-  clock.value += 5000
-  const late = gateVerdictOf(routes)
-  assert.equal(late.allowRestart, true)
-  assert.equal(late.gate.quietForMs, 10000)
+  // THE OTHER DIRECTION: a conversation that is really running is work, and work
+  // holds the restart back however long the window has been open.
+  const busyClock = patchNow({ value: 1_700_000_000_000 }, t)
+  const busy = createContext({ agents: [{ id: 'sess-busy', status: 'running' }] })
+  apply(busy.ctx, {
+    stateFile: tempStateFile('busy-grace'),
+    recoveryDelayMs: 0,
+    enabled: true,
+    settleMs: 0,
+    restartGraceMs: 10000,
+    forceRestartWhenBusy: false,
+  })
+
+  busyClock.value += 30000
+  const held = gateVerdictOf(busy.routes)
+  assert.equal(held.allowRestart, false, 'a real turn must never be interrupted, whatever the grace says')
+  assert.match(
+    JSON.stringify(held.gate),
+    /sess-busy/,
+    'and the gate names the conversation that is working: ' + JSON.stringify(held.gate),
+  )
 })
 
 test('the graceful shutdown goes straight into the countdown', async (t) => {

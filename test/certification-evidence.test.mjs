@@ -27,6 +27,8 @@
  *   4. the seed keeps its own positioning — it is never called a fingerprint proof.
  */
 
+// Every temporary directory this file creates is removed when the run ends.
+import './_tmp-guard.mjs'
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -259,7 +261,7 @@ test('markKnownGood records source AND criterion, and a later promotion does not
   const backups = backupsRoot(root);
   const copy = makeCopy(backups, '2026-11-01T14-00-00-000Z', { at: 1_000, rawMeta: { kind: KIND_SNAPSHOT, at: 1_000 } });
 
-  const promoted = markKnownGood(copy.dir, {
+  const promoted = markKnownGood(copy.dir, { intervention: false,
     reason: 'boot-ok',
     certifiedBy: CERTIFIED_BY.FULL_CHECKS,
     certificationEvidence: CERTIFICATION_EVIDENCE.FINGERPRINT_MATCH,
@@ -275,7 +277,7 @@ test('markKnownGood records source AND criterion, and a later promotion does not
   // A SECOND write that says nothing about the criterion (an older call site, or a
   // re-write of the same identity) must not un-seal the copy by omission: erasing a
   // seal is a decision, not a side effect.
-  const again = markKnownGood(copy.dir, { reason: 'boot-ok', certifiedBy: CERTIFIED_BY.FULL_CHECKS });
+  const again = markKnownGood(copy.dir, { intervention: false, reason: 'boot-ok', certifiedBy: CERTIFIED_BY.FULL_CHECKS });
   assert.equal(again.promoted, true);
   assert.equal(
     readBackupMeta(copy.dir).certificationEvidence,
@@ -289,7 +291,7 @@ test('a promotion that names a source and NO criterion says out loud that nothin
   const backups = backupsRoot(root);
   const copy = makeCopy(backups, '2026-11-01T14-30-00-000Z', { at: 1_000, rawMeta: { kind: KIND_SNAPSHOT, at: 1_000 } });
 
-  const promoted = markKnownGood(copy.dir, { reason: 'boot-ok', certifiedBy: CERTIFIED_BY.MANUAL_ROLLBACK });
+  const promoted = markKnownGood(copy.dir, { intervention: false, reason: 'boot-ok', certifiedBy: CERTIFIED_BY.MANUAL_ROLLBACK });
   assert.equal(promoted.promoted, true, 'the identity was written');
   assert.match(promoted.reason, /nothing says the content came up/, 'and the caller is told the copy proves nothing');
   const meta = readBackupMeta(copy.dir);
@@ -394,7 +396,7 @@ test('pruning protects a proven copy, and a polluted one protects nothing', (t) 
 
   // Put it back with a real criterion: now the floor has something to protect.
   const proven = makeCopy(backups, polluted.name, { at: 1_000, rawMeta: oldCriterionMeta({ at: 1_000 }) });
-  markKnownGood(proven.dir, {
+  markKnownGood(proven.dir, { intervention: false,
     reason: 'boot-ok',
     certifiedBy: CERTIFIED_BY.FULL_CHECKS,
     certificationEvidence: CERTIFICATION_EVIDENCE.FINGERPRINT_MATCH,
@@ -462,7 +464,7 @@ test('an old copy is UPGRADED when its content matches, and only then', async (t
 
   // MATCH -> "补封条": the seal is written, criterion included, and the copy becomes
   // a safe one. This is the channel that gives a user their old copies back.
-  markKnownGood(matches.dir, {
+  markKnownGood(matches.dir, { intervention: false,
     reason: 'boot-ok',
     certifiedBy: CERTIFIED_BY.FULL_CHECKS,
     certificationEvidence: sameSide.equal ? CERTIFICATION_EVIDENCE.FINGERPRINT_MATCH : null,
@@ -504,7 +506,7 @@ test('a copy already stamped by the old criterion can still be UPGRADED by conte
   const copy = makeCopy(backups, '2026-11-01T12-04-33-777Z', { at: 1_000, rawMeta: oldCriterionMeta({ at: 1_000 }) });
   assert.equal(isCertifiedBackup(readBackupMeta(copy.dir)), false, 'it starts out unusable');
 
-  markKnownGood(copy.dir, {
+  markKnownGood(copy.dir, { intervention: false,
     reason: 'boot-ok',
     certifiedBy: CERTIFIED_BY.FULL_CHECKS,
     certificationEvidence: CERTIFICATION_EVIDENCE.FINGERPRINT_MATCH,

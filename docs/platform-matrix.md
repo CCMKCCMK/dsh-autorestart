@@ -37,9 +37,9 @@
 
 | 能力 | Windows 桌面 | Windows web | Linux web · 有 systemd | Linux web · 无 systemd | WSL web · 有 systemd | WSL web · 无 systemd | 实现与测试 |
 |---|---|---|---|---|---|---|---|
-| **重启**（把 DSH 自己重启起来） | ✅ 插件用一条**脱离进程树**的命令 kill + 重新 start 应用（WMI 主、`schtasks` 兜底） | ✅ 走 `restartCommand`；**没配就什么都不拉起**，只留检查点并如实报告 | ⚠️ 走 `restartCommand` + POSIX 脱离守护（`setsid`）：单测覆盖，**真实 Linux 实例未验** | ⚠️ 同左 | ⚠️ 同左 | ⚠️ 同左 | `lib/restart.js:504`（命令拼装）、`:538`（WMI）、`:871`（POSIX 脱离守护）、`:996`（Windows 调度）、`:1182`（执行 `restartCommand`）；`lib/supervisor.js:1174`。测试：`restart.test.mjs`、`restart-phase.test.mjs`、`restart-safety.test.mjs` |
+| **重启**（把 DSH 自己重启起来） | ✅ 插件用一条**脱离进程树**的命令 kill + 重新 start 应用（WMI 主、`schtasks` 兜底） | ✅ 走 `restartCommand`；**没配就什么都不拉起**，只留检查点并如实报告 | ⚠️ 走 `restartCommand` + POSIX 脱离守护（`setsid`）：单测覆盖，**真实 Linux 实例未验** | ⚠️ 同左 | ✅ 走 `restartCommand`（`/home/fg/restart-web.sh`）+ WSL 里的 `supervise-web.sh` 守护；**真机验过（2026-11-03）**：`generation` 29 → 30、pid 73512 → 114454、`last-restart-verdict.json` 的 `result: "ok"` | ⚠️ 同左（本机 WSL 开着 systemd，无 systemd 那一档未验） | `lib/restart.js:504`（命令拼装）、`:538`（WMI）、`:871`（POSIX 脱离守护）、`:996`（Windows 调度）、`:1182`（执行 `restartCommand`）；`lib/supervisor.js:1174`。测试：`restart.test.mjs`、`restart-phase.test.mjs`、`restart-safety.test.mjs` |
 | **会话续接**（重启后接着干） | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 检查点 `lib/checkpoint.js:1047`（`beginBoot`）、`index.js:7493`（启动恢复）、`lib/lifecycle.js:73`（`bootPlan`）/`:423`（续接提示）。**前提**：宿主真的被拉起来了（桌面靠自带重启，其余靠你的 `restartCommand` / 守护）。测试：`checkpoint.test.mjs`、`lifecycle.test.mjs`、`integration.test.mjs` |
-| **重启前备份**（profile 快照） | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | `lib/backup.js:1585`（`createBackup`）、`:915`（`<stateDir>/backups/`）；默认上限 **20 份**（`lib/backup.js:96`，配置项 `index.js:734`），**不是早期文档写的 2 份**。测试：`backup.test.mjs`、`hosted-backup.test.mjs`、`backup-hygiene.test.mjs` |
+| **重启前备份**（profile 快照） | ✅ | ✅ | ✅ | ✅ | ✅ 真机验过（2026-11-03）：`snapshot.taken: true`，落在 `<stateDir>/backups/2026-11-03T00-09-28-780Z`（6 756 009 字节，含 `node_modules-link/dsh-autorestart`） | ✅ | `lib/backup.js:1585`（`createBackup`）、`:915`（`<stateDir>/backups/`）；默认上限 **20 份**（`lib/backup.js:96`，配置项 `index.js:734`），**不是早期文档写的 2 份**。测试：`backup.test.mjs`、`hosted-backup.test.mjs`、`backup-hygiene.test.mjs` |
 | **备份完整性把关**（半份快照不许冒充备份） | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | `lib/backup.js:575`（`backupIsComplete`：要有可读 manifest **且** 至少一个配置文件）、`:2029`（**发布前**校验，不完整就删掉、不给正式名字）、`:746`（`latestKnownGood`：还原只用身份为 `known-good` 的那份 —— 即拍完之后有过一次启动成功）。测试：`backup-completeness.test.mjs`、`backup-known-good-boot.test.mjs`、`backup-identity.test.mjs` |
 | **开机清残骸** | ⚠️ 只清插件自己留下的 | ⚠️ 同左 | ⚠️ 同左 | ⚠️ 同左 | ⚠️ 同左 | ⚠️ 同左 | 启动时**撤防**会删掉残留的计划任务 / systemd unit / pending 标记，并清掉能力探测留下的一次性任务（`index.js:6468`、`lib/watchdog-disarm.js:455`/`:261`/`:223`）。启动还有一次备份目录清扫 `removeIncompleteBackups`（`index.js:2088`、`lib/backup.js:2205`），但它**按设计跳过所有 `.` 开头的目录**（`lib/backup.js:2234`），所以真正的「半份快照」`*.staging-*` 残留**不会被启动清掉**：`cleanupStaleStaging`（`lib/backup.js:2295`）已经写好，但**没有任何生产代码调用它**（只有测试调用）。脱离的后台进程也没有孤儿回收。测试：`disarm.test.mjs`、`watchdog-disarm.test.mjs`、`watchdog-probe-cleanup.test.mjs`、`backup-hygiene.test.mjs`、`backup-staging.test.mjs` |
 | **自动回滚 · 选档**（一台机器只有一个监护者） | ✅ `scheduled-task` | ✅ `scheduled-task` | ✅ `systemd-run` | ⚠️ `detached-process`（要有 `setsid`） | ✅ `systemd-run` | ⚠️ `detached-process`（要有 `setsid`） | `lib/watchdog-tier.js:110`（`pickWatchdogTier`，唯一决定档位的地方）、`:177`（`tierWithProof`）、`lib/watchdog-arbiter.js:46`（v2 / v1 只选一个）。测试：`watchdog-tier.test.mjs`、`watchdog-arbiter.test.mjs` |
@@ -58,6 +58,23 @@
 | **诊断信息**（报告问题） | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | `lib/diagnostics.js:153`（`buildDiagnostics`）；**不含访问令牌、不含密钥**（`lib/diagnostics.js:52`）。测试：`diagnostics.test.mjs`、`tool-output-schema.test.mjs` |
 
 > 行号以本仓当前提交为准。改代码之后请回来同步这一列 —— 一张比代码旧的表比没有表更坏。
+
+### WSL web · 有 systemd 的真机验收（2026-11-03）
+
+隔离实例（按 `docs/web-dev-instance.md` 搭起，**没碰 Windows 桌面版**）：
+
+| 项 | 实测 |
+|---|---|
+| 端口 / profile / 状态目录 | `5601` / `/home/fg/.dsh/profiles/web` / `/home/fg/.dsh/storages/dsh-autorestart` |
+| 加载的代码 | 插件以软链指向工作区 `plugins/dsh-autorestart`（不是 npm 旧版）；`health.version = 0.8.6` |
+| 重启模式 | `restartMode: command`、`restartCommand: /home/fg/restart-web.sh`（+ `supervise-web.sh` 守护） |
+| ① 重启真的发生 | `generation` **29 → 30**；pid **73512 → 114454**；守护日志 `dsh web exited at 2026-11-03T08:09:31+08:00, relaunching in 2s`，随后打印新 token |
+| ② 版本 | `version = 0.8.6` |
+| ③ 残留 | systemd user unit **0**、timer **0**、cron **0**、`*.lock` **0**；`supervise-web.sh` 1 个、`dsh web` 1 个（守护本来就该在跑，属预期值） |
+| ④ 记录 | `last-restart-verdict.json`：`result: "ok"`、`mode: "command"`、四项自检 `listener` / `routes`(15 条) / `plugin` / `recovery` 全部 `ok: true`；`last-restart-request.json`：`snapshotTaken: true`、`snapshotDir: /home/fg/.dsh/storages/dsh-autorestart/backups/2026-11-03T00-09-28-780Z` |
+| web 端救援入口 | 渲染的是**脚本路径**（`rescue.restoreProfile = …/scripts/restore-profile.sh`），**没有 `.lnk`** —— 与矩阵里「桌面快捷方式」那一行的 ❌ 一致 |
+| 看门狗档位 | `capabilities.json.tier = "systemd-run"`（WSL 里 `systemctl --user is-system-running` = `running`）；看门狗报告 `tier: "systemd-run"`、`arbiter: "v2"` |
+| 未验 | Windows web、真实 Linux、WSL **无 systemd** 三档仍为 ⚠️（本次没跑，不用推断冒充） |
 
 ## 四、范围外：macOS / 远程 SSH 无图形 / 容器
 

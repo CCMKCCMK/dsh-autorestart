@@ -18,6 +18,8 @@
  *   3. a restore happens at most ONCE, and the report says which copy it was.
  */
 
+// Every temporary directory this file creates is removed when the run ends.
+import './_tmp-guard.mjs'
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -83,14 +85,23 @@ test('a copy certified by full-checks whose boot needed rescuing is REFUSED', ()
   assert.match(choice.notes[0], /skipped before this one/);
 });
 
-test('a certified copy whose intervention was never recorded is REFUSED too', () => {
+test('a copy whose unrecorded rescue is the ONLY thing on record is used under the named fallback', () => {
+  // THE NAMED FALLBACK (user decision, 2026-11-02, t23): when every copy on the
+  // machine has an unrecorded rescue - which is what a machine nobody ever had to
+  // rescue looks like - the newest copy is used and the answer says so. Refusing it
+  // would leave that machine with no restore point at the one moment it needs one.
   const choice = selectRestoreTarget({
     candidates: [candidate('unknown', { intervention: null })],
   });
-  assert.equal(choice.target, null, '"nobody recorded it" is not a yes');
-  assert.equal(choice.strict, true);
+  assert.equal(choice.target, '/backups/unknown', 'the copy is used under the named fallback');
+  assert.equal(choice.strict, false, 'it is not the strict answer');
+  assert.equal(choice.interventionUnknown, true, 'and the answer is flagged as unrecorded');
   assert.equal(choice.excluded[0].exclusion, RESTORE_EXCLUSIONS.INTERVENTION_UNKNOWN);
-  assert.match(choice.notes[0], /nobody recorded whether that boot had to be rescued/);
+  assert.match(
+    choice.notes.join(' '),
+    /NOBODY RECORDED whether that boot was rescued/,
+    'the note says out loud that the rescue was never recorded',
+  );
 });
 
 test('an uncertified copy is refused, whatever its intervention says', () => {

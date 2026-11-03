@@ -34,18 +34,21 @@
 
 ## 支持范围（Supported platforms）
 
-一句话判断：**你这台机器是不是下面四类之一？**
+一句话判断：**你属于下面哪一种环境，以及有没有人真的在那上面跑过？**
 
-| 你的机器 | 是否支持 | 你需要知道什么 |
+| 你的机器 | 真机跑过 | 你需要知道什么 |
 | --- | --- | --- |
-| **Windows 桌面**（DeepSeek Harness 客户端） | **支持** | 不用配任何东西 —— `restartMode: app` 就是默认值 |
-| **Windows 上的 `dsh web`** | **支持** | 必须自己设 `restartMode: command`，**并且**给一条真能重启这个宿主的 `restartCommand` |
-| **WSL 上的 `dsh web`** | **支持** | 同上；注意那个关机按钮关的是**整台 Windows**，不是那个 WSL 发行版 |
-| **Linux 上的 `dsh web`** | **支持** | 同上 |
+| **Windows 桌面**（DeepSeek Harness 客户端） | **跑过 —— 已验** | 不用配任何东西 —— `restartMode: app` 就是默认值 |
+| **WSL 上的 `dsh web`，有 `systemd --user`** | **跑过 —— 已验** | 必须自己设 `restartMode: command`，**并且**给一条真能重启这个宿主的 `restartCommand`；注意那个关机按钮关的是**整台 Windows**，不是那个 WSL 发行版 |
+| **WSL 上的 `dsh web`，没有 `systemd --user`** | **还没跑过** | 配置与上一行相同；自动回滚退化成插件自己拉起的脱离进程 |
+| **Windows 上的 `dsh web`** | **还没跑过** | 配置与上一行相同 |
+| **Linux 上的 `dsh web`**（不是 WSL） | **还没跑过 —— 这里也没有这样的机器** | 配置与上一行相同 |
 
-后两行各有两种形态：**有** `systemd --user` 和**没有**。这只影响**自动回滚用哪种机制**
-（systemd user 定时器，还是插件自己的脱离进程），其它能力一样。设置页永远会告诉你这台机器
-拿到的是哪一种，也绝不会承诺一个它给不了的自动回滚。
+最后三行**代码写了、单元测试也盖住了，但没有人真在那种宿主上跑过**：它们走的是与已验 WSL 行同一
+条代码路径（`restartMode: command` + 你自己的重启命令），可是「应该能行」不等于「验过了」，所以
+不写成支持。**有 / 没有 `systemd --user`** 只影响**自动回滚用哪种机制**（systemd user 定时器，还是
+插件自己的脱离进程），其它能力一样。设置页永远会告诉你这台机器拿到的是哪一种，也绝不会承诺一个
+它给不了的自动回滚。
 
 ### 范围外：未实测 / 不支持
 
@@ -427,12 +430,16 @@ dsh plugin --profile desktop add C:\path\to\dsh-autorestart
 
 **先分清是哪种情况**：整个环境坏了（改了配置、装了别的插件、升级崩了）→ 先回到上一次好状态；**只有这个插件可疑** → 直接走下面三步，把这个插件摘掉就够了。（两个脚本各自的边界见 [`scripts/README.md`](../scripts/README.md)。）
 
-**用你自己平台的脚本** —— Linux 机器上没有 `.cmd`，Windows 机器上也没有 `.sh`：
+**用你自己所在宿主的脚本** —— Linux 机器上没有 `.cmd`，Windows 机器上也没有 `.sh`。按你面前的宿
+主挑，不要按「平台清单」挑：
 
-| 你的机器 | 回到上一次好状态 | 摘掉本插件 |
+| 你的宿主 | 回到上一次好状态 | 摘掉本插件 |
 |---|---|---|
 | **Windows**（桌面客户端、Windows 上的 `dsh web`） | 双击 `scripts\restore-profile.cmd` | 双击 `scripts\emergency-disable.cmd` |
-| **Linux / WSL / macOS**（托管端） | `sh scripts/restore-profile.sh` | `sh scripts/emergency-disable.sh` |
+| **WSL / Linux**（托管端） | `sh scripts/restore-profile.sh` | `sh scripts/emergency-disable.sh` |
+| **macOS** | `sh scripts/restore-profile.sh` | `sh scripts/emergency-disable.sh` |
+
+macOS 用同样的两个 POSIX `sh` 脚本；从未在真 Mac 上跑过，属于未验，不作承诺。
 
 每个平台到底有什么、没有什么，看 [平台能力矩阵](platform-matrix.md)；设置页的「出事了怎么办」只显示**你这台机器上真有的**那两个路径。
 

@@ -18,6 +18,8 @@
  *     first-install copy is no longer kept forever.
  */
 
+// Every temporary directory this file creates is removed when the run ends.
+import './_tmp-guard.mjs'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -172,7 +174,7 @@ test('② a copy whose boot had to be rescued is refused even when its content m
   assert.equal(choice.excluded[0].exclusion, RESTORE_EXCLUSIONS.INTERVENED)
 })
 
-test('② a copy with no record of whether it was rescued is refused too', () => {
+test('② a copy with no record of whether it was rescued is refused too (an unrecorded rescue is not a licence)', () => {
   const choice = selectRestoreTarget({
     candidates: [{
       dir: '/backups/unknown',
@@ -183,8 +185,21 @@ test('② a copy with no record of whether it was rescued is refused too', () =>
       intervention: null,
     }],
   })
-  assert.equal(choice.target, null)
-  assert.equal(choice.excluded[0].exclusion, RESTORE_EXCLUSIONS.INTERVENTION_UNKNOWN)
+  // THE NAMED FALLBACK (user decision, 2026-11-02, t23): a machine that nobody ever
+  // rescued has exactly this shape - a copy whose restart record says it came up
+  // with matching content, and no record of whether it needed help. Refusing it
+  // would leave that machine with no restore point at the one moment it needs one,
+  // so the copy IS used - and the answer says why instead of pretending it was
+  // verified.
+  assert.equal(choice.target, '/backups/unknown', 'the only copy is used, under the named fallback')
+  assert.equal(choice.interventionUnknown, true, 'and the answer is flagged as unrecorded')
+  assert.match(String(choice.reason), /intervention unknown/i, 'the reason says the rescue was never recorded')
+  assert.match(String(choice.reason), /nobody recorded/i, 'in words a human can act on')
+  assert.equal(
+    choice.excluded[0].exclusion,
+    RESTORE_EXCLUSIONS.INTERVENTION_UNKNOWN,
+    'the fallback does not hide the refusal: it stays in the report',
+  )
 })
 
 /* ------------------------------------------------------------------ *

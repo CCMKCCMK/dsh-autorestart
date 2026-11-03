@@ -113,3 +113,90 @@
 6. **【实测】版本与仓库状态。** `package.json` = `"version": "0.8.6"`；`index.js` = `const PLUGIN_VERSION_FALLBACK = '0.8.6'`；`README.md:265` = `Current version: **0.8.6**`；`docs/README.zh.md:415` = `当前版本：**0.8.6**` —— 四处一致。本地 `main` 的 HEAD = `54da5a6`，工作树干净（`git status --porcelain` 输出 0 行）；**相对 `origin/main` 领先 49 个提交**（`git rev-list --count origin/main..main` = **49**，`origin/main` 停在 `ef6a445`）。派单里写的是 48，这一行以 agent 本轮实测的 49 为准——差 1 很可能是数字被记在最后一次提交之前。**尚未推送。**
 
 > **agent 未能展开折叠块，故界面排版证据缺失，需用户目视确认后补记。**
+
+## 2026-11-03 测试侧证据（非真机）
+
+这一节只追加本轮读数，上面任何历史条目都没有改动。**本节的每一条都是测试侧证据，不是真机证据**：它证明的是「某条断言真的抓得住某处回归」，不证明「真宿主上跑得对」。
+
+### 证伪实验：排队重启的回归测试是不是空断言
+
+方法：把 `plugins/dsh-autorestart` 整目录复制到 `%TEMP%` 下的临时副本，**在副本里**分别回退两处修复点，看 `test/restart-queue-gate.test.mjs` 是否变红；每轮结束从真树恢复副本，副本用完删除。**真树全程只读**（结束时 `git status --short` 与开工前逐行一致）。
+
+两处修复点（都在 `index.js`）：
+
+- **A** = `queuedRestartRecord()` 改直读 `readRestartRequestRecord(stateDirOf())`，认 `queued` / `deferred` 为 pending，不再问 `restartRequestInfo()`；
+- **B** = `summarizeRestartRequest()` 在 `live === null` 但记录非终态时回 `pending: true`。
+
+| 副本里的状态 | `restart-queue-gate.test.mjs` | 说明 |
+|---|---|---|
+| 原样（基线） | **3 / 3 pass** | 副本本身是绿的，后面才有意义 |
+| 只回退 **B**（脱钩时不回 pending） | **① 变红**：`AssertionError … actual: false, expected: true`（断言 `runtime.restartRequestInfo().pending === true`） | **B 被钉住**：这条断言真的抓得住这次回归 |
+| 只回退 **A**（`queuedRestartRecord` 改回走 `restartRequestInfo()`） | **仍 3 / 3 全绿** | **A 没有被任何测试覆盖** |
+| 两处都恢复 | 3 / 3 pass，副本已删除 | — |
+
+**为什么只回退 A 仍然全绿**：B 让 `restartRequestInfo()` 自己就能答出 pending，于是旧写法的 A 也照常工作——A 与 B 是同一事实的两条独立实现，测试走的是 B 那条。
+
+**裁决（队长）：A 保留，不删、也不补专门测试。** 理由写在这里以免日后被误读成「A 冗余可删」：A 的价值不在「再算一遍同一件事」，而在**不让轮询器依赖一个「汇报用」的函数**——当初那个 bug 恰恰就是轮询器去问汇报器、而汇报器答错（意图一没就答 null，轮询器于是自我停止）。
+
+### 尚未做的
+
+- **排队修复的真机复验尚未做。** 上面全是单元测试层面的证据：真机上「点重启 → 等会话静默 → 重启真的发生」这一步还没有人跑过；本节的绿不能读成「真机已通过」。
+- 设置页在真机上的排版（折叠块能否展开、两行份数文案、下拉框右侧提示在窄窗口下的换行）仍然只有上一节的「未验」结论，没有被补上。
+
+## 2026-11-03 01:20 真机复核（第三轮）
+
+这一节只追加本轮读数，上面任何历史条目都没有改动。**每条都标了证据强度**：`【真机读数】` = 在本机真实 profile / 真实桌面上读到的值；`【单测+证伪】` = 只有单元测试层面的证据，且做过去掉修复看断言是否变红的证伪。
+
+1. **【真机读数】桌面快捷方式的图标从来自愈不了。** `.lnk` 的 `IconLocation` 停在旧图标 `…\shortcut-icon-9c245e5b.ico`，写入时间 `2026-11-02 23:02:33`——宿主已重启、新代码已加载，它**仍然指着旧图标**。根因：`createDesktopShortcut` 全仓只有一个调用点（`index.js` 的 `POST action === 'shortcut'`），启动路径从不写 `.lnk`，所以重启多少次都不会自愈。修法（t33）：`readShortcutLink()` + `syncShortcutIcon()` 读回 `TargetPath` / `IconLocation`、「不同才写」、写完 `SHChangeNotify` 刷壳、`TargetPath` 原样保留，启动路径用 `try/catch` 包住校准。修后读数：`IconLocation = …\storages\dsh-autorestart\shortcut-icon-1902bb15.ico,0`，`TargetPath` 仍是 `restore-profile.cmd`，第二次 sync 返回 `already-current`。
+2. **【真机读数】更糟的一件：跑全量测试会改写用户真实桌面。** 在加 guard 之前，测试把真 `.lnk` 的图标改成了 `%TEMP%` 里的路径（实测读到 `…\Temp\dsh-autorestart-it-recover-now-idle-…\shortcut-icon-1902bb15.ico`）。已加 `isInsideTempDir()`：临时目录里的图标永不写进真快捷方式。
+3. **【真机读数】排队重启被作废后用户看不见。** `2026-11-02 23:04:38` 请求的重启等了 `8473292 ms`（约 2 小时 21 分）从未执行，宿主重启后 boot-recovery 判为 `cancelled`（理由含 `stale-never-executed`），页面上什么都没有。修法（t34）：设置页顶部一条 `role=status` 的可见提示，只在 `state==='cancelled' && by==='boot-recovery'` 时出现，带请求时间与人话时长（「约 2 小时 21 分」），不让任何内部标识符上屏，其余五种结局都不画。
+4. **【单测+证伪】`health.backups.available` 恒为 0。** 真机 health 报 `available: 0`，而磁盘上两份备份都在、其中一份 `intervention:false` + `certifiedBy:full-checks` 确实可还原。根因（t36）：`available` 在一份「给页面看的投影」上判资格，而投影里没有 `boot` / `trigger` 两个键 → 判据拿不到证据 → **常数 0**。修法：先取完整 `identities`，投影仍由它派生（投影字段一个未增），`available` 改在 `identities` 上统计，与看门狗 / 回退助手同一个函数。已补 4 条测试并证伪（改回旧写法 → 3 条变红）。**注意：这一条尚未在真机上重读 health 复核。**
+5. **【真机读数 / 教训】一个可以长期复用的观察**：这条缺陷长期没被发现，不是因为难，而是因为**没有任何一条测试断言过 `available` 的取值**——一个数字只要没人断言，它错成常数也能全绿。
+
+### 尚未做的（本轮明确没做完的事）
+
+- **排队修复的真机复验**：本轮未做，**已在下一节（第四轮）补上** —— 在新代码上真触发了一次重启，四项读数全过。
+- **测试套件泄漏临时目录（t37）：已完成。** 本节先前写的 `34448 个 / 4.17 GB` 是**只数了一个前缀**的错估，真实规模与收尾见下一节末尾「测试临时目录泄漏的收尾」。
+
+## 2026-11-03 08:01 真机核验（第四轮 · 重启四项读数全过）
+
+这一节只追加本轮读数，历史条目一字未改。**触发动作是「在新代码上真触发一次重启」**，不是手动重开客户端。
+
+### ① 真触发一次它管的动作
+
+`generation` **269 → 270**，全程 `durationMs = 42611`（约 42.6 秒），不需要人动手。
+
+### ② health 自报的版本
+
+`pluginVersion = 0.8.6`，与这次要发的版本一致 —— 证明**新代码真的被加载了**（不是跑在旧代码上）。
+
+### ③ 该清掉的清掉了
+
+- 计划任务匹配 `*dsh*` 数量 **0**；
+- 看门狗报告 `armResidualUnits=0`、`disarm.probesRemoved=0`、`disarm.probesFailed=0`；
+- 上一轮留在桌面的四个探针文件 `probe-icon-test.lnk`、`_probe-g.lnk`、`probe-desk-2.lnk`、`_probe-icon-copy.ico` 逐个实测**均不存在**。
+
+### ④ 该写的写对了
+
+- `last-restart-verdict.json`：`result=ok`、`generation=270`、四项自检 `listener` / `routes` / `plugin` / `recovery` **全 true**、`failedChecks` **0**；
+- `last-restart-request.json`：`result=cancelled`、`reason=consumed-by-boot (the previous instance had already started this restart (attempts 1))`、`attempts=1`、`snapshotTaken=true`、`snapshotDir` 指向**真实存在**的目录。
+
+### 两条「反着也能对」的证据（本节的重点）
+
+1. **裁剪方向对了。** 重启前的备份目录是 `[2026-11-01T13-33-42-271Z（0.1 MB，首装种子）、2026-11-01T23-14-17-160Z（148 MB）]`；重启后是 `[2026-11-01T23-14-17-160Z、2026-11-03T00-01-04-974Z（166,828,489 字节）]`。**新快照留下了，被删的是最老的那份种子**——而修复前那次的真实行为恰恰相反（写好的 161 MB 新快照被删掉）。这是 t9 那个修复在真机上的直接证据。
+2. **`snapshot.missing` 双向都对。** 修复前那次 health 报 `taken=false` + `missing=true`（目录确实被删了）；这次报 `taken=true` 且不再报 missing（目录真的在）。**同一个核对逻辑，两个方向都如实。**
+
+### 桌面快捷方式未被这次重启改坏
+
+`IconLocation` 仍是 `…\storages\dsh-autorestart\shortcut-icon-1902bb15.ico,0`，`TargetPath` 仍是 `restore-profile.cmd`。
+
+### 测试临时目录泄漏的收尾（t37）
+
+真实规模（不是先前那个单前缀的 `34448 个 / 4.17 GB`）：
+
+- **六种前缀**：`dsh-autorestart-*`、`dsh-restart-request-*`、`dsh-ar-*`、`dsh-ledger-*`、`dsh watchdog <label> `（含空格）、`ar-*`；
+- 共 **131,151 个目录 / 1,219,987 个文件 / 14,350 MB**；
+- **修法**：新增 `test/_tmp-guard.mjs`（包装 `fs.mkdtempSync` / `fs.mkdtemp`，把落在 `os.tmpdir()` 下的结果记进本进程集合，`process.on('exit')` 逐个删；另导出 `cleanupTempDirsNow()` 兜底），67 个测试文件首行 `import './_tmp-guard.mjs'`；
+- **干净窗口实测**：`131151 → 跑完全量 → 131151`，**新增 = 0**；失败场景也清（副本里加一条必失败的测试，delta = 0）；
+- **历史残留已清理**：两轮共删约 **12.9 万个**目录（123,788 + 5,215 + 2），失败 0；可用空间 **92.7 GB → 108.17 GB（释放 15.5 GB）**；`%TEMP%` 顶层目录 **5,942 → 725**；本插件六种前缀剩余 **0**。
+

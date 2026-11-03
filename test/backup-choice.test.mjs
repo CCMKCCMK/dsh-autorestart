@@ -12,6 +12,8 @@
  * really rendered, really clicked and really observed.
  */
 
+// Every temporary directory this file creates is removed when the run ends.
+import './_tmp-guard.mjs'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import http from 'node:http'

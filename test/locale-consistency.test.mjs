@@ -217,6 +217,66 @@ test('watchdog.explain states the criterion and promises nothing about the plugi
   assert.equal(en.includes('does not mean the plugins inside are all fine'), true, 'and says what it does NOT mean')
 })
 
+/**
+ * `{name}` IS ANSWERED FROM THE SECOND ARGUMENT (user report, 2026-11-02).
+ *
+ * THE BUG: the translator took one parameter, so the three call sites that pass
+ * replacement values had them silently dropped and the page printed the
+ * placeholder itself — "看门狗的触发方式：{tier}" on a real screen. These tests
+ * are the contract: replace what was given, keep what was not, never guess.
+ */
+test('a placeholder is filled from the second argument', () => {
+  const api = loadClient({ language: 'zh-CN' })
+  const t = api.makeTranslate(null)
+  const tier = t('settings.rescue.watchdogTier', { tier: '定时任务' })
+  assert.equal(tier.includes('{'), false, 'no stray opening brace: ' + tier)
+  assert.equal(tier.includes('}'), false, 'no stray closing brace: ' + tier)
+  assert.equal(tier, '看门狗的触发方式：定时任务', "the value took the placeholder's place")
+  // A number is a value too, not a reason to print nothing.
+  assert.equal(t('settings.rescue.watchdogLast', { result: 2 }), '上一次看门狗的结果：2')
+})
+
+test('every occurrence of the same placeholder is replaced', () => {
+  const api = loadClient({ language: 'zh-CN' })
+  const t = api.makeTranslate(() => 'a {n} b {n} c')
+  assert.equal(t('any.key', { n: 'X' }), 'a X b X c', 'both copies, not only the first')
+})
+
+test('a placeholder the caller did not supply keeps its text', () => {
+  const api = loadClient({ language: 'zh-CN' })
+  const t = api.makeTranslate(() => 'kept {kept} / filled {filled}')
+  // Blanking the missing one would delete information the sentence was written
+  // to carry: the reader would see a hole and not know what belongs in it.
+  assert.equal(t('any.key', { filled: 'yes' }), 'kept {kept} / filled yes')
+  assert.equal(t('any.key', { filled: null }), 'kept {kept} / filled {filled}', 'null is "no value", never the word null')
+  assert.equal(t('any.key', undefined), 'kept {kept} / filled {filled}', 'and no params at all changes nothing')
+})
+
+test('without parameters the output is byte-for-byte what it always was', () => {
+  const api = loadClient({ language: 'zh-CN' })
+  // The regression that matters most: 40+ dictionary entries carry placeholders
+  // and are substituted by hand at their call sites. A translator that touched
+  // them would break all of those at once.
+  const t = api.makeTranslate(null)
+  for (const key of Object.keys(api.dictionaries.zh)) {
+    assert.equal(t(key), api.dictionaries.zh[key], key + ' is returned untouched')
+  }
+  assert.equal(
+    api.makeTranslate((key) => 'raw {x} ' + key)('k'),
+    'raw {x} k',
+    'no parameters, no substitution — even when the Host text has a placeholder',
+  )
+})
+
+test('a value containing a replacement pattern is inserted literally', () => {
+  const api = loadClient({ language: 'zh-CN' })
+  const t = api.makeTranslate(() => 'v={v}')
+  // `$&` in a `replace` replacement string means "the whole match" — a value that
+  // happens to contain it must not rewrite the sentence around it.
+  assert.equal(t('any.key', { v: '$&' }), 'v=$&')
+  assert.equal(t('any.key', { v: '$1$`' }), 'v=$1$`')
+})
+
 test('the language follows the Host, and the browser is only the fallback', () => {
   const api = loadClient({ language: 'zh-CN' })
   assert.equal(api.currentLanguage(), 'zh', 'the browser language decides when the Host says nothing')

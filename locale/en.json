@@ -194,11 +194,9 @@
       "label": "Backup before a restart",
       "details": "Details",
       "section": "What is backed up, and the manual backup steps",
-      "recovery": "A plugin will not start? Put that one back to its previous version",
       "hint": "A copy is taken before every restart, so a host that cannot boot again is rolled back. What it holds: your settings (always); plugins you wrote and linked from a source directory (copied file by file); plugins downloaded from the internet (only which ones and which version are recorded — never copied; they are reinstalled from that list).",
       "list": "What is backed up right now",
       "count": "{n} copies right now, using {size}.",
-      "sectionNote": "Contains: a plugin will not start? Put it back to the previous version",
       "multiProfile": "More than one profile was found, so backups and rollbacks are paused: it cannot tell which one to back up. Fix it by starting with DSH_PROFILE set, or by keeping a single profile.",
       "keep": "At most {n} copies are kept; the oldest one is deleted when there are more.",
       "kindsLocal": "Both linked plugins (written by hand) and localized ones (their directory has a .git) are in the copy in full, so they can be rolled back.",
@@ -363,7 +361,7 @@
       "copyCommand": "Copy the command",
       "commandHint": "Copy this command and run it — the same effect as double-clicking the desktop entry.",
       "commandUnavailable": "No usable rescue command was found on this machine.",
-      "shortcutScope": "It can only put the WHOLE environment back to the last good state — it cannot take one plugin out; for that, use \"A plugin will not start\" above.",
+      "shortcutScope": "It can only put the WHOLE environment back to the last good state — it cannot take one plugin out.",
       "shortcutBlocked": "A system policy does not allow creating the shortcut (a group policy or a permission limit). Copy the script path below and put it on the desktop by hand:",
       "shortcutWriteFailed": "The shortcut was not written: {message}. Copy the script path below and put it on the desktop by hand:",
       "shortcutFailed": "The shortcut was not placed: {message}",
@@ -386,21 +384,12 @@
       "dismiss": "Dismiss"
     },
     "description": "Restarts DSH, watches your plugins, and puts back the ones it can.",
-    "checkNow": "Check now",
-    "checking": "Checking…",
-    "empty": "Nothing checked yet. Press \"Check now\" to see where each plugin stands.",
-    "same": "OK",
-    "different": "Differs from the backup",
-    "missing": "Not in the backup",
-    "notInstalled": "Not installed",
-    "unknown": "Cannot tell (nothing to compare against)",
     "restore": "Restore",
-    "plugins": {
-      "builtinNote": "The other {n} plugins are built-in: DSH ships them, so no backup is needed.",
-      "thirdPartyNote": "The other {n} plugins are third-party: we did NOT back them up, so reinstall them if something goes wrong."
-    },
     "thirdParty": "You did not write this plugin yourself, so it cannot be restored from the backup - it has to be reinstalled.",
-    "version": "version {version}"
+    "version": "version {version}",
+    "restart": {
+      "cancelledNote": "The restart you asked for did not happen: you requested it at {at}, waited {waited}, and it was never carried out; after the host restarted, that request was cancelled. If you still want it, just ask once more."
+    }
   },
   "meta": {
     "title": "dsh-autorestart — restart continuation",
@@ -471,6 +460,10 @@
       "deferredNote": "It will retry automatically when idle · {count} waiting",
       "deferredNoteZero": "It will retry automatically when idle",
       "back": "Back again"
-    }
+    },
+    "waitedSeconds": "a few seconds",
+    "waitedMinutes": "about {n} min",
+    "waitedHours": "about {n}h {m}m",
+    "waitedHoursExact": "about {n}h"
   }
 }

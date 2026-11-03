@@ -335,7 +335,17 @@ if ($DryRun) {
 # back.
 # ---------------------------------------------------------------------------
 
-$backup = $path + '.bak-emergency-' + (Get-Date -Format 'yyyyMMdd-HHmmss')
+$stamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
+$backup = $path + '.bak-emergency-' + $stamp
+# NEVER OVERWRITE AN EARLIER BACKUP (2026-11-03): the name carries milliseconds, and
+# if that name is still taken (two writes inside the same millisecond) a serial number
+# is appended. Before this, the name stopped at the second, so taking the plugin out
+# and putting it back within one second left ONE backup where there should be two.
+$serial = 1
+while (Test-Path -LiteralPath $backup) {
+  $serial += 1
+  $backup = $path + '.bak-emergency-' + $stamp + '-' + $serial
+}
 try {
   Copy-Item -LiteralPath $path -Destination $backup -Force
 } catch {

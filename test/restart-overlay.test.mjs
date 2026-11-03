@@ -20,6 +20,8 @@
  *      nothing, so an interface that is opened again shows the real stage.
  */
 
+// Every temporary directory this file creates is removed when the run ends.
+import './_tmp-guard.mjs'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'

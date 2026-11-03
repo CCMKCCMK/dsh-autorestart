@@ -8,6 +8,8 @@
  * schemas that the real registry would accept.
  */
 
+// Every temporary directory this file creates is removed when the run ends.
+import './_tmp-guard.mjs'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -1943,6 +1945,10 @@ function pluginRecoveryFixture(label, { plugin = 'broken-plugin', error = 'Error
       // ran on it), which is the only copy a recovery may restore from.
       certifiedBy: 'full-checks',
       certificationEvidence: 'fingerprint-match',
+      // THE RESCUE FACT (2026-11-02): this copy models the ordinary case - a boot
+      // that came up on its own, with no restore involved. A recovery may only
+      // restore from a copy whose record says so explicitly.
+      intervention: false,
     }));
   }
 

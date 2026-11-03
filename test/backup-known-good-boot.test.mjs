@@ -18,6 +18,8 @@
  * and carries the reason, and the health route reports it.
  */
 
+// Every temporary directory this file creates is removed when the run ends.
+import './_tmp-guard.mjs'
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -37,7 +39,8 @@ import {
   META_NAME,
   readBackupMeta,
 } from '../lib/backup.js';
-import { buildRestartVerdict, writeRestartVerdict, RESTART_RESULTS } from '../lib/restart-verdict.js';
+import { buildRestartVerdict, writeRestartVerdict, RESTART_RESULTS } from '../lib/restart-verdict.js'
+import { selectRestoreTarget } from '../lib/watchdog.js';
 import { DEFAULTS, normalizeConfig } from '../index.js';
 
 /** A profile-looking tree, a state directory and the backups root of it. */
@@ -227,7 +230,22 @@ test('③ a restart that came up leaves its snapshot UNPROVEN until the caller s
   }
   assert.equal(raw.boot.started, true)
   assert.equal(raw.boot.contentMatched, true)
-  assert.equal(latestKnownGood(backups).dir, snapshot.dir)
+  // A COPY WHOSE RESCUE NOBODY RECORDED IS NOT A RESTORE POINT (user decision,
+  // 2026-11-02, t23/t25). The record must say `null` - never a made-up `false` -
+  // and that is exactly why this reader refuses it: `null` is not a licence.
+  // The narrow fallback that still lets such a machine recover itself lives in
+  // `selectRestoreTarget`, and it says out loud that the rescue was never recorded.
+  assert.equal(latestKnownGood(backups), null, 'an unrecorded rescue is not a restore point for this reader')
+  const choice = selectRestoreTarget({
+    candidates: [{
+      dir: snapshot.dir,
+      name: 'snapshot',
+      boot: certified.boot,
+      intervention: certified.intervention,
+    }],
+  })
+  assert.equal(choice.target, snapshot.dir, 'the named fallback still lets that machine recover')
+  assert.equal(choice.interventionUnknown, true, 'and it says the rescue was never recorded')
 });
 
 test('④ a failed boot promotes nothing', async (t) => {
@@ -267,8 +285,8 @@ test('⑤ a seed that cannot be written says so, with the reason', async (t) => 
 
   const record = await seedFirstInstallBackup(runtime, {}, { profileDir: missing })
 
-  assert.equal(record.result, 'no-known-good');
-  assert.equal(runtime.state.firstInstallBackup.result, 'no-known-good', 'the state says the machine has no safe copy');
+  assert.equal(record.result, 'no-usable-backup');
+  assert.equal(runtime.state.firstInstallBackup.result, 'no-usable-backup', 'the state says the machine has no usable copy');
   assert.equal(typeof runtime.state.firstInstallBackup.error, 'string');
   assert.ok(runtime.state.firstInstallBackup.error.length > 0, 'and why');
   assert.equal(latestKnownGood(backupsRoot(path.dirname(stateFile))), null, 'nothing was written');

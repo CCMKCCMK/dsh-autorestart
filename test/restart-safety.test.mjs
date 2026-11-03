@@ -30,6 +30,8 @@
  * process is killed.
  */
 
+// Every temporary directory this file creates is removed when the run ends.
+import './_tmp-guard.mjs'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -1096,7 +1098,7 @@ test('a rollback without a known-good copy restores NOTHING and says no-known-go
   assert.equal(report.ok, false, 'the report says the restart failed')
   assert.equal(report.rolledBack, false, 'NOTHING was restored')
   assert.equal(report.backupDir, null, 'the report names no rollback target')
-  assert.match(String(report.reason), /^no-known-good: /, 'the report says WHY nothing was restored')
+  assert.match(String(report.reason), /^no-usable-backup: /, 'the report says WHY nothing was restored')
   assert.match(String(report.reason), /never answered/, 'and it still says what went wrong')
   assert.deepEqual(report.restored, [], 'not a single file was touched')
   assert.equal(
@@ -1132,7 +1134,7 @@ test('without a known-good copy the watchdog v2 is armed but told it may restore
     'the plugin says out loud that the watchdog will not restore anything, and the report will repeat it',
   )
   const report = JSON.parse(fs.readFileSync(path.join(state.dir, 'last-rollback.json'), 'utf8'))
-  assert.match(String(report.reason), /^no-known-good: /, 'and the report says no-known-good')
+  assert.match(String(report.reason), /^no-usable-backup: /, 'and the report says no-usable-backup')
 })
 
 // ---------------------------------------------------------------------------
