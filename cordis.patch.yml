@@ -49,11 +49,11 @@
         blockManualRestart: true
         healthPath: /__dsh_autorestart/health
         continuationText: ''
-        # Take a snapshot of the profile before every restart, so a restart that
-        # leaves the host unable to boot can be rolled back automatically.
+        # Take a snapshot of the profile configuration before every restart, so
+        # you always have a copy to roll back to by hand.
         backupOnRestart: true
         # Include the installed plugin tree in that snapshot (bigger: ~120 MB here,
-        # but it is what lets a rollback undo "a plugin upgrade broke the boot").
+        # so a broken plugin upgrade can be rolled back by hand as well).
         # The first install asks once whether this should be on; the answer is
         # written to THIS key through the official configEditor service, so the
         # settings page and the one-time prompt always show the same value.
@@ -69,55 +69,11 @@
         # How long (ms) the watch waits after boot before it reads, so plugins
         # that load late are not mistaken for plugins that disappeared.
         watchDelayMs: 8000
-        # The WATCHDOG: the process that waits for the relaunched host and
-        # puts the snapshot back when it never answers. It has to be triggered
-        # LATER, and the machine decides how (a one-off Windows scheduled task,
-        # a systemd user timer, or a detached process of our own). Set this to
-        # false to switch the automatic rollback off entirely; the settings
-        # page then says that there is no automatic rollback.
-        # ON by default: during a restart it watches the new version and rolls the
-        # backup back when that version never comes up. The user is asked once
-        # whether to keep it, and may answer no.
-        watchdogEnabled: true
-        # How long the detached watcher waits for the relaunched host (ms) before
-        # it restores the snapshot. The watcher NEVER launches a second copy of
-        # the host: it restores the files and writes the report.
-        rollbackTimeoutMs: 90000
         # How long the restart command may run (ms) before the plugin stops
         # waiting for it. A command that starts the host in the foreground never
         # returns — that is not a failure, but it is reported as "still running"
         # instead of "restarted".
         restartCommandTimeoutMs: 30000
-        # How long ONE restore step may take (ms): the configuration files, then
-        # the installed plugin tree. A restore that does not finish in time is
-        # given up and the reason is written into the rollback report.
-        rollbackCopyTimeoutMs: 120000
-        # The self-starting supervisor: who starts this host.
-        # auto = nobody decided yet, installed = the supervisor of this plugin,
-        # external = your own way (docker, systemd, your own script),
-        # off = no automatic start at all.
-        supervisorMode: auto
-        # Which form of the self-start record was installed. Empty = the
-        # default of this platform (a scheduled task on Windows, a systemd user
-        # unit on Linux).
-        supervisorKind: ''
-        # How long the supervisor waits before it starts the host again after it
-        # died. The delay DOUBLES with every failed start.
-        supervisorRestartDelayMs: 3000
-        # The upper bound of that delay: the supervisor never waits longer.
-        supervisorRestartDelayMaxMs: 30000
-        # How long the supervisor waits for the host to answer its health route
-        # before it restores the snapshot.
-        supervisorStartTimeoutMs: 90000
-        # How long the supervisor waits between asking the host to stop and
-        # killing it.
-        supervisorKillGraceMs: 15000
-        # The port the supervisor waits for to become free before it starts the
-        # host (0 = the port of the current instance).
-        supervisorPort: 0
-        # Whether the one-time question may install the supervisor without
-        # asking again.
-        supervisorAutoInstall: false
         # 收工关机：Show the graceful-shutdown button at the foot of the left
         # sidebar, next to the Settings row (root scope: it is there even when
         # no conversation is open).

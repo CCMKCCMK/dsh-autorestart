@@ -450,7 +450,7 @@
     'settings.backup.scope.slim': '精简份（配置 + 手装插件）',
     'settings.backup.scopeMissing': '（没有记录）',
     'settings.backup.interventionLabel': '这次启动有没有被系统介入',
-    'settings.backup.intervention.true': '有（自动救援动过手）',
+    'settings.backup.intervention.true': '有（系统还原过一份）',
     'settings.backup.intervention.false': '没有',
     'settings.backup.intervention.unknown': '没有记录',
     // THE MANUAL ROLLBACK (user decision, 2026-10-30): the user may know better
@@ -476,43 +476,6 @@
     'settings.backup.rollbackDone': '已回退，正在重启…',
     'settings.backup.rollbackFailed': '回退没成功：{message}',
     'settings.groups.report': '遇到问题',
-    'settings.groups.rescue': '桌面救援入口',
-    'settings.rescue.hint': 'DSH 打不开的时候，用下面这两个脚本救自己（都不用 DSH 跑起来）。',
-    'settings.rescue.restoreProfile': '回到上一次好状态',
-    'settings.rescue.emergencyDisable': '只把这个插件摘掉',
-    'settings.rescue.path': '路径',
-    'settings.rescue.copyPath': '复制路径',
-    'settings.rescue.copied': '路径已复制',
-    'settings.rescue.copyFailed': '复制失败，请手动选中上面的路径',
-    'settings.rescue.reveal': '打开所在文件夹',
-    'settings.rescue.which': '怎么选：整个环境坏了（改了配置、装了别的插件、升级崩了）→ 用「回到上一次好状态」；只怀疑这个插件 → 用「只把这个插件摘掉」。',
-    'settings.rescue.warning': '重要：这个桌面入口和上面两个脚本，都只在你打不开 DSH 的时候用；DSH 正常开着的时候不要点它——用「回到上一次好状态」会把你现在正在用的配置覆盖掉。',
-    'settings.rescue.rollbackOk': '自动回滚：可用（重启后起不来会自动回到上一个好状态）',
-    'settings.rescue.rollbackBlocked': '自动回滚：**不可用** —— 这台电脑不允许创建计划任务。**会丢失：重启后 DSH 起不来时不会自动恢复**；出问题时请双击「出事了怎么办」里的还原脚本。',
-    'settings.rescue.rollbackUnknown': '自动回滚：还不知道（这台机器的能力还没检查过）',
-    'settings.rescue.watchdogTier': '看门狗的触发方式：{tier}',
-    'settings.rescue.watchdogLast': '上一次看门狗的结果：{result}',
-    'settings.rescue.watchdogStrict': '上一次自动救援没有动手：找不到同时满足两个条件的备份——那份备份有过启动记录，而且那次启动没有系统介入过。请手动处理。',
-    'settings.rescue.watchdogRestoredFrom': "上一次自动救援还原的这一份：{dir}",
-    'settings.rescue.tierScheduledTask': 'Windows 计划任务',
-    'settings.rescue.tierSystemdRun': 'systemd 定时器',
-    'settings.rescue.tierDetachedProcess': '自建后台进程',
-    'settings.rescue.tierNone': '（这台机器没有可用机制）',
-    'settings.rescue.shortcut': '在桌面放一个快捷方式',
-    'settings.rescue.shortcutDone': '已在桌面',
-    'settings.rescue.noDesktop': '这台机器上没有桌面目录，所以放不了快捷方式（脚本的路径在上面，可以手动复制过去）。',
-    'settings.rescue.noDesktopPlatform': '网页版 / 服务器版没有桌面，所以没有这个一键入口；请用上面两个 .sh 脚本。',
-    // PLAN B (user decision, 2026-11-02): a host without a desktop shows the
-    // SAME rescue entry as a copyable command, not a dead-end explanation.
-    'settings.rescue.commandLabel': '救援入口（命令）',
-    'settings.rescue.copyCommand': '复制命令',
-    'settings.rescue.commandHint': '复制这条命令执行，效果和桌面上双击那个入口一样。',
-    'settings.rescue.commandUnavailable': '这台机器上没有找到可用的救援命令。',
-    'settings.rescue.shortcutScope': '它只能把整个环境退回上一次好状态，不能只摘掉某一个插件。',
-    'settings.rescue.shortcutBlocked': '系统策略不允许创建快捷方式（比如组策略或权限限制）。把下面的脚本路径复制出来，手动放到桌面：',
-    'settings.rescue.shortcutWriteFailed': '快捷方式没写成功：{message}。把下面的脚本路径复制出来，手动放到桌面：',
-    'settings.rescue.shortcutFailed': '快捷方式没放成：{message}',
-    'settings.rescue.revealFailed': '文件夹没打开：{message}',
     'settings.report.label': '遇到问题了？',
     'settings.report.github': '复制诊断信息并去 GitHub 提问题',
     'settings.report.hint': '诊断信息里没有你的访问令牌，也没有任何密钥；把它贴进 issue，我们就能看出问题出在哪。',
@@ -589,7 +552,6 @@
     // THE PLUGIN THAT DID NOT LOAD (用户拍板 2026-11-01)：宿主照常起来，只是某个
     // 插件这次没激活 —— 把这件事搬到前台，并且只给一个动作：只恢复这一个。
     'pluginFailure.title': "有两件事要你看一下",
-        'watchdog.hint': "后面想改主意，可以到「插件」页里找 dsh-autorestart 的设置。",
         'pluginFailure.hint': "这些功能已经记下来了，之后可以在「插件」页里再恢复。",
         'settings.description': "自动重启 DSH、守护插件，出问题能一键恢复。",
         'settings.restore': "恢复",
@@ -619,17 +581,6 @@
     'pluginFailure.restored': "已经把 {plugin} 恢复到备份版本（备份时间 {at}）。",
     'pluginFailure.failed': "{plugin} 恢复没有完成：{reason}",
     'pluginFailure.noBackup': "这台机器没有可用备份，只能手动处理。",
-    'watchdog.title': "重启失败时，会自动帮你救回来",
-    'watchdog.explain': "这个插件自带自动救援：重启之后新版本一直起不来时，它会拿一份它自己认为可用的备份帮你恢复（判据是内容指纹一致、且那次启动起来了——这不代表里面的插件都正常），再把程序重新拉起来。它默认就是开着的。",
-    'watchdog.whereOff': "不想要的话，到设置页把「自动救援」的开关关掉就行——关掉之后，新版本起不来就只能手动处理了。",
-    'watchdog.gotIt': "知道了",
-    'watchdog.noticeSaved': "好的，就这一条提示，以后不会再弹了。",
-    'watchdog.warnOff': "关掉之后，万一新版本起不来，就只能手动处理了。",
-    'watchdog.keepOn': "开着（推荐）",
-    'watchdog.turnOff': "不要，我自己处理",
-    'watchdog.savedOn': "已开启：下次重启如果起不来，会自动帮你救回来。",
-    'watchdog.savedOff': "已关闭：下次重启如果起不来，不会自动救。",
-    'watchdog.saveFailed': "没能保存你的选择，设置没有变。请再点一次，或到设置页里改。",
     // THE COPY OF THE COMPOSER ROW. It is one SHORT line and never a sentence:
     // the long stage sentence was clipped away there (user report,
     // 2026-10-29). While the gate waits the pill keeps its own composed line
@@ -928,8 +879,8 @@
     'settings.backup.scope.config+links': 'configuration and linked plugins',
     'settings.backup.scope.slim': 'slim copy (configuration and by-hand plugins)',
     'settings.backup.scopeMissing': '(not recorded)',
-    'settings.backup.interventionLabel': 'Was this boot rescued by the system',
-    'settings.backup.intervention.true': 'yes, the watchdog restored a copy',
+    'settings.backup.interventionLabel': 'Was this boot restored by the system',
+    'settings.backup.intervention.true': 'yes, the system restored a copy',
     'settings.backup.intervention.false': 'no, nothing had to step in',
     'settings.backup.intervention.unknown': 'not recorded',
     // THE MANUAL ROLLBACK (user decision, 2026-10-30): any copy can be restored
@@ -954,41 +905,6 @@
     'settings.backup.rollbackDone': 'Rolled back — restarting…',
     'settings.backup.rollbackFailed': 'The rollback did not work: {message}',
     'settings.groups.report': 'Something is wrong',
-    'settings.groups.rescue': 'Desktop rescue',
-    'settings.rescue.hint': 'When DSH does not come up, these two scripts rescue it for you (neither of them needs DSH running).',
-    'settings.rescue.restoreProfile': 'Back to the last good state',
-    'settings.rescue.emergencyDisable': 'Take this plugin out only',
-    'settings.rescue.path': 'Path',
-    'settings.rescue.copyPath': 'Copy the path',
-    'settings.rescue.copied': 'The path is on the clipboard',
-    'settings.rescue.copyFailed': 'The copy failed — please select the path above by hand',
-    'settings.rescue.reveal': 'Open the folder',
-    'settings.rescue.which': 'Which one: the whole environment is broken (a changed configuration, another plugin, a bad upgrade) → "Back to the last good state"; only this plugin is suspect → "Take this plugin out only".',
-    'settings.rescue.warning': 'Important: this desktop entry and the two scripts above are for when DSH does not come up. Do not click it while DSH is running — "Back to the last good state" overwrites the configuration you are working with right now.',
-    'settings.rescue.rollbackOk': 'Automatic rollback: available (a host that does not come up after a restart goes back to the last good state)',
-    'settings.rescue.rollbackBlocked': 'Automatic rollback: **not available** — this computer does not allow creating scheduled tasks. **What you lose: DSH will NOT recover by itself when it does not come up after a restart**; when it breaks, double-click the restore script in "If DSH will not start".',
-    'settings.rescue.rollbackUnknown': 'Automatic rollback: not known yet (this machine has not been checked)',
-    'settings.rescue.watchdogTier': 'How the watchdog is triggered: {tier}',
-    'settings.rescue.watchdogLast': 'The last watchdog run: {result}',
-    'settings.rescue.watchdogStrict': 'The last watchdog run did NOT act: no backup satisfies both conditions — it records a startup, and that startup had no system intervention. Please handle it by hand.',
-    'settings.rescue.watchdogRestoredFrom': "The copy the last watchdog run restored: {dir}",
-    'settings.rescue.tierScheduledTask': 'a Windows scheduled task',
-    'settings.rescue.tierSystemdRun': 'a systemd timer',
-    'settings.rescue.tierDetachedProcess': 'a detached background process',
-    'settings.rescue.tierNone': '(this machine has no way to run it)',
-    'settings.rescue.shortcut': 'Put a shortcut on the desktop',
-    'settings.rescue.shortcutDone': 'It is on the desktop',
-    'settings.rescue.noDesktop': 'This machine has no desktop directory, so no shortcut can be placed (the paths are above — copy them by hand).',
-    'settings.rescue.noDesktopPlatform': 'The web / server version has no desktop, so there is no one-click entry here; use the two .sh scripts above.',
-    'settings.rescue.commandLabel': 'Rescue entry (command)',
-    'settings.rescue.copyCommand': 'Copy the command',
-    'settings.rescue.commandHint': 'Copy this command and run it — the same effect as double-clicking the desktop entry.',
-    'settings.rescue.commandUnavailable': 'No usable rescue command was found on this machine.',
-    'settings.rescue.shortcutScope': 'It can only put the WHOLE environment back to the last good state — it cannot take one plugin out.',
-    'settings.rescue.shortcutBlocked': 'A system policy does not allow creating the shortcut (a group policy or a permission limit). Copy the script path below and put it on the desktop by hand:',
-    'settings.rescue.shortcutWriteFailed': 'The shortcut was not written: {message}. Copy the script path below and put it on the desktop by hand:',
-    'settings.rescue.shortcutFailed': 'The shortcut was not placed: {message}',
-    'settings.rescue.revealFailed': 'The folder did not open: {message}',
     'settings.report.label': 'Something wrong?',
     'settings.report.github': 'Copy the diagnostics and open a GitHub issue',
     'settings.report.hint': 'The diagnostics carry no access token and no secrets — paste them into the issue and we can see what went wrong.',
@@ -1066,7 +982,6 @@
     // one plugin simply did not activate this time. Say so, and offer exactly
     // one action: put THIS one plugin back.
     'pluginFailure.title': "Two things worth a look",
-        'watchdog.hint': "Changed your mind later? Look for the dsh-autorestart settings on the Plugins page.",
         'pluginFailure.hint': "These are on record - you can restore them later from the Plugins page.",
         'settings.description': "Restarts DSH, watches your plugins, and puts back the ones it can.",
         'settings.restore': "Restore",
@@ -1091,17 +1006,6 @@
     'pluginFailure.restored': "{plugin} was put back to the backup version (backup taken {at}).",
     'pluginFailure.failed': "{plugin} was not restored: {reason}",
     'pluginFailure.noBackup': "There is no usable backup on this machine; it has to be handled by hand.",
-    'watchdog.title': "If a restart fails, it can rescue you automatically",
-    'watchdog.explain': "This plugin ships with an automatic rescue: when a newly restarted version never comes up, it restores a backup it considers usable (the criterion is that the content fingerprint matched and that boot came up — it does not mean the plugins inside are all fine), then starts the program again. It is on by default.",
-    'watchdog.whereOff': "If you do not want it, turn it off on the settings page — with it off, a new version that does not start has to be handled by hand.",
-    'watchdog.gotIt': "Got it",
-    'watchdog.noticeSaved': "That is the only notice; it will not appear again.",
-    'watchdog.warnOff': "With it off, a new version that does not start has to be handled by hand.",
-    'watchdog.keepOn': "Keep it on (recommended)",
-    'watchdog.turnOff': "No, I will handle it",
-    'watchdog.savedOn': "The watchdog is on: the next restart is protected.",
-    'watchdog.savedOff': "The watchdog is off: the next restart will not roll back on its own.",
-    'watchdog.saveFailed': "Your choice was not saved, so the watchdog setting is unchanged. Please try again, or change it on the settings page.",
     // THE COPY OF THE COMPOSER ROW (see the Chinese block): one short line,
     // never a sentence.
     'restart.stage.snapshotting': 'Backing up…',
@@ -2303,72 +2207,6 @@
     return { ok: false, fallback: true, text: source };
   }
 
-  /**
-   * Must the warning about the missing automatic rollback be shown now?
-   *
-   * The warning belongs to ONE moment: the machine has NO way to run the
-   * watchdog at all (tier 'none'), and the user has not seen it yet (the Host
-   * recorded `warnedAt`). A machine that is blocked and stays blocked does
-   * not nag.
-   *
-   * @param {object|null} capabilities
-   * @returns {boolean}
-   */
-  function watchdogNoticeFor(capabilities) {
-    if (!capabilities || typeof capabilities !== 'object') return false
-    if (capabilities.tier !== 'none') return false
-    return typeof capabilities.warnedAt !== 'number'
-  }
-
-  /**
-   * The name of the tier, in the language of the user.
-   *
-   * @param {Function} t the translator
-   * @param {string} tier
-   * @returns {string}
-   */
-  function watchdogTierLabel(t, tier) {
-    if (tier === 'scheduled-task') return t('settings.rescue.tierScheduledTask')
-    if (tier === 'systemd-run') return t('settings.rescue.tierSystemdRun')
-    if (tier === 'detached-process') return t('settings.rescue.tierDetachedProcess')
-    if (tier === 'none') return t('settings.rescue.tierNone')
-    return ''
-  }
-
-  /**
-   * The two rescue scripts, as the Host reported them.
-   *
-   * The paths come from the Host (it resolved the plugin directory for
-   * itself) — the browser never guesses them. A path that is not there is not
-   * shown: an empty path would be a dead end for the user.
-   *
-   * @param {object} info the Host's state payload
-   * @returns {Array<{ key: string, path: string }>}
-   */
-  function rescuePathsFor(info) {
-    const rescue = info && typeof info === 'object' && info.rescue && typeof info.rescue === 'object'
-      ? info.rescue
-      : null
-    if (!rescue) return []
-    const out = []
-    const restore = typeof rescue.restoreProfile === 'string' ? rescue.restoreProfile.trim() : ''
-    if (restore !== '') out.push({ key: 'restoreProfile', path: restore })
-    const disable = typeof rescue.emergencyDisable === 'string' ? rescue.emergencyDisable.trim() : ''
-    if (disable !== '') out.push({ key: 'emergencyDisable', path: disable })
-    return out
-  }
-
-  /**
-   * The route that writes the desktop shortcut and opens the folder.
-   *
-   * @param {object} info the Host's state payload
-   * @returns {string}
-   */
-  function rescueUrlFor(info) {
-    const sent = info && typeof info === 'object' && typeof info.rescueUrl === 'string' ? info.rescueUrl.trim() : ''
-    if (sent.startsWith('/')) return sent
-    return '/__dsh_autorestart/rescue'
-  }
 
   /**
    * Whether the "how was this host started" block may be shown at all.
@@ -2537,7 +2375,7 @@
   }
 
   /**
-   * Whether this boot was rescued by the system, in three answers.
+   * Whether this boot was restored by the system, in three answers.
    *
    * `null` is NOT "no": the Host says `null` when nobody recorded anything, and
    * the two must not be merged — "it did not happen" and "we do not know" lead a
@@ -2855,14 +2693,6 @@
     // "Report a problem": the URL builders and the clipboard with its fallback.
     buildIssueUrl,
     copyReportText,
-    // The rescue kit: the two script paths as the Host resolved them, and the
-    // route that writes the desktop shortcut and opens the folder.
-    rescuePathsFor,
-    rescueUrlFor,
-    // The automatic rollback: what this machine can do, and whether the
-    // one-time warning about it is still waiting to be shown.
-    watchdogNoticeFor,
-    watchdogTierLabel,
     // The startup block: whether it may be shown, the one line that says what
     // the plugin remembers, and the formatters of the backup list.
     shouldShowStartupBlock,
@@ -5827,59 +5657,6 @@
         '  font-weight:400;',
         '  color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));',
         '}',
-        // ONE RESCUE SCRIPT: its name, its real path, and a copy button — the
-        // path is the only thing that helps when the host will not start.
-        '.dsh-autorestart-settings__rescue-path{',
-        '  display:flex;',
-        '  flex-wrap:wrap;',
-        '  gap:8px;',
-        '  align-items:baseline;',
-        '  padding:6px 0;',
-        '}',
-        // THE DESKTOP ENTRY, DRAWN AS IT WILL LOOK (user report, 2026-11-02):
-        // a tile with DSH on it and the file name next to it, so "what am I
-        // looking for on my desktop?" is answered before the button is pressed.
-        '.dsh-autorestart-settings__shortcut{',
-        '  display:flex;',
-        '  align-items:center;',
-        '  gap:8px;',
-        '}',
-        '.dsh-autorestart-settings__shortcut-icon{',
-        '  display:inline-flex;',
-        '  align-items:center;',
-        '  justify-content:center;',
-        '  width:26px;',
-        '  height:26px;',
-        '  flex:none;',
-        '  border-radius:6px;',
-        '  background:var(--dsw-alias-brand-primary,#4d6bfe);',
-        '  color:#fff;',
-        '  font-size:9px;',
-        '  font-weight:700;',
-        '  letter-spacing:.02em;',
-        '}',
-        '.dsh-autorestart-settings__shortcut-name{',
-        '  font-size:12.5px;',
-        '  line-height:18px;',
-        '  color:var(--dsw-alias-label-primary);',
-        '  word-break:break-all;',
-        '}',
-        // THE REAL PICTURE, WHEN THE HOST SENT ONE (2026-11-02): the tile stops
-        // being a stand-in — no brand background, no 26px box — and shows the
-        // bytes the desktop shortcut carries. 16px keeps it on the text baseline.
-        '.dsh-autorestart-settings__shortcut-icon[data-icon-real="true"]{',
-        '  background:transparent;',
-        '  width:16px;',
-        '  height:16px;',
-        '  border-radius:2px;',
-        '}',
-        '.dsh-autorestart-settings__shortcut-icon-img{',
-        '  display:block;',
-        '  width:16px;',
-        '  height:16px;',
-        '  border-radius:2px;',
-        '  image-rendering:auto;',
-        '}',
         // THE SECOND CONFIRMATION of a manual rollback: a block that stands
         // apart from the list, because it is a question, not a fact.
         '.dsh-autorestart-settings__confirm{',
@@ -6396,8 +6173,6 @@
         const [reportFallback, setReportFallback] = useState('')
         // The note under the backup path: copied, or "copy it by hand".
         const [pathNote, setPathNote] = useState('')
-        // The note under the rescue paths: copied, or "copy it by hand".
-        const [rescueNote, setRescueNote] = useState('')
         // Whether the "technical details" fold is open. It is NOT persisted:
         // a fresh page starts closed, so nobody leaves technical text open by
         // accident.
@@ -6412,14 +6187,9 @@
         // four switches stay visible, everything that only EXPLAINS the backups
         // (the count, the rules, the copy cards, the path and the per-plugin
         // recovery) lives behind `settings.backup.section`. Closed by default —
-        // except on a boot the watchdog had to rescue, where the one copy that
+        // except on a boot the system had to restore, where the one copy that
         // matters must not be hidden (see the fold below).
         const [backupSectionOpen, setBackupSectionOpen] = useState(false)
-        // The RESCUE script paths on Windows: behind 详情, because the desktop
-        // entry is the main door there (audit finding G1, 2026-11-02). Never
-        // folded on the other platforms and never folded when there is no
-        // desktop entry to press.
-        const [rescuePathsOpen, setRescuePathsOpen] = useState(false)
         // THE ONE-TIME "this host cannot restart" CARD (user decision,
         // 2026-11-02). `restartCardPending` is the Host's answer ("read once per
         // host"), `restartCardDone` only hides it in this session right after
@@ -6641,109 +6411,6 @@
         // resolved ONCE from the copies' own records, so the sentence follows the
         // copy and not the row it happens to be drawn in.
         const startupCopy = startupCopyName(backupItems)
-        // THE RESCUE KIT: the two scripts and where they are, as the Host
-        // resolved them. The browser never guesses a path.
-        const rescuePaths = rescuePathsFor(info)
-        const rescueKit = info && typeof info === 'object' && info.rescue && typeof info.rescue === 'object'
-          ? info.rescue
-          : {}
-        // Where a desktop shortcut could go ('' = there is no desktop here).
-        const rescueDesktop = typeof rescueKit.desktopDir === 'string' ? rescueKit.desktopDir.trim() : ''
-        // WHICH PLATFORM the rescue kit was resolved for, so the page can SAY
-        // "there is no desktop on a hosted web / server install" instead of
-        // hiding the whole block (user report, 2026-11-02).
-        const rescuePlatform = typeof rescueKit.platform === 'string' ? rescueKit.platform : ''
-        const rescueIsWindows = rescuePlatform === 'win32'
-        // THE RESCUE ENTRY ON A HOST WITHOUT A DESKTOP (plan B, user decision
-        // 2026-11-02). The desktop build offers a `.lnk` on the desktop; a hosted
-        // web / server host has no desktop, so the same entry is a COPYABLE
-        // COMMAND — the restore script the Host already resolved. '' means the
-        // Host has none, and the page says so instead of inventing a path.
-        const rescueCommand = (() => {
-          const entry = rescuePaths.find((item) => item && item.key === 'restoreProfile')
-          return entry && typeof entry.path === 'string' ? entry.path.trim() : ''
-        })()
-        // The file name of the shortcut on the desktop (a `.lnk` since
-        // 2026-11-02 — the host names it, so page and disk cannot disagree).
-        const rescueShortcutName = typeof rescueKit.shortcutName === 'string' && rescueKit.shortcutName !== ''
-          ? rescueKit.shortcutName
-          : 'DSH 出事了双击这里.lnk'
-        // The icon the shortcut carries: THIS PLUGIN'S OWN `assets/icon.ico`.
-        // It used to be DSH's executable, which put the face of the very program
-        // that was broken on the rescue shortcut. '' = this install ships no icon
-        // of its own: the `.lnk` is still created, it just gets no IconLocation —
-        // never somebody else's face, and nothing is written at runtime.
-        const rescueIconPath = typeof rescueKit.iconPath === 'string' ? rescueKit.iconPath.trim() : ''
-        // THE SAME PICTURE THE DESKTOP CARRIES, DRAWN HERE (user requirement,
-        // 2026-11-02): the row used to show a made-up "DSH" tile, so the page and
-        // the `.lnk` on the desktop could look like two different things. The Host
-        // now sends the icon as a data URI built from THE SAME BYTES as the file
-        // it points `IconLocation` at, and this page renders that string as-is —
-        // no base64 lives in this bundle, so the two copies cannot drift apart.
-        //
-        // ONLY A PNG DATA URI IS ACCEPTED. Anything else (another media type, a
-        // remote URL, a missing field on an older Host) is treated as "no picture"
-        // and the row falls back to its text tile: a wrong `src` would render a
-        // broken-image marker, which is worse than saying nothing.
-        const rescueIconDataUri = (() => {
-          const raw = typeof rescueKit.iconDataUri === 'string' ? rescueKit.iconDataUri.trim() : ''
-          return raw.startsWith('data:image/png;base64,') ? raw : ''
-        })()
-        // ONE SOURCE FOR THE ICON (user decision, 2026-11-02): the desktop `.lnk`
-        // and this tile must come from the SAME host answer, and both must say
-        // the same thing when there is none. The name travels with the path so
-        // the page can prove which file it used — it never invents an icon.
-        const rescueIconName = typeof rescueKit.iconName === 'string' && rescueKit.iconName !== ''
-          ? rescueKit.iconName
-          : (rescueIconPath === '' ? '' : rescueIconPath.split(/[\\/]/).pop())
-        const rescueIconAvailable = rescueKit.iconAvailable === true || rescueIconPath !== ''
-        // Whether it is already there (then the button says so).
-        const rescueShortcutExists = rescueKit.shortcutExists === true
-        // WHAT THIS MACHINE CAN DO: the automatic rollback needs a watchdog,
-        // and the watchdog needs a way to be triggered later. The tier (the
-        // ONE function that decides it on the host) says which one that is.
-        const capabilities = info && typeof info === 'object' && info.capabilities && typeof info.capabilities === 'object'
-          ? info.capabilities
-          : {}
-        const watchdog = info && typeof info === 'object' && info.watchdog && typeof info.watchdog === 'object'
-          ? info.watchdog
-          : {}
-        const watchdogTier = typeof watchdog.tier === 'string' && watchdog.tier !== '' ? watchdog.tier : ''
-        const schedulerState = watchdogTier === '' ? 'unknown' : (watchdogTier === 'none' ? 'blocked' : 'ok')
-        // The notice is for the TRANSITION: a user who has seen it is not
-        // asked again.
-        const schedulerNotice = watchdogNoticeFor(capabilities)
-        const schedulerText = schedulerState === 'ok'
-          ? t('settings.rescue.rollbackOk')
-          : schedulerState === 'blocked'
-            ? t('settings.rescue.rollbackBlocked')
-            : t('settings.rescue.rollbackUnknown')
-        const watchdogLast = watchdog.report && typeof watchdog.report === 'object' && typeof watchdog.report.result === 'string'
-          ? watchdog.report.result
-          : ''
-        // DID THE WATCHDOG ACT, OR DID IT STAND DOWN FOR WANT OF A TRUSTED COPY?
-        // (2026-11-01) `failed` alone is not enough for the user: the strict mode
-        // deliberately does nothing when no copy qualifies, and that has to be
-        // visible here — including WHICH copies were refused — otherwise "it did
-        // not rescue me" and "it had nothing to rescue me with" look the same.
-        const watchdogStrict = Boolean(
-          watchdog.report && typeof watchdog.report === 'object' && watchdog.report.strictMode === true,
-        )
-        const watchdogRestoredFrom = watchdog.report && typeof watchdog.report === 'object'
-          && typeof watchdog.report.restoredFrom === 'string' && watchdog.report.restoredFrom !== ''
-          ? watchdog.report.restoredFrom
-          : ''
-        useEffect(() => {
-          if (!schedulerNotice) return
-          // The user has read it: the Host remembers that and stops asking.
-          void fetch(rescueUrlFor(info), {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ action: 'ack-scheduler' }),
-          }).catch(() => {
-            // The Host will ask again next time — no harm.
-          })
-        }, [schedulerNotice])
         // IS THE ONE-TIME "cannot restart" CARD STILL UNREAD? (2026-11-02)
         //
         // Same ledger as the feature announcement (same route, same key style,
@@ -7060,91 +6727,6 @@
           setPathNote(copied.fallback ? t('settings.backup.copyFailed') : t('settings.backup.copied'))
         }
 
-        /**
-         * Copy the path of a rescue script.
-         *
-         * The path is on screen anyway (selectable), so a refused clipboard
-         * only costs a hint — the same fallback the diagnostics use.
-         */
-        const copyRescuePath = async (target) => {
-          const copied = await copyReportText(target)
-          setRescueNote(copied.fallback ? t('settings.rescue.copyFailed') : t('settings.rescue.copied'))
-        }
-
-        /**
-         * Put the desktop shortcut there.
-         *
-         * ONLY because the user pressed the button: the settings page never
-         * writes anything to the desktop by itself.
-         *
-         * THE FAILURE IS CLASSIFIED (2026-11-02): "the shortcut was not placed"
-         * is not enough — a policy that forbids it, a desktop that does not
-         * exist and a write that broke are three different situations, and only
-         * one of them is worth trying again. All three fall back to the manual
-         * way, and the page says so with the real script path.
-         */
-        const createRescueShortcut = async () => {
-          if (busy) return
-          setBusy(true)
-          setRescueNote('')
-          const manual = typeof rescueKit.restoreProfile === 'string' ? rescueKit.restoreProfile.trim() : ''
-          const failureText = (kind, message) => {
-            const kindKey = kind === 'no-desktop'
-              ? 'settings.rescue.noDesktop'
-              : kind === 'blocked'
-                ? 'settings.rescue.shortcutBlocked'
-                : 'settings.rescue.shortcutWriteFailed'
-            const head = kindKey === 'settings.rescue.shortcutWriteFailed'
-              ? fill(t(kindKey), { message })
-              : t(kindKey)
-            return manual === '' ? head : head + ' ' + manual
-          }
-          try {
-            const response = await fetch(rescueUrlFor(info), {
-              method: 'POST',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ action: 'shortcut' }),
-            })
-            const body = await response.json().catch(() => null)
-            if (!response.ok) {
-              const kind = body && typeof body === 'object' && typeof body.errorKind === 'string' ? body.errorKind : ''
-              const message = body && typeof body === 'object' && body.error ? body.error : String(response.status)
-              setRescueNote(kind === '' ? fill(t('settings.rescue.shortcutFailed'), { message }) : failureText(kind, message))
-              return
-            }
-            setRescueNote(t('settings.rescue.shortcutDone'))
-          } catch (failure) {
-            setRescueNote(fill(t('settings.rescue.shortcutFailed'), { message: describeError(failure) }))
-          } finally {
-            setBusy(false)
-          }
-        }
-
-        /**
-         * Open the folder of the scripts in the file manager.
-         */
-        const revealRescueFolder = async () => {
-          if (busy) return
-          setBusy(true)
-          setRescueNote('')
-          try {
-            const response = await fetch(rescueUrlFor(info), {
-              method: 'POST',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ action: 'reveal' }),
-            })
-            const body = await response.json().catch(() => null)
-            if (!response.ok) {
-              const message = body && typeof body === 'object' && body.error ? body.error : String(response.status)
-              setRescueNote(fill(t('settings.rescue.revealFailed'), { message }))
-              return
-            }
-          } catch (failure) {
-            setRescueNote(fill(t('settings.rescue.revealFailed'), { message: describeError(failure) }))
-          } finally {
-            setBusy(false)
-          }
-        }
 
         return h(
           'div',
@@ -7428,7 +7010,7 @@
             // copy list, the path and the per-plugin recovery) made the page
             // long enough that the switches were pushed out of sight. They are
             // all behind `settings.backup.section` now, closed by default — but
-            // NOT closed on a boot the watchdog had to rescue: an intervention
+            // NOT closed on a boot the system had to restore: an intervention
             // is the one fact that must not be hidden, so the fold opens itself
             // and says so on its summary.
             (() => {
@@ -8108,303 +7690,6 @@
                     : null,
                 )
               : null,
-          ),
-          // "IF DSH WILL NOT START": the rescue scripts, where they are, and the
-          // way to reach them. A user whose host is down cannot open a README —
-          // they need the path, and they need to be able to copy it.
-          //
-          // BOTH ENDS SHOW IT (user decision, 2026-11-02, plan B): the desktop
-          // build keeps its rescue entry, and the hosted / web page shows the
-          // SAME group with the SAME title and the SAME entries — the only thing
-          // that changes is that a hosted host has no desktop, so the
-          // "double-click this .lnk" row becomes a COPYABLE COMMAND instead of
-          // being explained away with "the web version has no desktop".
-          h(
-            'div',
-            {
-              className: 'dsh-autorestart-settings__group',
-              'data-dsh-autorestart-group': 'rescue',
-            },
-            h(
-              'div',
-              { className: 'dsh-autorestart-settings__group-title' },
-              t('settings.groups.rescue'),
-            ),
-            // The rescue group says ONE plain thing (user decision, 2026-11-02):
-            // whether the automatic rollback can work here. The script paths,
-            // "which one do I pick" and the overwrite warning are gone — a
-            // worried user needs a status line and a button, not a manual.
-            // THE TWO SCRIPTS THEMSELVES (audit finding G1, 2026-11-02).
-            //
-            // The page used to say "use the two .sh scripts above" while
-            // rendering NOTHING — the worst possible dead end, because the user
-            // reading it is exactly the one whose host will not start. The paths
-            // come from the Host (the browser never guesses them) and each one
-            // has a copy button.
-            //
-            // Where there IS a desktop entry, the paths sit behind 详情 (the
-            // entry is the main door). Where there is NO desktop (a hosted host,
-            // or a desktop app whose desktop directory could not be found) the
-            // paths are the only way, so they are never folded — same shape on
-            // both ends, keyed on "is there a desktop entry here", not on the OS.
-            rescuePaths.length === 0
-              ? null
-              : (() => {
-                const list = h(
-                  'div',
-                  { className: 'dsh-autorestart-settings__field', 'data-dsh-autorestart-rescue': 'paths' },
-                  h(
-                    'span',
-                    { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-rescue': 'paths-hint' },
-                    t('settings.rescue.hint'),
-                  ),
-                  rescuePaths.map((entry) => h(
-                    'div',
-                    { key: 'rescue-path-' + entry.key, className: 'dsh-autorestart-settings__rescue-path' },
-                    h('span', {
-                      className: 'dsh-autorestart-settings__label',
-                      'data-dsh-autorestart-rescue': 'path-label',
-                    }, entry.key === 'restoreProfile' ? t('settings.rescue.restoreProfile') : t('settings.rescue.emergencyDisable')),
-                    h('code', {
-                      className: 'dsh-autorestart-settings__value',
-                      'data-dsh-autorestart-rescue': 'path',
-                      'data-rescue-key': entry.key,
-                    }, entry.path),
-                    h('button', {
-                      type: 'button',
-                      className: 'dsh-autorestart-settings__button',
-                      disabled: busy,
-                      'data-dsh-autorestart-rescue': 'copy-path',
-                      'data-rescue-key': entry.key,
-                      onClick: () => void copyRescuePath(entry.path),
-                    }, t('settings.rescue.copyPath')),
-                  )),
-                )
-                if (rescueDesktop === '') return list
-                const pathsOpen = rescuePathsOpen || rescueDesktop === ''
-                return h(
-                  'details',
-                  {
-                    className: 'dsh-autorestart-settings__details',
-                    'data-dsh-autorestart-rescue': 'paths-details',
-                    ...(pathsOpen ? { open: true } : {}),
-                    onToggle: (event) => setRescuePathsOpen(Boolean(event && event.target ? event.target.open : false)),
-                  },
-                  h(
-                    'summary',
-                    { className: 'dsh-autorestart-settings__summary', 'data-dsh-autorestart-rescue': 'paths-summary' },
-                    t('settings.rescue.path'),
-                  ),
-                  list,
-                )
-              })(),
-            // THE RESCUE ENTRY, SHOWN THE SAME WAY ON BOTH ENDS (plan B, user
-            // decision 2026-11-02). On a machine WITH a desktop this is the
-            // `.lnk` the user is looking for — its icon and its file name, so
-            // "what am I looking for on the desktop?" is answered on screen, and
-            // one button puts it there. On a host WITHOUT a desktop (a hosted web
-            // / server install) the SAME entry is a COPYABLE COMMAND: copy it,
-            // run it, and it does what the double-click would have done. The
-            // group is never removed and never explained away — only the shape of
-            // this one entry changes, and when the Host has no path at all the
-            // page says so instead of inventing one.
-            h(
-              'div',
-              { className: 'dsh-autorestart-settings__field', 'data-dsh-autorestart-rescue': 'shortcut-block' },
-              rescueDesktop === ''
-                ? h(
-                    'div',
-                    { className: 'dsh-autorestart-settings__field', 'data-dsh-autorestart-rescue': 'rescue-command' },
-                    h(
-                      'span',
-                      { className: 'dsh-autorestart-settings__label', 'data-dsh-autorestart-rescue': 'command-label' },
-                      t('settings.rescue.commandLabel'),
-                    ),
-                    rescueCommand === ''
-                      ? h(
-                          'span',
-                          {
-                            className: 'dsh-autorestart-settings__hint',
-                            'data-dsh-autorestart-rescue': 'command-unavailable',
-                          },
-                          t('settings.rescue.commandUnavailable'),
-                        )
-                      : [
-                          h(
-                            'code',
-                            {
-                              className: 'dsh-autorestart-settings__value',
-                              'data-dsh-autorestart-rescue': 'command',
-                              key: 'rescue-command-value',
-                            },
-                            rescueCommand,
-                          ),
-                          h(
-                            'button',
-                            {
-                              type: 'button',
-                              className: 'dsh-autorestart-settings__button',
-                              disabled: busy,
-                              'data-dsh-autorestart-rescue': 'copy-command',
-                              key: 'rescue-command-copy',
-                              onClick: () => void copyRescuePath(rescueCommand),
-                            },
-                            t('settings.rescue.copyCommand'),
-                          ),
-                          h(
-                            'span',
-                            {
-                              className: 'dsh-autorestart-settings__hint',
-                              'data-dsh-autorestart-rescue': 'command-hint',
-                              key: 'rescue-command-hint',
-                            },
-                            t('settings.rescue.commandHint'),
-                          ),
-                        ],
-                  )
-                : [
-                    h(
-                      'div',
-                      { className: 'dsh-autorestart-settings__shortcut', key: 'rescue-shortcut-row' },
-                      h(
-                        'span',
-                        {
-                          className: 'dsh-autorestart-settings__shortcut-icon',
-                          'data-dsh-autorestart-rescue': 'shortcut-icon',
-                          // WHICH FILE THIS ICON IS: the same one the `.lnk`
-                          // gets, or nothing at all — never a made-up picture.
-                          'data-icon-source': rescueIconName,
-                          'data-icon-available': rescueIconAvailable ? 'true' : 'false',
-                          // WHETHER THE PICTURE ON SCREEN IS THE REAL ONE
-                          // (2026-11-02): true means the bytes below came from
-                          // the Host, so the tile drops its stand-in background
-                          // and shows the actual image.
-                          'data-icon-real': rescueIconDataUri === '' ? 'false' : 'true',
-                          'aria-hidden': 'true',
-                          title: rescueIconPath,
-                        },
-                        // THE REAL PICTURE, or the text tile when the Host sent
-                        // none. Never both: two icons on one row would look like
-                        // two different shortcuts.
-                        rescueIconDataUri === ''
-                          ? 'DSH'
-                          : h('img', {
-                            className: 'dsh-autorestart-settings__shortcut-icon-img',
-                            'data-dsh-autorestart-rescue': 'rescue-icon',
-                            src: rescueIconDataUri,
-                            alt: rescueShortcutName,
-                            width: 16,
-                            height: 16,
-                            draggable: 'false',
-                          }),
-                      ),
-                      h(
-                        'span',
-                        {
-                          className: 'dsh-autorestart-settings__shortcut-name',
-                          'data-dsh-autorestart-rescue': 'shortcut-name',
-                        },
-                        rescueShortcutName,
-                      ),
-                    ),
-                    // The button lives only where it can work: a Windows machine
-                    // with a desktop.
-                    rescueIsWindows
-                      ? h(
-                          'button',
-                          {
-                            type: 'button',
-                            className: 'dsh-autorestart-settings__button',
-                            disabled: busy,
-                            'data-dsh-autorestart-rescue': 'shortcut',
-                            key: 'rescue-shortcut-button',
-                            onClick: () => void createRescueShortcut(),
-                          },
-                          rescueShortcutExists ? t('settings.rescue.shortcutDone') : t('settings.rescue.shortcut'),
-                        )
-                      : null,
-                  ],
-              rescueNote === ''
-                ? null
-                : h(
-                    'span',
-                    { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-rescue': 'note' },
-                    rescueNote,
-                  ),
-              // REMINDER ONE: this is for a host that does NOT start. Using it
-              // while DSH runs overwrites the configuration in use.
-              h(
-                'span',
-                { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-rescue': 'shortcut-when' },
-                t('settings.rescue.warning'),
-              ),
-              // REMINDER TWO: it puts the WHOLE environment back. Taking one
-              // plugin out is a different button, and the wrong one here costs
-              // the user their working configuration.
-              h(
-                'span',
-                { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-rescue': 'shortcut-scope' },
-                t('settings.rescue.shortcutScope'),
-              ),
-              // A Windows desktop app whose desktop directory could not be found:
-              // no shortcut can be placed, and the paths above are the way out.
-              rescueIsWindows && rescueDesktop === ''
-                ? h(
-                    'span',
-                    { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-rescue': 'no-desktop' },
-                    t('settings.rescue.noDesktop'),
-                  )
-                : null,
-            ),
-            // WHAT THIS MACHINE CAN DO: the automatic rollback (and what is
-            // lost when the machine refuses a watchdog).
-            h(
-              'div',
-              { className: 'dsh-autorestart-settings__field', 'data-dsh-autorestart-rescue': 'rollback' },
-              h(
-                'span',
-                { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-rescue': 'rollback-state' },
-                schedulerText,
-              ),
-              watchdogTier === '' ? null : h(
-                'span',
-                { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-rescue': 'watchdog-tier' },
-                t('settings.rescue.watchdogTier', { tier: watchdogTierLabel(t, watchdogTier) }),
-              ),
-              watchdogLast === '' ? null : h(
-                'span',
-                { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-rescue': 'watchdog-last' },
-                t('settings.rescue.watchdogLast', { result: watchdogLast }),
-              ),
-              // The strict-mode answer, in the words the user asked for: nothing
-              // was touched because there is nothing trustworthy to put back.
-              watchdogStrict ? h(
-                'span',
-                { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-rescue': 'watchdog-strict' },
-                t('settings.rescue.watchdogStrict'),
-              ) : null,
-              watchdogRestoredFrom === '' ? null : h(
-                'span',
-                { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-rescue': 'watchdog-restored-from' },
-                t('settings.rescue.watchdogRestoredFrom', { dir: watchdogRestoredFrom }),
-              ),
-            ),
-            // The notice is shown ONCE: the Host remembers that the user has
-            // read it.
-            schedulerNotice
-              ? h(
-                  'div',
-                  { className: 'dsh-autorestart-settings__field' },
-                  h(
-                    'span',
-                    { className: 'dsh-autorestart-settings__label', 'data-dsh-autorestart-rescue': 'rollback-notice' },
-                    t('settings.rescue.rollbackBlocked'),
-                  ),
-                )
-              : null,
-            // The desktop shortcut is a BUTTON, never a side effect: loading
-            // this page writes nothing to the desktop. That button now lives in
-            // the block above, together with the icon and the two reminders.
           ),
           // "REPORT A PROBLEM": copy the diagnostics and open a pre-filled
           // issue page. The email is the way out when there is no GitHub
@@ -9519,112 +8804,6 @@
        * plugin names (they are things like \`batches\`, not plugins).
        */
 
-      /**
-       * ASK ONCE WHETHER THE WATCHDOG STAYS ON.
-       *
-       * The watchdog already works; what was missing is that nobody ever asked.
-       * The wording says what it DOES (put the last working version back when the
-       * new one does not start) and what turning it off COSTS (you fix it by
-       * hand), because the person reading this is not a programmer.
-       *
-       * The decision is made on the host by shouldAskWatchdog() and arrives as
-       * info.watchdogAsk; this panel only renders it.
-       * Hidden unless the host says it is time to ask: never answered, or the
-       * plugin changed version since the answer.
-       */
-      function WatchdogAskPanel() {
-        const info = useSharedInfo(true)
-        const [busy, setBusy] = useState('')
-        const [answered, setAnswered] = useState(null)
-        const t = makeTranslate(translate)
-        ensureAnnouncementStyle()
-
-        // Nothing to ask: no answer yet is not the same as "we should ask".
-        // The host decides, and it only says yes when there is no answer or the
-        // plugin changed version since the last one.
-        if (answered === 'dismissed') return null
-        if (info === null || info === undefined || info.watchdogAsk !== true) return null
-
-        const answer = (keepOn) => {
-          // THE BUTTON NO LONGER ANSWERS A QUESTION, IT ACKNOWLEDGES A NOTICE
-          // (2026-11-01, user decision): the watchdog ships with the plugin, so
-          // "should it stay on?" was a choice the user does not actually have.
-          // The single button records "the user was told" and nothing else.
-          if (busy !== '') return
-          setBusy('notify')
-          void (async () => {
-            // "SAVED" IS A PROMISE, NOT A GUESS. The request is a success only
-            // when the host really answered 2xx: a 400 or a dead connection means
-            // NOTHING was written, and saying "saved" then would leave the user
-            // believing a record that does not exist on disk.
-            let saved = false
-            try {
-              const response = await fetch(choiceUrlFor(info), {
-                method: 'POST',
-                headers: { 'content-type': 'application/json' },
-                body: JSON.stringify({
-                  watchdogNotified: true,
-                  askedForPluginVersion: typeof info.pluginVersion === 'string' ? info.pluginVersion : '',
-                }),
-              })
-              saved = response !== null && response !== undefined && response.ok === true
-            } catch {
-              saved = false
-            }
-            setAnswered(saved === true ? 'notified' : 'failed')
-            setBusy('')
-          })()
-        }
-
-        /**
-         * PUT EVERY BROKEN PLUGIN BACK, one at a time, never in parallel: the host
-         * writes into the profile, and two restores racing on the same tree is not
-         * worth the risk. Each plugin is awaited before the next one starts.
-         */
-        const restoreAll = (entries) => {
-          if (busy !== '') return
-          setBusy('all')
-          setNote('')
-          void (async () => {
-            let done = 0
-            let failed = 0
-            for (const entry of entries) {
-              try {
-                const answer = await restorePluginOnce(entry.name)
-                if (answer && answer.ok === true) done += 1
-                else failed += 1
-              } catch {
-                failed += 1
-              }
-            }
-            setNote(fill(t('pluginFailure.restoreAllDone'), { done: String(done), failed: String(failed) }))
-            setBusy('')
-          })()
-        }
-
-        const rows = []
-        rows.push(h('p', { className: 'dsh-autorestart-announcement__note', key: 'title' }, t('watchdog.title')))
-        rows.push(h('p', { className: 'dsh-autorestart-announcement__line', key: 'explain' }, t('watchdog.explain')))
-        rows.push(h('p', { className: 'dsh-autorestart-announcement__note', key: 'off' }, t('watchdog.whereOff')))
-        if (answered !== null) {
-          rows.push(h('p', {
-            className: 'dsh-autorestart-announcement__note',
-            key: 'saved',
-          }, t(answered === 'failed' ? 'watchdog.saveFailed' : 'watchdog.noticeSaved')))
-        }
-        // ONE BUTTON, BECAUSE THERE IS NO CHOICE TO MAKE: the watchdog ships with
-        // the plugin. Turning it off is a settings-page decision, not a question
-        // asked once at install time.
-        rows.push(h('button', {
-          type: 'button',
-          className: 'dsh-autorestart-announcement__cta',
-          key: 'got-it',
-          disabled: busy !== '',
-          onClick: () => answer(true),
-        }, t('watchdog.gotIt')))
-        rows.push(overlayHint(t('watchdog.hint')))
-        return overlayCard('watchdog-ask', t('watchdog.title'), () => setAnswered('dismissed'), rows)
-      }
 
       /**
        * THE FLOATING CARD.
@@ -10149,7 +9328,7 @@
           ctx.slots.inject('shell.overlay', () => ctx.slots.register({ name: 'shell.overlay', id: 'autorestart-restart-overlay', order: 55, locale: NS }, RestartOverlay))
           // THESE TWO COME LAST ON PURPOSE: the countdown and the restart notice are
           // registered above, and the slot service keeps registrations in call order.
-          // The plugin-failure and watchdog cards join them in the same floating layer.
+          // The plugin-failure card joins them in the same floating layer.
       // THE DOCK, ON PURPOSE (2026-11-01). These two cards were registered on
       // `shell.overlay` first, and on the real machine NOTHING rendered at all -
       // not even the diagnostic skeleton - so that slot never reached this plugin.
@@ -10157,7 +9336,6 @@
       // The card is taken OUT of the layout flow by its own `position: fixed`, so
       // it floats in the corner instead of pushing the conversation up.
       ctx.slots.inject('shell.overlay', () => ctx.slots.register({ name: 'shell.overlay', id: 'autorestart-plugin-failure', order: 9, label: () => 'dsh-autorestart', locale: NS }, PluginFailurePanel))
-      ctx.slots.inject('shell.overlay', () => ctx.slots.register({ name: 'shell.overlay', id: 'autorestart-watchdog-ask', order: 8, label: () => 'dsh-autorestart', locale: NS }, WatchdogAskPanel))
       // THE SETTINGS PAGE lives on its OWN slot, keyed to this package.
       // Name + key + locale is exactly how dsh-mnemon registers there.
       ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({ name: 'plugins.bundle.config', key: 'dsh-autorestart', locale: NS }, SettingsPanel))

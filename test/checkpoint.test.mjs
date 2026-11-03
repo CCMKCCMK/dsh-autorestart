@@ -54,6 +54,10 @@ test('createEmptyState has the documented defaults', () => {
     seenFeatureVersions: {},
     onboarding: null,
     sleep: null,
+    // 2026-11-03 (t72/t73): the profile directory this host booted with, as a
+    // FACT. The key was added by the fix, so THIS expectation follows the
+    // change - it is not a regression.
+    profileDir: null,
     updatedAt: now,
   });
 });

@@ -129,6 +129,7 @@ import {
   writeAccessRecord,
 } from './lib/access.js'
 import {
+  detectInitSystems,
   detectSupervisor,
   installSupervisor,
   planSupervisorInstall,
@@ -139,64 +140,7 @@ import {
   uninstallSupervisor,
   writeRollbackRequest,
 } from './lib/supervisor.js'
-import { composeFragment, detectInitSystems } from './lib/supervisor-install.js'
 import { classifyStartup } from './lib/startup-mode.js'
-import {
-  createDesktopShortcut,
-  desktopDir,
-  ensureShortcutIcon,
-  rescueInfo,
-  rescueScriptPaths,
-  syncShortcutIcon,
-} from './lib/rescue-paths.js'
-import {
-  emptyCapabilities,
-  isCapabilities,
-  markSchedulerWarned,
-  probeSchedulerCapability,
-  SCHEDULER_OK,
-  SCHEDULER_UNKNOWN,
-  shouldWarnScheduler,
-} from './lib/scheduler-capability.js'
-import {
-  detectWatchdogCapabilities,
-  tierProvidesRollback,
-  tierWithProof,
-  TIERS,
-} from './lib/watchdog-tier.js'
-import {
-  buildPending,
-  clearPending,
-  clearReady,
-  DEFAULT_MAX_ATTEMPTS,
-  readPending,
-  readReport,
-  recordDisarmOutcome,
-  selectRestoreTarget,
-  writePending,
-  writeReport,
-} from './lib/watchdog.js'
-import {
-  disarmWatchdog as runDisarmWatchdog,
-  markReady,
-  readDisarmRecord,
-} from './lib/watchdog-disarm.js'
-import {
-  ARBITERS,
-  planWatchdogArbiter,
-} from './lib/watchdog-arbiter.js'
-import {
-  armSystemdWatchdog,
-  buildWatchdogTaskCommand,
-  cleanupSystemdUnit,
-  describeArmResult,
-  detachedPidPath,
-  localIso,
-  quoteArgv,
-  registerDetachedProcess,
-  registerScheduledTask,
-  removeScheduledTask,
-} from './lib/watchdog-schedule.js'
 import { detectHostKind } from './lib/host-kind.js'
 import { planAutostartAdvice } from './lib/autostart-advice.js'
 import { buildDiagnostics, ISSUE_URL_BASE, SUPPORT_EMAIL } from './lib/diagnostics.js'
@@ -244,7 +188,6 @@ import {
   writeRecoveryReport,
   writeRecoveryState,
 } from './lib/plugin-recover.js'
-import { dshHomeDir } from './lib/rescue.js'
 import {
   buildCustomCommand,
   buildWatchScript,
@@ -476,7 +419,7 @@ function snapGraceChoice(value, fallback = DEFAULT_RESTART_GRACE_MS) {
  * `pluginVersion()`), but a bundled installation may not ship that file — so
  * the constant below is the last resort. A test keeps the two in sync.
  */
-const PLUGIN_VERSION_FALLBACK = '0.8.6'
+const PLUGIN_VERSION_FALLBACK = '0.9.0'
 
 /**
  * The version of the graceful-shutdown FEATURE, not the version of the package.
@@ -767,11 +710,11 @@ function buildConfigSchema() {
         .description('Milliseconds between two resolveAgent attempts inside one boot.'),
       // pre-restart snapshot + automatic rollback when the host never comes back
       backupOnRestart: schemastery.boolean().default(true)
-        .description('Take a snapshot of the profile before every restart, so a host that cannot boot again is rolled back automatically.'),
+        .description('Take a snapshot of the profile configuration before every restart, so you always have a copy to roll back to by hand.'),
       // include the installed plugin tree in the snapshot (bigger, but it makes a
       // rollback of "a plugin upgrade broke the boot" possible)
       backupIncludePlugins: schemastery.boolean().default(true)
-        .description('Include the installed plugin tree in that snapshot: about 117 MB and roughly 3 extra seconds, but it is what makes a rollback of a broken plugin upgrade possible.'),
+        .description('Include the installed plugin tree in that snapshot: about 117 MB and roughly 3 extra seconds, so a broken plugin upgrade can be rolled back by hand as well.'),
       watchEnabled: schemastery.boolean().default(true)
         .description('After boot, record what the loaded plugins provide and compare it with the previous record'),
       watchDelayMs: schemastery.number().step(1).min(0).default(8000)
@@ -788,12 +731,6 @@ function buildConfigSchema() {
         .description('How many snapshots are kept (2 by default, 2 to 10 allowed). Older ones are deleted automatically, except the newest one and the one whose restart record says the instance came up with matching content; the first-install snapshot is kept only while there is room.'),
       rollbackTimeoutMs: schemastery.number().min(1000).default(90000)
         .description('Milliseconds the detached watcher waits for the relaunched host before it restores the snapshot.'),
-      // The watchdog: the process that waits for the relaunched host and puts
-      // the snapshot back when it never answers. It has to be triggered
-      // LATER, and the machine decides how (a one-off scheduled task, a
-      // systemd timer, or a detached process of our own).
-      watchdogEnabled: schemastery.boolean().default(true)
-        .description('Whether the watchdog may be armed before a restart: it waits for the new host and puts the snapshot back when it never answers. With it off there is no automatic rollback at all.'),
       // The self-starting supervisor: a separate process that brings the host
       // back when it dies. See the "开机自启" section of the settings.
       supervisorMode: schemastery.union(['auto', 'installed', 'external', 'off']).default('auto')
@@ -881,11 +818,6 @@ const DEFAULTS = {
   // only what is NO LONGER there - a new plugin is not news.
   watchEnabled: true,
   watchDelayMs: 8000,
-  // The WATCHDOG: the process that waits for the relaunched host and puts the
-  // snapshot back when it never answers. It needs a way to be triggered
-  // later (a scheduled task, a systemd timer, a detached process) — the
-  // machine decides which one, and the settings page says which.
-  watchdogEnabled: true,
   rollbackTimeoutMs: 90000,
   // How long the restart command may run before the plugin stops waiting for
   // it, and how long ONE restore step may take before the watcher gives up.
@@ -1580,13 +1512,6 @@ function readInstallChoice(stateDir) {
         ? parsed.sleepCountdownSeconds
         : null,
       restartGraceMs: typeof parsed.restartGraceMs === 'number' ? parsed.restartGraceMs : null,
-      // THE WATCHDOG QUESTION (2026-11-01): the user's own answer, and the plugin
-      // version they answered it for. null = never asked, and never asked means ON.
-      // THE WATCHDOG NOTICE (2026-11-01, user decision): the popup only INFORMS.
-      // `watchdog` therefore stays whatever it was (normally `null`), and
-      // `watchdogNotified` is the marker that stops it from reappearing.
-      watchdog: typeof parsed.watchdog === 'boolean' ? parsed.watchdog : null,
-      watchdogNotified: parsed.watchdogNotified === true,
       askedForPluginVersion: typeof parsed.askedForPluginVersion === 'string'
         ? parsed.askedForPluginVersion
         : null,
@@ -1614,8 +1539,6 @@ function writeInstallChoice(stateDir, values) {
     showSleepButton: null,
     sleepCountdownSeconds: null,
     restartGraceMs: null,
-    watchdog: null,
-    watchdogNotified: false,
     askedForPluginVersion: null,
   }
   const payload = {
@@ -1628,11 +1551,6 @@ function writeInstallChoice(stateDir, values) {
     restartGraceMs: typeof values.restartGraceMs === 'number'
       ? values.restartGraceMs
       : current.restartGraceMs,
-    watchdog: typeof values.watchdog === 'boolean' ? values.watchdog : current.watchdog,
-    // "THE USER WAS TOLD" is recorded separately from "the user ANSWERED":
-    // the popup only informs now, so `watchdog` must stay untouched (null) while
-    // this marker stops the notice from coming back.
-    watchdogNotified: values.watchdogNotified === true ? true : current.watchdogNotified === true,
     askedForPluginVersion: typeof values.askedForPluginVersion === 'string'
       ? values.askedForPluginVersion
       : current.askedForPluginVersion,
@@ -1653,56 +1571,6 @@ function pluginVersionNow() {
   } catch {
     return ''
   }
-}
-
-/**
- * May the watchdog be armed right now?
- *
- * Three inputs, in this order:
- *   1. the config file: `watchdogEnabled: false` is somebody editing the file on
- *      purpose, and it always wins;
- *   2. the answer the user gave to the question: `watchdog: false` means "no";
- *   3. otherwise ON. A fresh profile has no answer recorded, and "never asked"
- *      must never quietly turn a rescue feature off.
- */
-function watchdogAllowed(stateDir, config) {
-  if (config && config.watchdogEnabled === false) return false
-  const choice = typeof stateDir === 'string' && stateDir !== '' ? readInstallChoice(stateDir) : null
-  if (choice !== null && choice.watchdog === false) return false
-  return true
-}
-
-/**
- * Should the watchdog question be asked on this boot?
- *
- * ASKED ONCE PER PROFILE (user decision, 2026-11-01). The only thing that
- * decides is whether the user has EVER answered: a recorded `watchdog: true`
- * or `watchdog: false` means the question is over, for good, whatever the
- * plugin version is.
- *
- * WHY THE VERSION CHECK IS GONE: this used to ask again on every release,
- * because `askedForPluginVersion` remembered the version the answer was given
- * for and a newer version was treated as a new question. Being asked the same
- * yes/no on every upgrade is a nuisance rather than a decision, and the answer
- * a user gave once — including "no" — is their answer, not a default to re-open.
- * `askedForPluginVersion` is still RECORDED (it is worth knowing when the
- * question was answered), but it no longer takes part in this decision.
- *
- * @param {string} stateDir
- */
-function shouldAskWatchdog(stateDir) {
-  const choice = typeof stateDir === 'string' && stateDir !== '' ? readInstallChoice(stateDir) : null
-  // No file at all: a fresh profile, nothing was ever asked.
-  if (choice === null) return true
-  // THE NOTICE WAS ALREADY SHOWN (2026-11-01, user decision): the popup only
-  // informs now — "you were told" is the end of it, and it is a marker of its own
-  // (`watchdogNotified`), so telling the user something never turns the watchdog
-  // off and never pretends they answered a question nobody asked.
-  if (choice.watchdogNotified === true) return false
-  // `null` here means "no answer recorded" — either no file, or a file written
-  // by a build that did not know this question yet. `true`/`false` is an answer
-  // from the older two-button prompt, and it still counts as "already dealt with".
-  return choice.watchdog === null
 }
 
 
@@ -1833,6 +1701,16 @@ function resolveProfileDirDetailed() {
     const matches = []
     for (const entry of fs.readdirSync(profilesDir, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue
+      // THE RESCUE'S OWN LEFTOVERS ARE NOT CANDIDATES (measured on the real
+      // desktop profile, 2026-11-03): `restore-profile` and the rollback path
+      // keep the profile they replaced as `<name>.broken-<stamp>` by design, and
+      // every one of those still carries a package.json that lists this plugin.
+      // Counting them turned "which profile am I" into `ambiguous` for anyone who
+      // had ever been rescued - and an ambiguous answer means the watchdog cannot
+      // arm at all (`armOutcome: failed`, "there is no profile directory to
+      // restore into"). With the two leftovers moved out of `profiles/`, the same
+      // build armed immediately (tier scheduled-task, arbiter v2).
+      if (entry.name.includes('.broken-') || entry.name.includes('.partial-')) continue
       const candidate = path.join(profilesDir, entry.name)
       try {
         const manifest = JSON.parse(fs.readFileSync(path.join(candidate, 'package.json'), 'utf8'))
@@ -2553,100 +2431,6 @@ function findOwnEntry(editor) {
 }
 
 /**
- * WHAT THE WATCHDOG TASK RUNS: a resolved node interpreter + the script.
- *
- * WHY THIS IS A FUNCTION OF ITS OWN (the 2026-10-30 incident):
- *
- * The arming code used to build the command itself:
- *
- *   '"' + process.execPath + '" "' + script + '" --state-dir "' + stateDir + '"'
- *
- * In the DESKTOP app `process.execPath` is `DeepSeek Harness.exe` — the Electron
- * client — so the one-off task started a WHOLE SECOND CLIENT instead of the
- * watchdog, and the watchdog never ran at all. `buildWatchdogTaskCommand` (t9)
- * resolves a REAL node (never the application executable) and answers with a
- * refusal + reason when there is none; this wrapper adds the two things the
- * caller needs:
- *
- *   - `{ok:false, reason}` — the arming MUST refuse, never fall back to the exe;
- *   - a quoted `commandLine` for the tiers that hand a command line to a shell
- *     (`registerDetachedProcess` builds `sh -c 'sleep N; <command>'`), while the
- *     task/scheduler tiers take `{file, args}` / `[file, ...args]` so NO shell
- *     is involved and no quote can be eaten.
- *
- * @param {{
- *   scriptPath?: string, stateDir?: string, execPath?: string,
- *   platform?: string, env?: object, existsSyncFn?: Function,
- * }} [options]
- * @returns {{
- *   ok: boolean, file: string, args: string[], commandLine: string,
- *   reason: string, tried: string[],
- * }}
- */
-export function planWatchdogArmCommand(options = {}) {
-  const scriptPath = typeof options.scriptPath === 'string' ? options.scriptPath : ''
-  const stateDir = typeof options.stateDir === 'string' ? options.stateDir : ''
-  const planned = buildWatchdogTaskCommand({
-    scriptPath,
-    args: ['--state-dir', stateDir],
-    execPath: typeof options.execPath === 'string' && options.execPath !== '' ? options.execPath : process.execPath,
-    platform: typeof options.platform === 'string' ? options.platform : process.platform,
-    env: options.env && typeof options.env === 'object' ? options.env : process.env,
-    existsSyncFn: options.existsSyncFn,
-  })
-  if (planned.ok !== true) {
-    return {
-      ok: false,
-      file: '',
-      args: [],
-      commandLine: '',
-      reason: planned.reason || 'no node interpreter was found for the watchdog',
-      tried: Array.isArray(planned.tried) ? planned.tried : [],
-    }
-  }
-  const args = Array.isArray(planned.args) ? planned.args.map((entry) => String(entry)) : []
-  return {
-    ok: true,
-    file: planned.file,
-    args,
-    commandLine: quoteArgv([planned.file, ...args]),
-    reason: '',
-    tried: Array.isArray(planned.tried) ? planned.tried : [],
-  }
-}
-
-/**
- * THE MARKERS OF ONE RESTART, written in the one order that is safe.
- *
- * A ready marker is the RECEIPT OF ONE RESTART, not a fact about the machine.
- * On 2026-11-01 (hosted web instance, port 5601) a restart was asked with a
- * broken profile, the host never came up — and the `watchdog-ready.json` of the
- * PREVIOUS boot was still on disk: written 09:54:21, while this restart's
- * pending marker was written at 09:57:10. The watchdog read "there is a ready
- * marker", concluded "the host is up", waited 0 ms and reported
- * `{ result: 'not-needed', ready: true, restored: false, relaunched: false,
- * attempts: 0 }` while nothing listened on 5601 for more than two minutes.
- *
- * So the ready marker of the earlier boot is removed BEFORE the marker of this
- * restart is written: from the moment the watchdog can see a pending marker,
- * the only ready marker it can see is one written after it. `clearReady` was
- * imported for exactly this and had no caller — a defined-but-never-called
- * helper is not a guard, it is a comment.
- *
- * Both writes are synchronous and back to back on purpose: no watchdog can run
- * between them and see "new pending marker + old ready marker".
- *
- * @param {string} stateDir
- * @param {object} pending the marker of THIS restart (see buildPending)
- * @returns {object} the marker that was written
- */
-export function writeRestartPending(stateDir, pending) {
-  clearReady(stateDir)
-  writePending(stateDir, pending)
-  return pending
-}
-
-/**
  * THE FATE OF THE LAST RESTART REQUEST — one durable record, one vocabulary.
  *
  * WHY THIS EXISTS (real-host report, hosted `dsh web` on WSL/5601): `POST /park`
@@ -3004,13 +2788,6 @@ export function createRuntime(ctx, config, options = {}) {
   const probeInstanceFn = typeof options.probeInstance === 'function'
     ? options.probeInstance
     : waitForHealthyInstance
-  // The NEW watchdog (v2). It is injected so a test can decide who is the
-  // arbiter of the restart WITHOUT registering anything on the machine.
-  // (The fallback is a wrapper: `armWatchdog` is declared further down, so it
-  // must not be READ here.)
-  const armWatchdogFn = typeof options.armWatchdog === 'function'
-    ? options.armWatchdog
-    : (...args) => armWatchdog(...args)
   const stateFile = resolveStateFile(config)
 
   const loaded = readState(stateFile, Date.now())
@@ -3043,17 +2820,6 @@ export function createRuntime(ctx, config, options = {}) {
   let disposed = false
   let lastPersistError
   /**
-   * THE LAST DISARM of the watchdog: the record of "the host is up, so nothing
-   * may roll it back" (see lib/watchdog-disarm.js). It is kept on `runtime` so
-   * the settings page and the diagnostics can show a FAILED disarm instead of
-   * the silence that caused the 0.8.2 incident.
-   */
-  let watchdogDisarm = readDisarmRecord(path.dirname(stateFile))
-  /** The disarm that is currently running (one at a time; null when idle). */
-  let disarmInFlight = null
-  /** A disarm was asked for while one was running: run once more afterwards. */
-  let disarmPendingAgain = false
-  /**
    * The tool registrations that failed. A failed registration is recorded and
    * logged, never thrown: the plugin still loads and the other tools still work.
    */
@@ -3067,7 +2833,7 @@ export function createRuntime(ctx, config, options = {}) {
 
   const persist = () => {
     try {
-      writeState(stateFile, state, Date.now())
+      writeState(stateFile, writeProfileDirFact(state, resolveProfileDirDetailed(), Date.now()), Date.now())
       lastPersistError = undefined
     } catch (error) {
       if (lastPersistError !== String(error)) {
@@ -4188,11 +3954,11 @@ const titleOfSummary = (item) => {
   }
 
   /**
-   * Watchdog for a scheduled restart. If this process is still alive after the
+   * Recovery timer for a scheduled restart. If this process is still alive after the
    * helper's delay, the helper refused to kill (the idle gate denied it): roll back
    * to 'deferred' and poll again instead of leaving the phase stuck at 'restarting'.
    */
-  const armGateWatchdog = () => {
+  const armGateRecoveryTimer = () => {
     try {
       ctx.timeout(() => {
         if (disposed || !state.restart || state.phase !== 'restarting') return
@@ -4207,7 +3973,7 @@ const titleOfSummary = (item) => {
         })
         recordRestartRequestFate(RESTART_REQUEST_STATES.DEFERRED, {
           reason: 'the detached helper denied the idle gate (the request is kept)',
-          by: 'gate-watchdog',
+          by: 'gate-recovery',
           extra: { gateAborts: aborts },
         })
         setPhase(state, 'deferred')
@@ -4220,7 +3986,7 @@ const titleOfSummary = (item) => {
         startPolling()
       }, Math.max(1000, (config.relaunchDelaySeconds + 20) * 1000))
     } catch (error) {
-      log.warn('could not arm the restart gate watchdog:', String(error))
+      log.warn('could not arm the restart gate recovery timer:', String(error))
     }
   }
 
@@ -5134,48 +4900,6 @@ const titleOfSummary = (item) => {
   }
 
   /**
-   * WHERE THE RESCUE SCRIPTS ARE.
-   *
-   * The rescue kit is for everybody who installed the plugin: when DSH does
-   * not come up, the user cannot read a README — they need the path, and they
-   * need to be able to copy it. The browser cannot read the disk, so the Host
-   * resolves it: the plugin directory is where THIS file lives, and the
-   * scripts sit next to it.
-   *
-   * @returns {object}
-   */
-  const rescueKitInfo = () => rescueInfo({
-    pluginDir: PLUGIN_DIR,
-    env: process.env,
-    platform: env.platform,
-    exists: (target) => fs.existsSync(target),
-    // THE ICON OF THE SHORTCUT IS THE PLUGIN'S OWN (user decision, 2026-11-02).
-    //
-    // It used to be `env.appExePath` — DSH's executable — and that was wrong in
-    // the one moment it matters: a user looking at the desktop for a way out of
-    // a broken host saw a file with DSH's own face on it, which reads as "this
-    // is the program", not "this is the rescue tool". So the host executable is
-    // NOT passed here at all any more: `rescueInfo` resolves the plugin's own
-    // icon (`assets/icon.ico`) from the plugin directory, and when this install
-    // ships none the answer is "no icon" — never the wrong face.
-    //
-    // NO FALLBACK TO THE EXECUTABLE. The icon is either in the package or absent.
-    //
-    // AND IT IS HANDED TO THE SHORTCUT AS A FRESH COPY, NOT AS THE ASSET PATH
-    // (user report, 2026-11-02: "still no icon", after the asset itself was fixed).
-    // Measured on the real machine: the shipped `.ico` is correct — GDI+ decodes it
-    // to the artwork, and a `.lnk` naming a COPY of those exact bytes draws the
-    // mark — yet the SAME BYTES read from `…/plugins/dsh-autorestart/assets/…`
-    // drew a solid block, on a path that had never been used before. Explorer
-    // serves an icon it has already drawn for a path, and rebuilding the `.lnk`
-    // (rewriting it, deleting and recreating it) does not change that. So the
-    // shortcut gets a file the shell has never seen: a content-addressed copy in
-    // this plugin's own state directory. A new build is a new name, which is a
-    // new cache entry — and the page and the `.lnk` still name ONE file.
-    iconTransform: (icon) => ensureShortcutIcon({ sourceIcon: icon, stateDir: stateDirOf() }),
-  })
-
-  /**
    * THE LAST COOKIE CLEANUP, as the health route and the settings page see it.
    *
    * WHY IT IS A RECORD AND NOT A COUNT. The stale `dsh-auth-*` cookies are what
@@ -5199,293 +4923,6 @@ const titleOfSummary = (item) => {
   }
 
   /**
-   * THE CAPABILITIES of this machine: can it create a one-off scheduled
-   * task?
-   *
-   * The automatic rollback hangs on that answer: the host is restarted and a
-   * task that fires a minute later brings it back if it did not come up. On a
-   * machine where such a task cannot be created the safety net is silently
-   * missing — so the user is told what they lose.
-   *
-   * The answer is checked ONCE — the first time the plugin runs here — and
-   * then kept in a file of its own next to the state. It is NOT checked when
-   * the settings page opens: that would register a task every time somebody
-   * looks at the page.
-   *
-   * A failure of the probe is NEVER a failure of the plugin: the plugin
-   * works, only the safety net may be missing.
-   *
-   * @returns {object} the capabilities record
-   */
-  const capabilitiesInfo = () => {
-    const file = path.join(stateDirOf(), 'capabilities.json')
-    const stored = readCapabilitiesRecord(file)
-    if (stored) return stored
-    let checked
-    try {
-      checked = probeSchedulerCapability({ platform: env.platform })
-    } catch (error) {
-      checked = { scheduler: SCHEDULER_UNKNOWN, checkedAt: Date.now(), evidence: { error: String(error) } }
-    }
-    // The tier is decided by ONE function (lib/watchdog-tier.js), so the
-    // warning in the settings page and the watchdog that is really registered
-    // cannot drift apart.
-    let picked = { tier: TIERS.NONE, reason: 'this machine was not checked yet' }
-    try {
-      const caps = detectWatchdogCapabilities({ platform: env.platform })
-      picked = tierWithProof({
-        platform: env.platform,
-        // ONLY `ok` IS A PROOF (2026-11-02). `not-applicable` (a non-Windows
-        // machine: there is no one-off scheduled task to probe) must never count
-        // as "the scheduler works" — that green tick was the lie this removes.
-        probeOk: checked.scheduler === SCHEDULER_OK,
-        hasSystemdRun: caps.hasSystemdRun,
-        hasAt: caps.hasAt,
-        canDetach: caps.canDetach,
-      })
-    } catch (error) {
-      picked = { tier: TIERS.NONE, reason: 'the machine could not be checked: ' + String(error) }
-    }
-    const record = { ...emptyCapabilities(), ...checked, tier: picked.tier, tierReason: picked.reason }
-    // The warning is only for the TRANSITION into blocked: a machine that was
-    // blocked and stays blocked does not nag.
-    if (shouldWarnScheduler(emptyCapabilities(), record) && !tierProvidesRollback(picked.tier)) {
-      runtime.log.warn('this machine cannot run the watchdog: the automatic rollback is not available')
-    }
-    writeCapabilitiesRecord(file, record)
-    return record
-  }
-
-  /**
-   * THE WATCHDOG: which tier this machine uses, and what the last run did.
-   *
-   * @returns {{ enabled: boolean, tier: string, tierReason: string, available: boolean, report: object|null }}
-   */
-  const watchdogInfo = () => {
-    const capabilities = capabilitiesInfo()
-    const tier = typeof capabilities.tier === 'string' && capabilities.tier !== ''
-      ? capabilities.tier
-      : TIERS.NONE
-    const report = readReport(stateDirOf())
-    return {
-      // Read the user's ANSWER, not just the written default: 'no' means no.
-      enabled: watchdogAllowed(stateDirOf(), config),
-      tier,
-      tierReason: typeof capabilities.tierReason === 'string' ? capabilities.tierReason : '',
-      available: tierProvidesRollback(tier),
-      report,
-    }
-  }
-
-  /**
-   * The capabilities with the warning marked as seen (the user read it).
-   *
-   * @returns {object}
-   */
-  const acknowledgeSchedulerWarning = () => {
-    const file = path.join(stateDirOf(), 'capabilities.json')
-    const stored = readCapabilitiesRecord(file) || { ...emptyCapabilities() }
-    const marked = markSchedulerWarned(stored)
-    writeCapabilitiesRecord(file, marked)
-    return marked
-  }
-
-  /**
-   * ARM THE WATCHDOG: the one-off thing that waits for the relaunched host.
-   *
-   * The tier is decided by ONE function (lib/watchdog-tier.js) — the same one
-   * that the settings page and the diagnostics ask — so the warning and the
-   * behaviour cannot drift apart. When no tier is available NOTHING is
-   * registered: there is no watchdog, and the report says so.
-   *
-   * WHERE IT MAY RESTORE FROM is decided BEFORE this call (`selectRestoreTarget`
-   * over the certified copies) and handed over as `restoreTargetDir`. When that
-   * selection found nothing, `restoreBlocked` is true together with the reason
-   * and the refused copies — the watchdog is still armed in that case, because a
-   * run that reports "there is no trusted restore point, handle it manually" is
-   * worth more than a run that never happens.
-   *
-   * @param {{
-   *   restoreTargetDir?: string,
-   *   snapshotDir?: string,
-   *   restoreBlocked?: boolean,
-   *   restoreBlockedReason?: string,
-   *   restoreCandidates?: Array<object>|null,
-   *   profileDir?: string|null,
-   *   relaunchCommand?: object|null,
-   *   healthUrl?: string,
-   *   portFile?: string,
-   *   expectedBootId?: string|null,
-   * }} options
-   * @returns {{ ok: boolean, tier: string, reason: string, error: string|null }}
-   */
-  const armWatchdog = ({
-    restoreTargetDir = '',
-    snapshotDir = '',
-    restoreBlocked = false,
-    restoreBlockedReason = '',
-    restoreCandidates = null,
-    profileDir = null,
-    relaunchCommand = null,
-    healthUrl = '',
-    portFile = '',
-    expectedBootId = null,
-  } = {}) => {
-    const stateDir = stateDirOf()
-    const target = typeof restoreTargetDir === 'string' && restoreTargetDir !== '' ? restoreTargetDir : snapshotDir
-    if (watchdogAllowed(stateDir, config) !== true) {
-      return { ok: false, tier: TIERS.NONE, reason: 'the watchdog is switched off', error: null }
-    }
-    if (profileDir === null) {
-      return { ok: false, tier: TIERS.NONE, reason: 'there is no profile directory to restore into', error: null }
-    }
-    const info = watchdogInfo()
-    if (info.tier === TIERS.NONE) {
-      return { ok: false, tier: TIERS.NONE, reason: info.tierReason || 'this machine cannot run the watchdog', error: null }
-    }
-    const timeoutMs = Number(config.rollbackTimeoutMs) > 0 ? Number(config.rollbackTimeoutMs) : 180000
-    // ONE name for the scheduling item: a new registration replaces the old
-    // one, and there is never more than one of them on the machine.
-    const taskName = 'dsh-autorestart-watchdog'
-    const unitId = 'dsh-autorestart-watchdog'
-    const pidPath = detachedPidPath(stateDir)
-    // THE COMMAND IS PLANNED, NOT CONCATENATED. `process.execPath` is the
-    // Electron client in the desktop app, and a task that starts the client is
-    // not a watchdog (2026-10-30). With no real node there is NO task at all:
-    // the arming refuses and says why — it never falls back to the exe.
-    const scriptPath = path.join(PLUGIN_DIR, 'scripts', 'watchdog.mjs')
-    const armCommand = planWatchdogArmCommand({
-      scriptPath,
-      stateDir,
-      execPath: env.execPath && typeof env.execPath === 'string' ? env.execPath : process.execPath,
-      platform: env.platform,
-      env: process.env,
-    })
-    if (armCommand.ok !== true) {
-      const reason = 'the watchdog was not armed: no node interpreter could be resolved ('
-        + String(armCommand.reason) + ')'
-      log.warn(reason)
-      return { ok: false, tier: info.tier, reason: info.tierReason, error: reason }
-    }
-    const pending = buildPending({
-      tier: info.tier,
-      tierReason: info.tierReason,
-      taskName,
-      unitId,
-      pidPath,
-      restoreTargetDir: target,
-      restoreBlocked: restoreBlocked === true || target === '',
-      restoreBlockedReason,
-      restoreCandidates,
-      profileDir,
-      relaunchCommand,
-      healthUrl,
-      healthPath: resolveHealthPath(config),
-      portFile,
-      expectedBootId,
-      timeoutMs,
-      recheckMs: 20000,
-      readyTimeoutMs: 90000,
-      // THE PASS IS BOUNDED (t9): the attempt loop of the watchdog reads this
-      // from the marker, and a marker without it silently means "3". Writing it
-      // here keeps the number visible in the file the operator reads.
-      maxAttempts: DEFAULT_MAX_ATTEMPTS,
-      hostKind: hostKindOf().kind,
-      now: Date.now(),
-    })
-    // THE READY MARKER OF THE EARLIER BOOT GOES FIRST (2026-11-01 blocker).
-    // The watchdog of this restart must not be able to read a marker written
-    // before this restart's own pending marker: that is exactly how the hosted
-    // instance on 5601 was called "up" 2m49s after its own marker had been
-    // written and nothing was restored or started for over two minutes.
-    writeRestartPending(stateDir, pending)
-
-    let registered = { ok: false, error: 'the watchdog was not registered' }
-    try {
-      if (info.tier === TIERS.SCHEDULED_TASK) {
-        const start = new Date(Date.now() + Math.ceil(timeoutMs / 1000) * 1000);
-        const end = new Date(start.getTime() + 30 * 60 * 1000);
-        // `{file, args}`: the XML carries the program and its arguments in
-        // separate elements, so no shell and no quote stripping is involved.
-        registered = registerScheduledTask({
-          taskName,
-          startIso: localIso(start),
-          endIso: localIso(end),
-          command: { file: armCommand.file, args: armCommand.args },
-          xmlPath: path.join(stateDir, 'watchdog-task.xml'),
-        });
-      } else if (info.tier === TIERS.SYSTEMD_RUN) {
-        // THE LEFTOVER OF AN EARLIER RUN IS STOPPED, NOT "RESET" (hosted
-        // instance 5601, real systemd log): `reset-failed` only clears the
-        // failed STATE, so a timer that is still waiting keeps the name and the
-        // next `systemd-run --unit=…` is refused with "Unit … already exists".
-        // That refusal used to be the end of it: arm failed → v2Armed=false →
-        // the arbiter fell back to the old v1 watcher, and since nothing ever
-        // stopped the leftover, EVERY later arm failed the same way — one bad
-        // leftover degraded the watchdog for good. `armSystemdWatchdog` stops
-        // the units first, retries once after a forced cleanup, and reports
-        // which of the two saved it (or which step refused).
-        registered = armSystemdWatchdog({
-          unitId,
-          delaySeconds: Math.ceil(timeoutMs / 1000),
-          command: [armCommand.file, ...armCommand.args],
-        });
-      } else if (info.tier === TIERS.DETACHED_PROCESS) {
-        // This tier runs the command line inside `sh -c '…'`, so it gets the
-        // quoted one — built from the resolved interpreter, never from the exe.
-        registered = registerDetachedProcess({
-          delaySeconds: Math.ceil(timeoutMs / 1000),
-          command: armCommand.commandLine,
-          pidPath,
-        });
-      }
-    } catch (error) {
-      registered = { ok: false, error: error && error.message ? error.message : String(error) };
-    }
-    if (!registered || registered.ok !== true) {
-      // Nothing half-armed: the marker goes, and so does the scheduling item.
-      clearPending(stateDir);
-      let cleanupAfterFailure = null;
-      try {
-        if (info.tier === TIERS.SCHEDULED_TASK) cleanupAfterFailure = removeScheduledTask({ taskName });
-        else if (info.tier === TIERS.SYSTEMD_RUN) cleanupAfterFailure = cleanupSystemdUnit({ unitId });
-      } catch (error) {
-        // The next run cleans up — but the failure of THIS cleanup is recorded,
-        // because a silent cleanup is exactly how the leftover survived before.
-        cleanupAfterFailure = { ok: false, error: String(error) };
-      }
-      const reason = (registered && registered.error) || 'the watchdog could not be registered';
-      // WHAT THE FAILED ARMING LOOKED LIKE (cleanup / retry / which step): the
-      // caller writes it into the report, so "not armed" is never a bare
-      // sentence — an operator must be able to see WHY and WHAT stayed behind.
-      const armReport = describeArmResult(registered);
-      log.warn('the watchdog was not armed: ' + reason, {
-        armOutcome: armReport.armOutcome,
-        armDetail: armReport.armDetail,
-        residualUnits: armReport.armResidualUnits,
-        failedSteps: armReport.armFailedSteps,
-        cleanupAfterFailure,
-      });
-      return {
-        ok: false,
-        tier: info.tier,
-        reason: info.tierReason,
-        error: reason,
-        ...armReport,
-        cleanupAfterFailure,
-      };
-    }
-    const armReport = describeArmResult(registered);
-    log.warn('the watchdog is armed (' + info.tier + '): ' + info.tierReason, {
-      armOutcome: armReport.armOutcome,
-      armDetail: armReport.armDetail,
-      retried: armReport.armRetried,
-      cleanup: armReport.armCleanup,
-    });
-    return { ok: true, tier: info.tier, reason: info.tierReason, error: null, ...armReport };
-  }
-
-  /**
    * THE DIAGNOSTICS of "report a problem".
    *
    * One generator, on the host: the browser copies the text it gets, so the
@@ -5505,10 +4942,6 @@ const titleOfSummary = (item) => {
     restartMode: config.restartMode,
     lastRestart: lastRestartVerdict(),
     stateDir: stateDirOf(),
-    watchdog: watchdogInfo(),
-    // DID THE DISARM WORK? A failed disarm leaves an armed watchdog behind,
-    // and that is the first thing a bug report has to show.
-    watchdogDisarm: summarizeDisarm(watchdogDisarm),
   })
 
   /**
@@ -6084,53 +5517,6 @@ const titleOfSummary = (item) => {
     return { ok: true, method: result.method, error: null, scriptPath, verified: verification, pid }
   }
 
-  /**
-   * Say in the report WHO is watching this restart — and, when v2 could not be
-   * armed, WHY NOT.
-   *
-   * The v2 watchdog writes its own report when it acts. When v1 is the
-   * arbiter (v2 could not be armed), the host writes it right away — so
-   * `last-watchdog-report.json` always names the arbiter, and a problem can
-   * be read at a glance.
-   *
-   * The arming result travels with it (`armOutcome` / `armDetail` /
-   * `armResidualUnits` / `armFailedSteps`): a fallback to v1 that does not say
-   * which unit stayed behind would be the same silence this change removes.
-   *
-   * @param {string} arbiter
-   * @param {string} reason
-   * @param {string} tier
-   * @param {object|null} arm the result of `armWatchdog` (null when unknown)
-   * @param {{ result?: string, error?: string|null, verification?: string, pid?: number|null }} [extra]
-   *   HOW the arbiter was really armed. Without it the report always said
-   *   `armed` — which was a lie when the v1 watcher could not be started at all.
-   */
-  const writeArbiterReport = (arbiter, reason, tier = 'none', arm = null, extra = null) => {
-    try {
-      const how = extra && typeof extra === 'object' ? extra : {};
-      writeReport(stateDirOf(), {
-        at: new Date().toISOString(),
-        result: typeof how.result === 'string' && how.result !== '' ? how.result : 'armed',
-        tier,
-        tierReason: reason || '',
-        arbiter,
-        waitedMs: 0,
-        rechecked: false,
-        restored: false,
-        relaunched: false,
-        ready: false,
-        error: how.error == null ? null : String(how.error),
-        ...(typeof how.verification === 'string' && how.verification !== ''
-          ? { arbiterVerification: how.verification }
-          : {}),
-        ...(Number.isFinite(how.pid) ? { arbiterPid: Number(how.pid) } : {}),
-        ...describeArmResult(arm),
-      })
-    } catch (error) {
-      log.warn('could not write the arbiter report:', String(error))
-    }
-  }
-
   /** Execute the restart now; the detached helper survives our own death. */
   const executeRestart = async () => {
     stopPolling()
@@ -6232,7 +5618,7 @@ const titleOfSummary = (item) => {
       let cancelled = false
       let snapshot = null
       if (skipBackup) {
-        const skipProfile = resolveProfileDirDetailed()
+        const skipProfile = runtimeProfileDirFor(options)
         const skipProfileDir = typeof skipProfile.dir === 'string' ? skipProfile.dir : null
         snapshot = {
           backup: null,
@@ -6281,7 +5667,7 @@ const titleOfSummary = (item) => {
             config,
             stateDir,
             log,
-            profile: resolveProfileDirDetailed(),
+            profile: runtimeProfileDirFor(options),
             onProgress: (progress) => {
               recordSnapshotProgress(progress)
             },
@@ -6350,70 +5736,7 @@ const titleOfSummary = (item) => {
       })
       // The snapshot is the rollback point of BOTH branches.
       const backup = snapshot && snapshot.backup ? snapshot.backup : null
-      const profileDir = snapshot && snapshot.profileDir ? snapshot.profileDir : null
-
-      // ARM THE WATCHDOG: it waits for the relaunched host, and when that
-      // host never answers, it puts the snapshot back and starts it again.
-      // Which way it is triggered is decided by the machine (the tier).
-      //
-      // The result matters: when v2 is armed, it is the ONLY watchdog. The
-      // old one (v1) is NOT started next to it — they take the same lock, and
-      // the one that loses it gives up. If v2 lost, the profile would be
-      // restored but nothing would be running any more.
-      // The watchdog restores a state a boot has already proven, NOT the
-      // snapshot of this restart (which may be the broken state itself).
-      // WHICH COPY MAY THE WATCHDOG PUT BACK? (2026-11-01, strict mode)
-      //
-      // NOT "the newest known-good copy" any more: a copy is only a candidate
-      // when it was CERTIFIED (four checks / health probe / seed / manual
-      // rollback) AND nothing on record says that boot had to be rescued. The
-      // decision is made by ONE function (`selectRestoreTarget`), so the arming
-      // side, the watchdog and the report cannot disagree about it.
-      //
-      // When nothing qualifies, NO fallback copy is invented: the selection's
-      // `strict` answer is passed on, the watchdog is still armed, and its report
-      // says "no trusted restore point — handle it manually" with the list of
-      // copies that were refused. A watchdog that quietly stays home is the
-      // silence this whole change exists to remove.
-      const restoreChoice = backup && backup.ok === true && profileDir !== null
-        ? selectRestoreTarget({ candidates: listBackupIdentities(backupsDirFor(stateDirOf())) })
-        : { target: null, targetName: null, strict: true, reason: 'this restart took no snapshot, so there is nothing to restore', excluded: [], notes: [] }
-      if (restoreChoice.strict === true) {
-        log.warn('the watchdog has no trusted restore point: it will not restore anything', {
-          reason: restoreChoice.reason,
-          excluded: restoreChoice.excluded.length,
-          notes: restoreChoice.notes,
-        })
-      } else {
-        log.info('the watchdog may restore this copy:', {
-          dir: restoreChoice.target,
-          reason: restoreChoice.reason,
-          skipped: restoreChoice.excluded.length,
-        })
-      }
-      const watchdogArm = profileDir !== null
-        ? armWatchdogFn({
-          restoreTargetDir: restoreChoice.target === null ? '' : restoreChoice.target,
-          restoreBlocked: restoreChoice.strict === true,
-          restoreBlockedReason: restoreChoice.strict === true
-            ? restoreChoice.reason
-              + (restoreChoice.excluded.length === 0
-                ? ''
-                : ' — refused: ' + restoreChoice.excluded.map((entry) => (entry.name || entry.dir || 'a copy') + ' (' + entry.exclusion + ')').join(', '))
-            : '',
-          restoreCandidates: restoreChoice.excluded,
-          profileDir,
-          relaunchCommand: useCustomCommand && typeof config.restartCommand === 'string' && config.restartCommand.trim() !== ''
-            ? {
-              file: config.restartCommand.trim().split(/\s+/)[0],
-              args: config.restartCommand.trim().split(/\s+/).slice(1),
-            }
-            : (env.appExePath ? { file: env.appExePath, args: [] } : null),
-          healthUrl: restartHealthUrl(),
-          portFile: accessFilePath(stateDir),
-          expectedBootId: bootId,
-        })
-        : { ok: false, tier: TIERS.NONE, reason: 'there is no profile directory to restore into', error: null }
+      const profilePick = pickProfileDirForArm({ runtime: runtimeProfileDirFor(options), persisted: readProfileDirFact(state), snapshot: snapshot && snapshot.profileDir ? snapshot.profileDir : null, exists: (dir) => fs.existsSync(dir) }), profileDir = profilePick.dir
 
       // THE DURABLE RESTART RECORD. The instance that is being replaced
       // writes the "pending" half BEFORE it runs the restart command: the
@@ -6503,58 +5826,16 @@ const titleOfSummary = (item) => {
         // It is NOT armed when the supervisor of this plugin is in charge:
         // that one restores the snapshot itself, and two of them would write
         // the same files at the same time.
-        //
-        // It is NOT armed when the watchdog v2 is armed either: v2 does the
-        // same job AND starts the host again. Two watchdogs take the same
-        // lock, and the one that loses it gives up — if v2 lost, the profile
-        // would be restored but nothing would be running any more.
-        const arbiter = planWatchdogArbiter({
-          v2Armed: watchdogArm !== null && watchdogArm.ok === true,
-          supervised: detected.supervised,
-        })
-        if (arbiter.startV1 === true) {
+        if (detected.supervised !== true) {
           // THE V1 WATCHER IS AWAITED *AND* VERIFIED (2026-11-02). The result
           // used to be dropped on the floor, so the report said "armed" even
-          // when the watcher never started. Now: launched + confirmed → armed;
-          // anything else → "there is no automatic rollback" with the reason.
+          // when the watcher never started. Now: launched + confirmed -> armed;
+          // anything else -> "there is no automatic rollback" with the reason.
           const v1 = await armRollbackWatcher({ backup, profileDir })
-          if (v1.ok === true) {
-            writeArbiterReport(ARBITERS.V1, arbiter.reason, 'none', watchdogArm, {
-              result: 'armed',
-              verification: v1.verified,
-              pid: v1.pid,
-            })
-          } else {
-            writeArbiterReport(
-              ARBITERS.V1,
-              'there is NO automatic rollback here: ' + String(v1.error || 'the old watcher could not be started'),
-              'none',
-              watchdogArm,
-              { result: 'none', error: v1.error, verification: v1.verified === 'nothing' ? undefined : v1.verified },
-            )
+          if (v1.ok !== true) {
             log.error('there is NO automatic rollback for this restart:', v1.error)
           }
-          // The fallback to v1 must say WHY in the log too: without this line
-          // the operator only sees "v1 started" and never learns that a
-          // leftover systemd unit kept v2 away.
-          log.warn('the watchdog v2 is NOT the arbiter, the old watcher takes over', {
-            tier: watchdogArm && watchdogArm.tier ? watchdogArm.tier : 'none',
-            armOutcome: watchdogArm && watchdogArm.armOutcome ? watchdogArm.armOutcome : null,
-            armDetail: watchdogArm && watchdogArm.armDetail ? watchdogArm.armDetail : '',
-            armError: watchdogArm && watchdogArm.error ? watchdogArm.error : null,
-            residualUnits: watchdogArm && Array.isArray(watchdogArm.armResidualUnits)
-              ? watchdogArm.armResidualUnits
-              : [],
-          })
-        } else if (arbiter.arbiter === ARBITERS.V2) {
-          writeArbiterReport(ARBITERS.V2, arbiter.reason, watchdogArm.tier, watchdogArm)
-          log.warn('the watchdog v2 takes over: the old rollback watcher is NOT started', {
-            tier: watchdogArm.tier,
-            tierReason: watchdogArm.tierReason || '',
-            armOutcome: watchdogArm.armOutcome || null,
-          })
         }
-
         try {
           // (2) THE COMMAND, with a real success judgement. The old code only
           // looked at "the spawn did not throw", so a command that does not
@@ -6778,35 +6059,12 @@ const titleOfSummary = (item) => {
         // port of the NEW one from the instance record), so it is armed as
         // soon as there is a snapshot and a profile directory.
         //
-        // ONLY when the watchdog v2 could not be armed: v2 is the better
-        // watcher (it starts the host again), and two watchers take the same
-        // lock — the loser gives up.
-        const arbiter = planWatchdogArbiter({
-          v2Armed: watchdogArm !== null && watchdogArm.ok === true,
-          supervised: false,
-        })
-        const watchScriptPath = arbiter.startV1 === true && backup && backup.ok === true && profileDir !== null
+        // The watcher does NOT need the port of the old instance (it reads the
+        // port of the NEW one from the instance record), so it is armed as
+        // soon as there is a snapshot and a profile directory.
+        const watchScriptPath = backup && backup.ok === true && profileDir !== null
           ? path.join(stateDir, 'restart-' + state.generation + '-watch.ps1')
           : null
-        if (arbiter.startV1 === true) {
-          writeArbiterReport(ARBITERS.V1, arbiter.reason, 'none', watchdogArm)
-          log.warn('the watchdog v2 is NOT the arbiter, the old watcher takes over', {
-            tier: watchdogArm && watchdogArm.tier ? watchdogArm.tier : 'none',
-            armOutcome: watchdogArm && watchdogArm.armOutcome ? watchdogArm.armOutcome : null,
-            armDetail: watchdogArm && watchdogArm.armDetail ? watchdogArm.armDetail : '',
-            armError: watchdogArm && watchdogArm.error ? watchdogArm.error : null,
-            residualUnits: watchdogArm && Array.isArray(watchdogArm.armResidualUnits)
-              ? watchdogArm.armResidualUnits
-              : [],
-          })
-        } else if (arbiter.arbiter === ARBITERS.V2) {
-          writeArbiterReport(ARBITERS.V2, arbiter.reason, watchdogArm.tier, watchdogArm)
-          log.warn('the watchdog v2 takes over: the old rollback watcher is NOT started', {
-            tier: watchdogArm.tier,
-            tierReason: watchdogArm.tierReason || '',
-            armOutcome: watchdogArm.armOutcome || null,
-          })
-        }
         const watchScript = watchScriptPath === null
           ? null
           : buildWatchScript({
@@ -6850,7 +6108,7 @@ const titleOfSummary = (item) => {
           // own idle re-check, so this is exactly the window in which a
           // conversation can start. Watch it every 350 ms.
           armRestartBusyWatch()
-          armGateWatchdog()
+          armGateRecoveryTimer()
         }
       }
     } catch (error) {
@@ -7368,119 +6626,6 @@ const titleOfSummary = (item) => {
         return null
       }
     },
-    /**
-     * DISARM THE WATCHDOG: "this host is up, so nothing may roll it back".
-     *
-     * The ready marker is written on the FIRST tick of the first attempt (so a
-     * caller inside an HTTP route has it on disk before it answers), the
-     * pending marker and the scheduling item are cleaned with retries, and the
-     * record is kept on `runtime` and written next to the markers.
-     *
-     * One run at a time: a second call while one is running returns the same
-     * promise instead of starting a second `schtasks` dance.
-     *
-     * @param {string} [source] where the call came from ('boot', 'health-route', …)
-     * @returns {Promise<object>} the record
-     */
-    disarmWatchdog(source = 'boot') {
-      if (disarmInFlight !== null) {
-        // One run at a time (two `schtasks /Delete` calls fight each other),
-        // but a request that arrives DURING a run is remembered: a pending
-        // marker written in the meantime must still be cleaned, not lost.
-        disarmPendingAgain = true
-        return disarmInFlight
-      }
-      const one = (where) => {
-        const port = Number(runtime.webPort)
-        return runDisarmWatchdog({
-          stateDir: stateDirOf(),
-          bootId,
-          port: Number.isFinite(port) && port > 0 ? port : null,
-          source: where,
-          log,
-        })
-          .then((record) => {
-            watchdogDisarm = record
-            if (record.ok === true) {
-              log.info('the watchdog is disarmed (' + where + ')', {
-                attempts: record.attempts,
-                tier: record.tier,
-              })
-              // THE ENDING GOES INTO THE REPORT (2026-11-01): a restart that
-              // worked used to leave `last-watchdog-report.json` saying `armed`
-              // forever, while health answered `ready:true`. The ending is written
-              // where the report is, so the file and health cannot disagree.
-              try {
-                recordDisarmOutcome(stateDirOf(), { record })
-              } catch (error) {
-                log.warn('could not record the disarm outcome in the report:', String(error))
-              }
-            }
-            const staleProbes = record.probes && Array.isArray(record.probes.failed) ? record.probes.failed : []
-            if (staleProbes.length > 0) {
-              // Cleanup of the leftover capability probes must never block the
-              // boot, but it must not be silent either.
-              log.warn('some leftover capability probe tasks could not be removed', {
-                failed: staleProbes.slice(0, 5),
-                error: record.probes.error || null,
-              })
-            }
-            return record
-          })
-          .catch((error) => {
-            // The disarm must never reject: the health route and the boot path
-            // both call it without a `catch`.
-            watchdogDisarm = {
-              at: new Date().toISOString(),
-              source: String(where),
-              bootId,
-              attempts: 0,
-              ok: false,
-              ready: false,
-              pending: null,
-              tier: null,
-              scheduleRemoved: null,
-              scheduleError: null,
-              errors: [{
-                attempt: 0,
-                step: 'disarm',
-                name: error && error.name ? String(error.name) : 'Error',
-                message: error && error.message ? String(error.message) : String(error),
-              }],
-            }
-            log.warn('the watchdog could not be disarmed:', String(error))
-            return watchdogDisarm
-          })
-      }
-      const drive = async () => {
-        let record = await one(source)
-        while (disarmPendingAgain === true) {
-          disarmPendingAgain = false
-          record = await one(String(source) + '+again')
-        }
-        return record
-      }
-      const running = drive().then(
-        (record) => {
-          disarmInFlight = null
-          disarmPendingAgain = false
-          return record
-        },
-        (error) => {
-          disarmInFlight = null
-          disarmPendingAgain = false
-          throw error
-        },
-      )
-      disarmInFlight = running
-      return running
-    },
-    /**
-     * The record of the last disarm (null when this host never disarmed one).
-     */
-    get watchdogDisarm() {
-      return watchdogDisarm
-    },
     // THE STAGE OF A RESTART, as every surface reads it. `markRestartStage`
     // writes it and persists immediately (that is what makes the first stage
     // appear within the first second after the click), `recordSnapshotProgress`
@@ -7640,22 +6785,10 @@ const titleOfSummary = (item) => {
     // proven one"): save the current state, restore the picked copy, request a
     // normal restart.
     manualRollback,
-    // Where the rescue scripts are, and whether the desktop shortcut exists.
-    rescueKitInfo,
-    // What this machine can do: can it create a one-off scheduled task? (The
-    // automatic rollback hangs on that answer.)
-    capabilitiesInfo,
-    acknowledgeSchedulerWarning,
-    // The watchdog: which tier this machine uses, and what the last run did.
-    watchdogInfo,
     // THE LAST COOKIE CLEANUP (the stale `dsh-auth-*` cookies that make the
     // desktop app die on startup). It is the result the cleanup script wrote
     // down, never a live count: the jar is locked by the running browser.
     cookieClearInfo,
-    // The arm command planner, exposed so a test (and the diagnostics) can see
-    // WHICH interpreter a watchdog task would run — a real node, never the
-    // client executable.
-    planWatchdogArmCommand,
     /**
      * THE DIAGNOSTICS of "report a problem" (the text the user copies).
      */
@@ -8649,11 +7782,6 @@ export function detectBootIntervention(stateDir, { sinceMs = null } = {}) {
       name: 'rollback-report',
       file: path.join(dir, ROLLBACK_REPORT_NAME),
       restored: (record) => record.rolledBack === true,
-    },
-    {
-      name: 'watchdog-report',
-      file: path.join(dir, 'last-watchdog-report.json'),
-      restored: (record) => record.restored === true,
     },
   ]
   const sources = []
@@ -11246,11 +10374,8 @@ function buildChoiceRoute(ctx, runtime, config) {
         const hasShow = Object.prototype.hasOwnProperty.call(body, 'showSleepButton')
         const hasSeconds = Object.prototype.hasOwnProperty.call(body, 'sleepCountdownSeconds')
         const hasGrace = Object.prototype.hasOwnProperty.call(body, 'restartGraceMs')
-        // THE WATCHDOG ANSWER: its own keys, and its own file (see below) -
-        // it is NOT a profile config key like the others.
-        const hasWatchdog = Object.prototype.hasOwnProperty.call(body, 'watchdog')
         const hasAskedVersion = Object.prototype.hasOwnProperty.call(body, 'askedForPluginVersion')
-        if (!hasInclude && !hasBackupInclude && !hasBackup && !hasShow && !hasSeconds && !hasGrace && !hasWatchdog && !hasAskedVersion) {
+        if (!hasInclude && !hasBackupInclude && !hasBackup && !hasShow && !hasSeconds && !hasGrace && !hasAskedVersion) {
           // No key was asked for: there is nothing to persist.
           res.statusCode = 400
           res.setHeader('content-type', 'application/json; charset=utf-8')
@@ -11258,7 +10383,7 @@ function buildChoiceRoute(ctx, runtime, config) {
           res.end(JSON.stringify({
             ok: false,
             error: 'no-choice',
-            instruction: 'Send { "includePlugins": true | false } and/or { "backupIncludePlugins": true | false } and/or { "backupOnRestart": true | false } and/or { "showSleepButton": true | false } and/or { "sleepCountdownSeconds": 0 | 10 | 20 | 30 | 60 } and/or { "restartGraceMs": 0 | 5000 | 10000 | 20000 | 30000 | 60000 } and/or { "watchdog": true | false, "askedForPluginVersion": "1.2.3" }.',
+            instruction: 'Send { "includePlugins": true | false } and/or { "backupIncludePlugins": true | false } and/or { "backupOnRestart": true | false } and/or { "showSleepButton": true | false } and/or { "sleepCountdownSeconds": 0 | 10 | 20 | 30 | 60 } and/or { "restartGraceMs": 0 | 5000 | 10000 | 20000 | 30000 | 60000 } and/or { "askedForPluginVersion": "1.2.3" }.',
           }))
           return
         }
@@ -11330,17 +10455,6 @@ function buildChoiceRoute(ctx, runtime, config) {
           }))
           return
         }
-        if (hasWatchdog && typeof body.watchdog !== 'boolean') {
-          res.statusCode = 400
-          res.setHeader('content-type', 'application/json; charset=utf-8')
-          res.setHeader('cache-control', 'no-store')
-          res.end(JSON.stringify({
-            ok: false,
-            error: 'watchdog-must-be-boolean',
-            instruction: 'Send { "watchdog": true | false }.',
-          }))
-          return
-        }
         if (hasAskedVersion && typeof body.askedForPluginVersion !== 'string') {
           res.statusCode = 400
           res.setHeader('content-type', 'application/json; charset=utf-8')
@@ -11362,25 +10476,17 @@ function buildChoiceRoute(ctx, runtime, config) {
         if (hasSeconds) changes.sleepCountdownSeconds = body.sleepCountdownSeconds
         if (hasGrace) changes.restartGraceMs = body.restartGraceMs
         const result = await runtime.applyConfigChoice(changes)
-        // THE WATCHDOG ANSWER IS NOT A CONFIG KEY. It lives in
+        // THE PLUGIN VERSION THE USER WAS ASKED FOR. It lives in
         // install-choice.json (where readInstallChoice() looks for it), so it is
-        // written here and not through applyConfigChoice. Writing it anywhere
-        // else is the bug that produced a cheerful "saved" with nothing on disk.
-        // THE NOTICE-ONLY PATH (2026-11-01, user decision): the popup no longer
-        // asks a question, so the client sends `watchdogNotified: true` INSTEAD
-        // of a `watchdog` answer. It records "the user was told" and leaves the
-        // `watchdog` field exactly as it was — telling somebody something is not
-        // an answer, and must never be stored as "the user turned it off".
-        const hasNotified = body.watchdogNotified === true
-        if (hasWatchdog || hasAskedVersion || hasNotified) {
-          // resolveStateDir(), NOT path.dirname(config.stateFile): the default
-          // stateFile is '' and path.dirname('') is '.', so that spelling wrote
-          // the file into the process working directory - which is exactly why
-          // the panel said "saved" while the real state dir never changed.
+        // written here and not through applyConfigChoice.
+        //
+        // resolveStateDir(), NOT path.dirname(config.stateFile): the default
+        // stateFile is '' and path.dirname('') is '.', so that spelling wrote
+        // the file into the process working directory - which is exactly why
+        // the panel said "saved" while the real state dir never changed.
+        if (hasAskedVersion) {
           writeInstallChoice(resolveStateDir(config), {
-            ...(hasWatchdog ? { watchdog: body.watchdog === true } : {}),
-            ...(hasNotified ? { watchdogNotified: true } : {}),
-            ...(hasAskedVersion ? { askedForPluginVersion: body.askedForPluginVersion } : {}),
+            askedForPluginVersion: body.askedForPluginVersion,
           })
         }
         // The one-time install prompt explained the features to the user, so
@@ -11403,7 +10509,6 @@ function buildChoiceRoute(ctx, runtime, config) {
         if (hasShow) answer.showSleepButton = body.showSleepButton === true
         if (hasSeconds) answer.sleepCountdownSeconds = body.sleepCountdownSeconds
         if (hasGrace) answer.restartGraceMs = body.restartGraceMs
-        if (hasWatchdog) answer.watchdog = body.watchdog === true
         if (hasAskedVersion) answer.askedForPluginVersion = body.askedForPluginVersion
         res.statusCode = 200
         res.setHeader('content-type', 'application/json; charset=utf-8')
@@ -11434,191 +10539,6 @@ function buildChoiceRoute(ctx, runtime, config) {
  * @param {object} config the normalized config
  * @returns {object} the route
  */
-/**
- * Read the capabilities record of this machine.
- *
- * It lives in a file of its own next to the state: the checkpoint has a
- * versioned shape, and a capability that is checked once does not belong in
- * the record of the running sessions.
- *
- * @param {string} file
- * @returns {object|null}
- */
-function readCapabilitiesRecord(file) {
-  try {
-    const raw = fs.readFileSync(file, 'utf8')
-    const parsed = JSON.parse(raw)
-    if (!isCapabilities(parsed)) return null
-    return {
-      scheduler: parsed.scheduler,
-      checkedAt: typeof parsed.checkedAt === 'number' ? parsed.checkedAt : null,
-      evidence: parsed.evidence && typeof parsed.evidence === 'object' ? parsed.evidence : null,
-      warnedAt: typeof parsed.warnedAt === 'number' ? parsed.warnedAt : null,
-      tier: typeof parsed.tier === 'string' ? parsed.tier : '',
-      tierReason: typeof parsed.tierReason === 'string' ? parsed.tierReason : '',
-    }
-  } catch {
-    // A record that cannot be read is a record that does not exist yet.
-    return null
-  }
-}
-
-/**
- * Write the capabilities record of this machine.
- *
- * @param {string} file
- * @param {object} record
- */
-function writeCapabilitiesRecord(file, record) {
-  try {
-    fs.mkdirSync(path.dirname(file), { recursive: true })
-    fs.writeFileSync(file, JSON.stringify(record, null, 2), 'utf8')
-  } catch {
-    // A capability that cannot be written is a capability that is checked
-    // again next time — not a reason to break the plugin.
-  }
-}
-
-/**
- * Resolve the rescue-route path: a sibling of the health route, under the same
- * prefix.
- *
- * @param {object} config
- * @returns {string}
- */
-function resolveRescuePath(config) {
-  const healthPath = resolveHealthPath(config)
-  const index = healthPath.lastIndexOf('/')
-  const prefix = index > 0 ? healthPath.slice(0, index) : '/__dsh_autorestart'
-  return `${prefix}/rescue`
-}
-
-/**
- * The rescue route: the two scripts, and the desktop shortcut.
- *
- * It does three things, all of them on behalf of the USER:
- *
- *   - `status`   : where the scripts are (the paths and the state of the
- *                  desktop shortcut) — nothing is written;
- *   - `shortcut` : write the desktop shortcut. This happens ONLY because the
- *                  user pressed the button: loading the settings page never
- *                  writes anything to the desktop;
- *   - `reveal`   : open the folder of a script in the file manager.
- *
- * Like every other route of this plugin it only answers the loopback.
- *
- * @param {object} ctx
- * @param {object} runtime
- * @param {object} config
- * @returns {{ kind: string, path: string, handler: Function }}
- */
-function buildRescueRoute(ctx, runtime, config) {
-  const routePath = resolveRescuePath(config)
-  return {
-    kind: 'exact',
-    path: routePath,
-    handler: (req, res) => {
-      const remote = req && req.socket ? req.socket.remoteAddress : undefined
-      const loopback = remote === undefined
-        || remote === '127.0.0.1'
-        || remote === '::1'
-        || remote === '::ffff:127.0.0.1'
-      if (!loopback && !admittedByConnection(ctx, req)) {
-        res.statusCode = 403
-        res.setHeader('content-type', 'application/json; charset=utf-8')
-        res.end('{"ok":false,"error":"loopback-only"}')
-        return
-      }
-      if (!req || req.method !== 'POST') {
-        res.statusCode = 405
-        res.setHeader('content-type', 'application/json; charset=utf-8')
-        res.setHeader('allow', 'POST')
-        res.end('{"ok":false,"error":"method-not-allowed"}')
-        return
-      }
-      void readJsonBody(req).then((payload) => {
-        const body = payload && typeof payload === 'object' ? payload : {}
-        const action = typeof body.action === 'string' ? body.action.trim() : 'status'
-        const info = runtime.rescueKitInfo()
-        if (action === 'shortcut') {
-          // The user pressed the button: NOW the shortcut may be written.
-          //
-          // A `.lnk` SINCE 2026-11-02 (Windows refuses an icon on a `.cmd`, and
-          // an unnamed white page on the desktop is what the user could not
-          // recognise). The answer carries everything the page needs to say
-          // what happened: the file name, the icon it carries, and — when it
-          // failed — WHICH KIND of failure, so the page can give the right human
-          // sentence instead of a stack message.
-          const written = createDesktopShortcut({
-            desktop: info.desktopDir,
-            restoreProfilePath: info.restoreProfile,
-            iconPath: info.iconPath,
-            // The `.lnk` writer of `lib/rescue-paths.js` creates the file through
-            // `WScript.Shell` and never calls this. It is kept on purpose: this
-            // route has carried a `writeFile` reporter since the `.cmd` days, and
-            // the code-graph contract of the task that introduced the `.lnk` has
-            // no `fn_removed` allowance — dropping the option would be reported
-            // as an unauthorized removal rather than a deliberate change.
-            writeFile: (target, content) => fs.writeFileSync(target, content, 'ascii'),
-            exists: (target) => fs.existsSync(target),
-          })
-          res.statusCode = written.ok ? 200 : 400
-          res.setHeader('content-type', 'application/json; charset=utf-8')
-          res.setHeader('cache-control', 'no-store')
-          res.end(JSON.stringify({
-            ok: written.ok,
-            action,
-            name: written.name,
-            path: written.path,
-            iconPath: written.iconPath,
-            errorKind: written.errorKind,
-            error: written.error ?? null,
-            rescue: runtime.rescueKitInfo(),
-          }))
-          return
-        }
-        if (action === 'ack-scheduler') {
-          // The user has read the warning about the missing automatic
-          // rollback: it is not shown again.
-          const marked = runtime.acknowledgeSchedulerWarning()
-          res.statusCode = 200
-          res.setHeader('content-type', 'application/json; charset=utf-8')
-          res.setHeader('cache-control', 'no-store')
-          res.end(JSON.stringify({ ok: true, action, capabilities: marked }))
-          return
-        }
-        if (action === 'reveal') {
-          const wanted = typeof body.path === 'string' ? body.path.trim() : ''
-          // Only a directory of the plugin may be opened — never anything the
-          // caller names.
-          const allowed = [info.scriptsDir].filter((entry) => entry !== '')
-          const folder = allowed.includes(wanted) ? wanted : info.scriptsDir
-          let opened = false
-          try {
-            const child = spawn(process.platform === 'win32' ? 'explorer.exe' : 'xdg-open', [folder], {
-              detached: true,
-              stdio: 'ignore',
-              windowsHide: true,
-            })
-            child.unref()
-            opened = true
-          } catch (error) {
-            opened = false
-          }
-          res.statusCode = opened ? 200 : 500
-          res.setHeader('content-type', 'application/json; charset=utf-8')
-          res.setHeader('cache-control', 'no-store')
-          res.end(JSON.stringify({ ok: opened, action, path: folder, error: opened ? null : 'the file manager could not be opened' }))
-          return
-        }
-        res.statusCode = 200
-        res.setHeader('content-type', 'application/json; charset=utf-8')
-        res.setHeader('cache-control', 'no-store')
-        res.end(JSON.stringify({ ok: true, action, rescue: info }))
-      })
-    },
-  }
-}
 
 function buildSupervisorRoute(ctx, runtime, config) {
   const routePath = resolveSupervisorPath(config)
@@ -12217,38 +11137,6 @@ function buildSleepRoute(ctx, runtime, config, sleep) {
 }
 
 /** Expose a tiny read-only health route for humans and verification scripts. */
-/**
- * The disarm record, cut down to what a reader outside the process needs.
- *
- * The health route answers with it, so a real-machine check can tell "the
- * watchdog was stood down" from "it is still armed" without reading a log.
- *
- * @param {object|null} record
- * @returns {object|null}
- */
-function summarizeDisarm(record) {
-  if (!record || typeof record !== 'object') return null
-  const errors = Array.isArray(record.errors) ? record.errors : []
-  return {
-    ok: record.ok === true,
-    at: typeof record.at === 'string' ? record.at : null,
-    source: typeof record.source === 'string' ? record.source : null,
-    attempts: Number.isFinite(Number(record.attempts)) ? Number(record.attempts) : 0,
-    ready: record.ready === true,
-    pending: record.pending === true,
-    tier: typeof record.tier === 'string' ? record.tier : null,
-    scheduleRemoved: record.scheduleRemoved === true ? true : (record.scheduleRemoved === false ? false : null),
-    // Only the first failure: the route answer must stay small, and one named
-    // error is what makes the failure diagnosable.
-    error: errors.length > 0
-      ? {
-        step: typeof errors[0].step === 'string' ? errors[0].step : null,
-        name: typeof errors[0].name === 'string' ? errors[0].name : null,
-        message: typeof errors[0].message === 'string' ? errors[0].message : null,
-      }
-      : null,
-  }
-}
 
 function registerHealthRoute(ctx, runtime, config, sleep) {
   const routePath = typeof config.healthPath === 'string' && config.healthPath.startsWith('/')
@@ -12442,10 +11330,6 @@ function registerHealthRoute(ctx, runtime, config, sleep) {
             // The route that reports (and records) the one-time feature
             // announcements, so the client never has to guess the prefix.
             announcementsUrl: resolveAnnouncementsPath(config),
-            // SHOULD THE WATCHDOG QUESTION BE ASKED? The client cannot read the
-            // disk, so the decision is made here: it is asked only while no
-            // answer has ever been recorded (see `shouldAskWatchdog`).
-            watchdogAsk: shouldAskWatchdog(resolveStateDir(config)),
             pluginVersion: pluginVersionNow(),
             backupOnRestart: config.backupOnRestart !== false,
             backupIncludePlugins: config.backupIncludePlugins !== false,
@@ -12470,18 +11354,6 @@ function registerHealthRoute(ctx, runtime, config, sleep) {
             // says which plugin, from which backup, and whether a restart is
             // needed to load it. Absent when nobody ever asked.
             ...(runtime.pluginRestoreInfo() ? { pluginRestore: runtime.pluginRestoreInfo() } : {}),
-            // THE RESCUE KIT: where the two scripts are, so a user whose DSH
-            // does not come up can find them (and copy the path) even though
-            // they cannot open a README.
-            rescue: runtime.rescueKitInfo(),
-            rescueUrl: resolveRescuePath(config),
-            // What this machine can do (the automatic rollback needs a
-            // one-off scheduled task; when that is refused the user is told
-            // what they lose).
-            capabilities: runtime.capabilitiesInfo(),
-            // The watchdog: which tier this machine uses to trigger it, and
-            // what the last run did.
-            watchdog: runtime.watchdogInfo(),
             // THE LAST COOKIE CLEANUP: `{at, atIso, ok, removed, reason}` of the
             // run that happened between the kill and the relaunch. `removed` is
             // the number of stale `dsh-auth-*` cookies deleted BY THAT RUN — it
@@ -12565,10 +11437,6 @@ function registerHealthRoute(ctx, runtime, config, sleep) {
             rollbackUrl: resolveManualRollbackPath(config),
             choiceUrl: resolveChoicePath(config),
             announcementsUrl: resolveAnnouncementsPath(config),
-            // SHOULD THE WATCHDOG QUESTION BE ASKED? The client cannot read the
-            // disk, so the decision is made here: it is asked only while no
-            // answer has ever been recorded (see `shouldAskWatchdog`).
-            watchdogAsk: shouldAskWatchdog(resolveStateDir(config)),
             pluginVersion: pluginVersionNow(),
             backupOnRestart: config.backupOnRestart !== false,
             backupIncludePlugins: config.backupIncludePlugins !== false,
@@ -12584,60 +11452,6 @@ function registerHealthRoute(ctx, runtime, config, sleep) {
         return
       }
       const probeIndex = typeof req.url === 'string' && req.url.includes('probeIndex=1')
-      // THE READY MARKER: this host answers its own health route, so it is
-      // up. The watchdog (which waits for the relaunched host) sees the
-      // marker and stands down — no rollback of a host that is fine.
-      //
-      // THE STATE DIRECTORY COMES FROM `runtime`, NEVER FROM A CLOSURE:
-      // 0.8.2 read it through a variable that only existed inside the runtime
-      // factory, so every request threw `ReferenceError: stateDirOf is not
-      // defined`, the `catch {}` swallowed it, and a healthy host left the
-      // pending marker AND the scheduled task behind (the watchdog would have
-      // rolled a healthy profile back). The failure is recorded now, and the
-      // marker is written first because the marker alone is what stops a
-      // rollback.
-      try {
-        const stateDir = typeof runtime.stateDir === 'string' ? runtime.stateDir : ''
-        if (stateDir !== '') {
-          const marked = markReady({
-            stateDir,
-            bootId: runtime.bootId,
-            port: runtime.webPort ?? null,
-          })
-          if (marked.ok !== true) {
-            runtime.watchdogReadyError = {
-              at: Date.now(),
-              message: marked.detail,
-              name: marked.error && marked.error.name ? String(marked.error.name) : null,
-            }
-          }
-          // The marker alone stands the watchdog down; the pending marker and
-          // the scheduling item are cleaned with retries in the background, so
-          // `schtasks` never delays this answer.
-          runtime.disarmWatchdog('health-route')
-        }
-      } catch (error) {
-        // NEVER silent: a swallowed error here leaves an armed watchdog behind.
-        // It is recorded on `runtime` (this scope has no logger) so the settings
-        // page and the diagnostics can show it instead of pretending all is well.
-        runtime.watchdogReadyError = {
-          at: Date.now(),
-          name: error && error.name ? String(error.name) : 'Error',
-          message: String(error && error.message ? error.message : error),
-        }
-        // One retry with the bare minimum: the marker alone is what the
-        // watchdog actually waits for.
-        try {
-          markReady({
-            stateDir: typeof runtime.stateDir === 'string' ? runtime.stateDir : '',
-            bootId: runtime.bootId,
-            port: runtime.webPort ?? null,
-          })
-          runtime.watchdogReadyError.retry = 'ok'
-        } catch (again) {
-          runtime.watchdogReadyError.retry = String(again && again.message ? again.message : again)
-        }
-      }
       const body = JSON.stringify({
         ok: true,
         plugin: name,
@@ -12656,10 +11470,6 @@ function registerHealthRoute(ctx, runtime, config, sleep) {
         manualRestartBlocks: runtime.manualRestartBlocks ?? 0,
         indexTaps: runtime.indexTaps ?? 0,
         configSchema: Config !== undefined,
-        // DID THE DISARM WORK? A failed disarm means an armed watchdog is still
-        // out there; it must be visible from outside the process, not only in
-        // a log line nobody reads.
-        watchdog: summarizeDisarm(runtime.watchdogDisarm),
         // THE LAST COOKIE CLEANUP, on the short route as well: a script (or the
         // user) can see whether the stale `dsh-auth-*` cookies were really
         // removed before the relaunch, without opening the interface. The
@@ -12721,7 +11531,6 @@ function registerHealthRoute(ctx, runtime, config, sleep) {
   const pluginInventoryRoute = buildPluginInventoryRoute(ctx, runtime, config)
     const announcementsRoute = buildAnnouncementsRoute(ctx, runtime, config)
     const supervisorRoute = buildSupervisorRoute(ctx, runtime, config)
-    const rescueRoute = buildRescueRoute(ctx, runtime, config)
     const sleepRoute = sleep ? buildSleepRoute(ctx, runtime, config, sleep) : null
     try {
       const origin = typeof webServer.getOrigin === 'function' ? String(webServer.getOrigin()) : ''
@@ -12748,7 +11557,6 @@ function registerHealthRoute(ctx, runtime, config, sleep) {
       { name: 'manual-rollback', route: manualRollbackRoute },
       { name: 'announcements', route: announcementsRoute },
       { name: 'supervisor', route: supervisorRoute },
-      { name: 'rescue', route: rescueRoute },
     ]
     if (sleepRoute !== null) routes.push({ name: 'sleep', route: sleepRoute })
     // THE SINGLE-PLUGIN RESTORE comes LAST ON PURPOSE. The order of the routes
@@ -13092,31 +11900,6 @@ export function apply(ctx, rawConfig, options = {}) {
     })
     sleep.restore()
   }
-  // THE DESKTOP SHORTCUT FOLLOWS THE ICON THIS BUILD SHIPS (2026-11-03).
-  //
-  // The real-machine report: the `.lnk` on the desktop kept pointing at
-  // `shortcut-icon-9c245e5b.ico` (the old flame) while the plugin's health said
-  // `shortcut-icon-1902bb15.ico`. Restarting the host changed nothing, because
-  // nothing ever re-read the file: the `.lnk` was written ONLY when the user pressed
-  // the button in the settings page.
-  //
-  // So a start now compares what the file says with what this build would use, and
-  // rewrites the field only when they differ. Idempotent on purpose: a normal start
-  // must not touch the desktop file or refresh the shell for nothing.
-  try {
-    const kit = runtime.rescueKitInfo()
-    const synced = syncShortcutIcon({ linkPath: kit.shortcutPath, iconPath: kit.iconPath })
-    if (synced.changed) {
-      log.info('the desktop shortcut now wears this build\'s icon', {
-        iconLocation: synced.iconLocation,
-        targetPath: synced.targetPath,
-      })
-    } else if (synced.error !== null) {
-      log.info('the desktop shortcut was left alone', { reason: synced.reason, error: synced.error })
-    }
-  } catch (error) {
-    log.warn('the desktop shortcut icon could not be checked:', String(error))
-  }
   if (runtime.isNewBoot && config.resumeOnBoot) {    runtime.recoverTimer = ctx.timeout(() => {
       recoverAfterRestart(ctx, runtime, config)
         .then(() => {
@@ -13223,19 +12006,6 @@ export function apply(ctx, rawConfig, options = {}) {
     }
   }
 
-  // DISARM THE WATCHDOG AT BOOT — WITHOUT WAITING FOR ANYBODY TO ASK.
-  //
-  // This is the fix of the 0.8.2 incident: the ready marker and the cleanup of
-  // the pending marker / scheduled task hung on the health route being hit.
-  // The plugin is fully loaded at this point (every route is registered, the
-  // boot recovery is scheduled), so this instance is "up" in the only sense
-  // the watchdog cares about: it must not be rolled back.
-  //
-  // The call never rejects (see runtime.disarmWatchdog) and never blocks the
-  // load: the marker is written synchronously on its first tick, the
-  // `schtasks` cleanup runs with retries behind it.
-  runtime.disarmWatchdog('boot')
-
   ctx.effect(() => () => {
     runtime.markDisposed()
     runtime.stopPolling()
@@ -13251,8 +12021,6 @@ export function apply(ctx, rawConfig, options = {}) {
 }
 
 export {
-  watchdogAllowed,
-  shouldAskWatchdog,
   readInstallChoice,
   writeInstallChoice,
 }
@@ -13271,3 +12039,108 @@ export {
   SLEEP_FEATURE_VERSION,
   SUPERVISOR_FEATURE_VERSION,
 }
+
+/**
+ * THE PROFILE DIRECTORY, WITHOUT THE MANIFEST (2026-11-03, t65).
+ *
+ * The directory is a fact of the runtime, and a test may point it at a
+ * profile of its own; production never does.
+ *
+ * @param {{ profileDir?: string }} options
+ * @returns {{ dir: string|null, source: string }}
+ */
+const runtimeProfileDirFor = (options) => (options && typeof options.profileDir === 'string' && options.profileDir !== ''
+  ? { dir: options.profileDir, source: 'override' }
+  : resolveProfileDirDetailed())
+
+/**
+ * THE PROFILE DIRECTORY FACT AND THE THREE WAYS TO IT (2026-11-03, t72/t73).
+ *
+ * 1. THE RUNNING HOST - it knows the directory it booted with.
+ * 2. THE PERSISTED RECORD - what the last good boot wrote down.
+ * 3. THE SNAPSHOT - what the copy recorded.
+ *
+ * The first one that works wins. When NONE of them works, the three reasons
+ * are returned SEPARATELY, so the report can say what each way failed with -
+ * not the same sentence three times.
+ *
+ * @param {{
+ *   runtime?: { dir?: string, source?: string }|null,
+ *   persisted?: { dir?: string, at?: number, source?: string }|null,
+ *   snapshot?: string|null,
+ *   exists?: (dir: string) => boolean,
+ * }} options
+ * @returns {{ dir: string|null, source: string, reasons: string[] }}
+ */
+function pickProfileDirForArm({ runtime = null, persisted = null, snapshot = null, exists = null } = {}) {
+  const reasons = [];
+  const existsFn = typeof exists === 'function' ? exists : () => true;
+  const dirOf = (value) => {
+    if (typeof value === 'string') return value.trim();
+    if (value && typeof value === 'object' && typeof value.dir === 'string') return value.dir.trim();
+    return '';
+  };
+
+  // 1) THE RUNNING HOST.
+  const runtimeDir = dirOf(runtime);
+  if (runtimeDir !== '') {
+    return { dir: runtimeDir, source: 'the running host', reasons: [] };
+  }
+  const runtimeSource = runtime && typeof runtime.source === 'string' && runtime.source.trim() !== ''
+    ? runtime.source.trim()
+    : 'unknown';
+  reasons.push('the running host does not know the profile directory (' + runtimeSource + ')');
+
+  // 2) THE PERSISTED RECORD. A record that points at a directory that is gone
+  // is NOT silently ignored and NOT silently accepted: it is said out loud.
+  const persistedDir = dirOf(persisted);
+  if (persistedDir === '') {
+    reasons.push('there is no persisted profile directory in the checkpoint');
+  } else if (!existsFn(persistedDir)) {
+    reasons.push('the persisted record points at ' + persistedDir + ', but that directory does not exist');
+  } else {
+    return { dir: persistedDir, source: 'the persisted record', reasons: [] };
+  }
+
+  // 3) THE SNAPSHOT.
+  const snapshotDir = dirOf(snapshot);
+  if (snapshotDir === '') {
+    reasons.push('the snapshot does not record a profile directory');
+  } else {
+    return { dir: snapshotDir, source: 'the snapshot', reasons: [] };
+  }
+
+  return { dir: null, source: 'unknown', reasons };
+}
+
+/**
+ * THE DSH HOME: where the profiles and the state live.
+ *
+ * The plugin resolves it the same way (`DSH_HOME`, otherwise `~/.dsh`).
+ *
+ * @param {{env?: object, home?: string}} [options]
+ * @returns {string}
+ */
+function dshHomeDir({ env = process.env, home = os.homedir() } = {}) {
+  const explicit = typeof env.DSH_HOME === 'string' ? env.DSH_HOME.trim() : '';
+  if (explicit !== '') return normalizePath(explicit);
+  return normalizePath(path.join(home, '.dsh'));
+}
+
+/**
+ * A full path without a trailing separator.
+ *
+ * @param {string} target
+ * @returns {string}
+ */
+function normalizePath(target) {
+  const raw = typeof target === 'string' ? target.trim() : '';
+  if (raw === '') return '';
+  let resolved = path.resolve(raw);
+  // "C:\" keeps its separator (it is the root), anything longer loses it.
+  if (resolved.length > 3) resolved = resolved.replace(/[\\/]+$/, '');
+  return resolved;
+}
+
+// THE PROFILE DIRECTORY FACT (the checkpoint keeps it).
+import { readProfileDirFact, writeProfileDirFact } from './lib/checkpoint.js';

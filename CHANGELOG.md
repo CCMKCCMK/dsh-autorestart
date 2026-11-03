@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.0
+
+- 收窄到「重启」本身：删除看门狗自动救援与手动救援脚本，出事后交给 DSH 自己的崩溃对话框或重装
+- 保留：排队重启、重启前快照、登录 cookie 清理、会话续接、托管端按命令重启、关机倒计时
+- 文档与插件描述同步改写，不再宣称任何自动还原能力
+
 ## 0.8.6 — 2026-11-03
 
 本版把 2026-10-30 的首批改动与之后累积的六批改动一并发布（0.8.6 在此之前只写进过 CHANGELOG，从未发布）。逐批见下。
@@ -248,6 +254,32 @@ profile 的 `node_modules` 里有 **5 个插件是符号链接/联接**（`dsh-a
 - **顺手修掉两个真机踩到的坑**：
   - `fs.cpSync` 往一个**带死链接**的 `node_modules` 里写会直接把 Node 进程打死（Windows，`0xC0000409`，无栈无消息），而 `fs.existsSync` 对死链接返回 **false** —— 现在先按 `lstat` 认出死链接、清掉再复制；
   - `rescue-strings.zh.json` 的 `restore.snapshotSuffix` 有 2 个占位符、调用只传 1 个参数 → 快照配置坏了的时候脚本不是报「这份快照不是 profile」而是格式化报错直接挂掉。
+
+### 2026-11-03 桌面档演练失败与三处修正
+
+**演练失败读数（12:49:19 → 12:51:51，原样）**：12:49:19 的 `last-watchdog-report.json` = `result: armed`、`tier: none`、`arbiter: v1`、`armOutcome: failed`、`armError: null`、`armFailedSteps: []`；`watchdog-pending.json` **从未出现**；12:49:25 新宿主读坏清单崩溃（**崩溃日志本机找不到**：`.dsh` 全树按 12:45–12:55 扫描只看到 `clear-cookies.log` 与 `last-cookie-clear.json`（均 12:49:24）、`restart-276.cmd` 与 `restart-gate.json`（均 12:49:19），`.dsh\logs` 里最新的启动日志停在 10-31）；12:51:51 兜底计划任务 `LastResult = 1`、**脚本一行没跑**；之后两次手工跑 `restore-profile` **只还原了 `config/`**，`node_modules` 没还原 → 插件全丢。
+
+**三处修正**：
+
+- **布防不再依赖清单**（t65 → 收口 t66）：布防阶段不再需要读那份可能已经坏掉的清单。全量 **1451 / 1451**；新增测试 **3** 条；证伪 A / B / C / D；CodeKG `diff ok`、verify **70 / 70**。
+- **体检 → 按需修复**（t67 + t69）：`lib/profile-health.js` 给出**三种答案**；**只补缺的**，改完**回读**，**幂等**；还原脚本支持 `-CheckOnly`；看门狗判定 fine 时**不还原**；补 parity 测试，证伪「只改一边 → parity 必红」。自跑 verify **64 / 63 / 0 / 1 skip，exit 0**。
+- **报告不再说假话**（t60–t62）：看门狗**每落地一个事实就写一次进度报告**，撤防按「是否真的救过」判 `recovered` / `disarmed`，不再把 `restored` / `relaunched` 抹成 `false`。
+
+**一条纪律（写下来，别再犯）**：**在用户正在使用的 profile 上做「注入坏清单」演练本身不成立**——故障材料与布防材料是同一份文件，注入故障等于把布防材料一起弄坏。以后**只许在隔离实例上做**，且**故障必须出现在布防之后**。
+
+### 2026-11-03 隔离 WSL 实例上的复验（t71–t74）：布防 → 还原 → 拉起走通了
+
+桌面档演练失败之后，同一天在**隔离的 WSL 实例**上重做了这件事（WSL `Ubuntu-22.04` / 用户 `fg`；profile `~/.dsh/profiles/web`，链接安装；状态目录 `~/.dsh/storages/dsh-autorestart`；守护循环 `~/supervise-web.sh`；布防入口 `POST /__dsh_autorestart/park`，**body 必须带 `{"sessionId":"…","restart":true}`**，否则只答 `restartRequested: false`）。
+
+- **布防成功（t71 → t73）**：坏清单下 `watchdog-pending.json` **出现了**（t+10s…t+240s 每次采样 `pending=YES`），报告 `result: "armed"` / `armOutcome: "armed"` / `armError: null` / `armFailedSteps: []`（旧代码是 `armOutcome: failed` / `tier: none` / `armFailedSteps: ['there is no profile directory to restore into']`）。
+- **布防要拿 profileDir，而 profileDir 也是从清单推出来的（t72 + t73）**：真机读数 `error: the profile directory is unknown` → 宿主每次**成功启动并确定 profileDir 之后**把它作为**事实**持久化（复用既有 `state.json`，带 `at` 与来源）；布防按 **运行时内存 > 持久化记录 > 快照** 三条取路，三条都失败时把**各自的原因**逐条写进 `armFailedSteps`。修完：`state.json` 里出现 `"profileDir": { "dir": "/home/fg/.dsh/profiles/web", "at": 1793690696061, "source": "profile bundles scan" }`（旧代码没有这项），布防 `armOutcome: "armed"`。
+- **快照失败不再关掉还原点（t74）**：快照失败时仍然对既有副本调用 `selectRestoreTarget`，挑不到时把**拒因逐条写清**并给下一步。真机读数（15:43:00–15:47:29）：`restored: true`、`restoreTarget: /home/fg/.dsh/storages/dsh-autorestart/backups/2026-11-03T04-16-19-152Z`（磁盘上 `intervention=false`、`boot={started:true, contentMatched:true}` 的那份）、`restoreBlocked: false`、`restores: 1`、`error: null`、`restoreCandidates: [{name: "2026-11-03T04-17-07-466Z", exclusion: "intervened"}]`；**t+250s：`listening=1`、`manifest=3120c71a90877bfc…`、新 bootId `bb888192-b3c3-40c2-88a3-b8a1e45a1bef`**；清单 sha 回到原件、**不需要手工放回**、health `{"ok":true,…}` → **实例已恢复正常**。
+- **两处口径如实说明**：报告里的 `restoredFrom` 仍是 `null`（这份报告用 `restoreTarget` 承载「还原自哪一份」）；`relaunched: false` —— 宿主是**自己回来的**（守护循环在它起来后把看门狗撤防了）。
+- **全量**：**1475 / 1474 pass / 0 fail / exit 0**；CodeKG `diff ok`（27 处改动全部在 allow 内）。
+
+**本轮未实测 / 未观察到的（如实列出）**：`@goodandready/dsh-goal@0.2.33`、`dsh-dispatch-guard@0.2.1` 本轮**未实测**（证据库里没有它们的记录）；**POSIX parity 在本机被 skip**（本机没有 POSIX shell）。
+
+**文档**：两份实测文档合成一份 —— 看门狗各轮真机读数（R1–R55）**全文并入** `docs/real-machine-verification-0.8.6.md`，原文读数逐条保留，原来标着「未验」的仍然标着未验；`npm` 描述里那句「起不来就还原」也收窄成「**这次重启**没回来才还原」。
 
 ### 2026-10-30 的首批改动
 

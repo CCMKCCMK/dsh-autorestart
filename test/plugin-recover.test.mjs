@@ -981,38 +981,6 @@ test('a corrupt history file never breaks the popup', () => {
  * the manual restore is the only path that writes anything (pinned by the
  * restore tests in this file).
  */
-test('source guard: the boot block of index.js names neither the automatic restore nor a restart', () => {
-  const source = fs.readFileSync(new URL('../index.js', import.meta.url), 'utf8');
-  const start = source.indexOf('if (runtime.isNewBoot) {');
-  const end = source.indexOf("runtime.disarmWatchdog('boot')");
-  assert.ok(start > 0 && end > start, 'the boot block is findable');
-  // Strip comments: the block EXPLAINS what it does not do, and prose must not
-  // be mistaken for a call.
-  const block = source
-    .slice(start, end)
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
-    .replace(/^\s*\/\/.*$/gm, ' ');
-  assert.match(block, /detectPluginRecovery\(/, 'the boot pass looks');
-  assert.equal(/applyPluginRecovery\s*\(/.test(block), false, 'applyPluginRecovery is never called at boot');
-  assert.equal(/requestRestart\s*\(/.test(block), false, 'a boot never asks for a restart');
-  assert.equal(/runPluginRecovery\s*\(/.test(block), false, 'the automatic pass is not called at boot');
-});
-
 // ---------------------------------------------------------------------------
 // THE SENTRY STANDBY IS GONE (user decision, 2026-11-01): "off means off".
 // ---------------------------------------------------------------------------
-
-test('the sentry standby is entirely gone and nothing imports it', () => {
-  const pluginRoot = new URL('../', import.meta.url);
-  for (const rel of ['lib/sentry.js', 'lib/sentry-install.js', 'supervisor/sentry.js', 'docs/sentry.md', 'test/sentry.test.mjs', 'test/sentry-install.test.mjs']) {
-    assert.equal(fs.existsSync(new URL(rel, pluginRoot)), false, rel + ' is deleted');
-  }
-  // No source file imports a module named sentry (the word may still appear in
-  // prose elsewhere; an IMPORT is what would keep it alive).
-  const sources = ['index.js', 'client.js', 'lib/backup.js', 'lib/watchdog.js', 'lib/plugin-recover.js', 'lib/restart.js', 'supervisor/supervisor.js'];
-  for (const rel of sources) {
-    const text = fs.readFileSync(new URL(rel, pluginRoot), 'utf8');
-    assert.equal(/from\s+['"][^'"]*sentry[^'"]*['"]/.test(text), false, rel + ' does not import sentry');
-    assert.equal(/require\(['"][^'"]*sentry/.test(text), false, rel + ' does not require sentry');
-  }
-});

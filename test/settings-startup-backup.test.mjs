@@ -1200,183 +1200,6 @@ function rescueText(panel, key) {
   return found.length === 0 ? '' : textOf(found[0])
 }
 
-test('the desktop entry shows its icon and its file name, and says what it is for', async () => {
-  const mounted = mountSettings({
-    info: {
-      instance: { isDesktopApp: true, platform: 'win32' },
-      supervisor: { mode: 'app', installed: false, startup: { mode: 'desktop' } },
-      rescue: rescueKit(),
-    },
-  })
-  const panel = await mounted.settled('dsh-autorestart')
-  // ① WHAT IT LOOKS LIKE: the icon tile and the file name, before the button.
-  assert.notEqual(rescueText(panel, 'shortcut-icon'), '', 'the icon is drawn, so the desktop entry is recognisable')
-  assert.equal(rescueText(panel, 'shortcut-name'), 'DSH 出事了双击这里.lnk', 'and the exact file name is on screen')
-  assert.match(rescueText(panel, 'shortcut-name'), /\.lnk$/, 'a .lnk — that is the format that can carry an icon')
-  // ② REMINDER ONE: only for a host that does not come up.
-  assert.match(rescueText(panel, 'shortcut-when'), /打不开/, 'the first reminder is on the page')
-  assert.match(rescueText(panel, 'shortcut-when'), /不要点它/, 'and it says not to click it while DSH runs')
-  // ③ REMINDER TWO: it rolls the whole environment back, not one plugin.
-  assert.match(rescueText(panel, 'shortcut-scope'), /整个环境/, 'the second reminder is on the page')
-  assert.match(rescueText(panel, 'shortcut-scope'), /不能只摘掉某一个插件/, 'and it sends one-plugin recovery elsewhere')
-  // ④ The button is there, and it is still a button (nothing is written on load).
-  assert.equal(rescueText(panel, 'shortcut'), '在桌面放一个快捷方式')
-  assert.equal(
-    mounted.fetches.filter((entry) => String(entry.url).includes('/rescue')).length,
-    0,
-    'loading the page neither writes nor asks the rescue route',
-  )
-})
-
-test('the rescue group is the SAME on both ends (plan B): the desktop entry becomes a copyable command', async () => {
-  // PLAN B (user decision, 2026-11-02): the desktop build keeps its rescue entry,
-  // and the hosted / web page shows the SAME group with the SAME title — only the
-  // one entry that needs a desktop turns into a copyable command. The group is
-  // never removed, and the "the web version has no desktop" excuse line is gone.
-  const noDesktopKit = rescueKit({
-    platform: 'linux',
-    scriptsDir: '/plugin/scripts',
-    restoreProfile: '/plugin/scripts/restore-profile.sh',
-    emergencyDisable: '/plugin/scripts/emergency-disable.sh',
-    desktopDir: '',
-    desktopSource: 'none',
-    shortcutPath: '',
-    iconPath: '',
-  })
-  const hosted = mountSettings({
-    info: {
-      instance: { isDesktopApp: false, platform: 'linux' },
-      supervisor: { mode: 'app', installed: false, startup: { mode: 'desktop' } },
-      rescue: noDesktopKit,
-    },
-  })
-  const hostedPanel = await hosted.settled('dsh-autorestart')
-
-  // The group and its title are there — the same ones the desktop build shows.
-  assert.match(textOf(hostedPanel), /桌面救援入口/, 'the same group title as on the desktop')
-  assert.equal(rescueText(hostedPanel, 'no-desktop-platform'), '', 'no "the web version has no desktop" excuse line')
-  assert.equal(rescueText(hostedPanel, 'shortcut-name'), '', 'no .lnk file name where there is no desktop')
-
-  // THE ENTRY ITSELF: a copyable command instead of the desktop shortcut.
-  assert.equal(
-    rescueText(hostedPanel, 'command'),
-    '/plugin/scripts/restore-profile.sh',
-    'the entry is the restore command the Host resolved — not a made-up one',
-  )
-  assert.equal(
-    marked(hostedPanel, 'data-dsh-autorestart-rescue')
-      .filter((node) => node.props['data-dsh-autorestart-rescue'] === 'copy-command').length,
-    1,
-    'and it can be copied',
-  )
-  assert.match(
-    rescueText(hostedPanel, 'command-hint'),
-    /效果和桌面上双击那个入口一样/,
-    'the page says what this command does, in the same terms as the desktop entry',
-  )
-
-  // The paths are still rendered in full where there is no desktop entry.
-  const paths = marked(hostedPanel, 'data-dsh-autorestart-rescue')
-    .filter((node) => node.props['data-dsh-autorestart-rescue'] === 'path')
-    .map((node) => textOf(node))
-  assert.deepEqual(
-    paths,
-    ['/plugin/scripts/restore-profile.sh', '/plugin/scripts/emergency-disable.sh'],
-    'both paths ARE on the hosted page, in full',
-  )
-
-  // THE DESKTOP BUILD IS UNCHANGED: the `.lnk` row, the button, the fold.
-  const desktop = mountSettings({
-    info: {
-      instance: { isDesktopApp: true, platform: 'win32' },
-      supervisor: { mode: 'app', installed: false, startup: { mode: 'desktop' } },
-      rescue: rescueKit(),
-    },
-  })
-  const desktopPanel = await desktop.settled('dsh-autorestart')
-  assert.match(textOf(desktopPanel), /桌面救援入口/, 'the same title on the desktop')
-  assert.notEqual(rescueText(desktopPanel, 'shortcut-name'), '', 'the desktop build still names the .lnk')
-  assert.equal(
-    marked(desktopPanel, 'data-dsh-autorestart-rescue')
-      .filter((node) => node.props['data-dsh-autorestart-rescue'] === 'command').length,
-    0,
-    'and it does NOT show the hosted command form',
-  )
-  assert.equal(
-    walk(desktopPanel).filter((node) => node.type === 'details'
-      && node.props && node.props['data-dsh-autorestart-rescue'] === 'paths-details').length,
-    1,
-    'the paths still sit behind 详情 where the desktop entry is the main door',
-  )
-
-  // THE SAME GROUP TITLES ON BOTH ENDS (plan B): the page is one page, not two.
-  const titlesOf = (panel) => walk(panel)
-    .filter((node) => node.props && typeof node.props.className === 'string'
-      && node.props.className.includes('settings__group-title'))
-    .map((node) => textOf(node))
-  const shared = ['重启相关设置', '关机相关设置', '桌面救援入口', '遇到问题']
-  for (const title of shared) {
-    assert.ok(titlesOf(hostedPanel).includes(title), `the web page shows «${title}» like the desktop`)
-    assert.ok(titlesOf(desktopPanel).includes(title), `the desktop shows «${title}»`)
-  }
-  // 开机自启 is the 0.8.5 design and MUST stay where it belongs: on the hosted
-  // host (a desktop app manages its own start-up, so the block is hidden there).
-  assert.ok(titlesOf(hostedPanel).includes('开机自启'), 'the web page keeps the start-at-login group')
-})
-
-
-test('on Windows the script paths are there too — folded, and always in the tree', async () => {
-  const mounted = mountSettings({
-    info: {
-      instance: { isDesktopApp: true, platform: 'win32' },
-      supervisor: { mode: 'app', installed: false, startup: { mode: 'desktop' } },
-      rescue: rescueKit(),
-    },
-  })
-  const panel = await mounted.settled('dsh-autorestart')
-  const paths = marked(panel, 'data-dsh-autorestart-rescue')
-    .filter((node) => node.props['data-dsh-autorestart-rescue'] === 'path')
-    .map((node) => textOf(node))
-  assert.deepEqual(paths, [
-    'C:\\plugin\\scripts\\restore-profile.cmd',
-    'C:\\plugin\\scripts\\emergency-disable.cmd',
-  ], 'the real paths are rendered, not promised')
-  const fold = walk(panel).find((node) => node.type === 'details'
-    && node.props && node.props['data-dsh-autorestart-rescue'] === 'paths-details')
-  assert.ok(fold, 'the paths sit behind 详情 on Windows — the shortcut is the main door there')
-  assert.equal(fold.props.open, undefined, 'and it starts closed')
-})
-
-test('a Windows machine whose desktop cannot be found gets the manual instruction', async () => {
-  const mounted = mountSettings({
-    info: {
-      instance: { isDesktopApp: true, platform: 'win32' },
-      supervisor: { mode: 'app', installed: false, startup: { mode: 'desktop' } },
-      rescue: rescueKit({ desktopDir: '', desktopSource: 'none', shortcutPath: '', iconPath: '' }),
-    },
-  })
-  const panel = await mounted.settled('dsh-autorestart')
-  assert.match(rescueText(panel, 'no-desktop'), /没有桌面目录/)
-  assert.equal(rescueText(panel, 'shortcut'), '', 'nothing to press without a desktop')
-  // The two reminders stay: the block never shrinks into a dead end.
-  assert.notEqual(rescueText(panel, 'shortcut-when'), '')
-  assert.notEqual(rescueText(panel, 'shortcut-scope'), '')
-  // AND THE PATHS ARE OPEN, because there is no button to use instead.
-  // PLAN B: with no desktop entry the paths are the only way out, so they are
-  // rendered in full — there is no fold at all.
-  assert.equal(
-    walk(panel).filter((node) => node.type === 'details'
-      && node.props && node.props['data-dsh-autorestart-rescue'] === 'paths-details').length,
-    0,
-    'the paths are never folded when the shortcut cannot be placed',
-  )
-  assert.notEqual(
-    marked(panel, 'data-dsh-autorestart-rescue')
-      .filter((node) => node.props['data-dsh-autorestart-rescue'] === 'path').length,
-    0,
-    'and they are on the page',
-  )
-})
 
 /* ------------------------------------------------------------------ *
  * ONE FOLD FOR THE WHOLE EXPLANATION (user decision, 2026-11-02).
@@ -1459,7 +1282,7 @@ test('the whole backup explanation is one fold, closed by default', async () => 
   assert.equal(inside.has('backupOnRestart'), false, 'the switches stay outside the fold')
 })
 
-test('a boot the watchdog rescued opens the fold and says so on the title', async () => {
+test('a boot the system restored opens the fold and says so on the title', async () => {
   const backups = twoBackups()
   backups.items[0].intervention = true
   const mounted = mountSettings({
@@ -1476,7 +1299,7 @@ test('a boot the watchdog rescued opens the fold and says so on the title', asyn
   const summary = marked(panel, 'data-dsh-autorestart-backup').filter(
     (node) => node.props['data-dsh-autorestart-backup'] === 'section-summary',
   )
-  assert.ok(textOf(summary[0]).includes('有（自动救援动过手）'), `the title says why it is open: ${textOf(summary[0])}`)
+  assert.ok(textOf(summary[0]).includes('有（系统还原过一份）'), `the title says why it is open: ${textOf(summary[0])}`)
 })
 
 /* ------------------------------------------------------------------ *
@@ -2116,73 +1939,6 @@ test('the collapsed backup fold advertises nothing that was deleted', async () =
   assert.equal(textOf(summary).includes('某个插件起不来'), false, 'and it no longer names the deleted entry')
 })
 
-test('the shortcut icon and the desktop .lnk come from one answer', async () => {
-  const iconPath = 'C:\\Program Files\\DeepSeek Harness\\DeepSeek Harness.exe'
-  const withIcon = mountSettings({
-    info: {
-      instance: { isDesktopApp: true, platform: 'win32' },
-      supervisor: { mode: 'app', installed: false, startup: { mode: 'desktop' } },
-      rescue: rescueKit({ iconPath, iconName: 'DeepSeek Harness.exe', iconAvailable: true }),
-    },
-  })
-  const shown = await withIcon.settled('dsh-autorestart')
-  const tile = marked(shown, 'data-dsh-autorestart-rescue').find(
-    (node) => node.props['data-dsh-autorestart-rescue'] === 'shortcut-icon',
-  )
-  assert.ok(tile, 'the icon tile is there')
-  assert.equal(tile.props.title, iconPath, 'the page points at the same file the .lnk uses')
-  assert.equal(tile.props['data-icon-source'], 'DeepSeek Harness.exe', 'and says which file it is')
-  assert.equal(tile.props['data-icon-available'], 'true')
-
-  // NO ICON AT ALL: the page says so instead of drawing a made-up one, and the
-  // shortcut is still offered — an icon is a nicety, not a requirement.
-  const withoutIcon = mountSettings({
-    info: {
-      instance: { isDesktopApp: true, platform: 'win32' },
-      supervisor: { mode: 'app', installed: false, startup: { mode: 'desktop' } },
-      rescue: rescueKit({ iconPath: '', iconName: '', iconAvailable: false }),
-    },
-  })
-  const bare = await withoutIcon.settled('dsh-autorestart')
-  const bareTile = marked(bare, 'data-dsh-autorestart-rescue').find(
-    (node) => node.props['data-dsh-autorestart-rescue'] === 'shortcut-icon',
-  )
-  assert.equal(bareTile.props.title, '', 'no path is invented')
-  assert.equal(bareTile.props['data-icon-source'], '', 'and no name either')
-  assert.equal(bareTile.props['data-icon-available'], 'false')
-  assert.equal(
-    marked(bare, 'data-dsh-autorestart-rescue').filter(
-      (node) => node.props['data-dsh-autorestart-rescue'] === 'shortcut',
-    ).length,
-    1,
-    'the shortcut itself is still offered',
-  )
-})
-
-test('the watchdog rows are filled in, not printed as {tier} / {result}', async () => {
-  // THE SCREEN THE USER SAW (2026-11-02): "看门狗的触发方式：{tier}" — the
-  // translator took one argument, so the replacement values were dropped and the
-  // placeholder itself was printed. This asserts the RENDERED text, not just the
-  // translator, so the same class of bug cannot come back through another path.
-  const mounted = mountSettings({
-    info: {
-      instance: { isDesktopApp: true, platform: 'win32' },
-      supervisor: { mode: 'app', installed: false, startup: { mode: 'desktop' } },
-      rescue: rescueKit(),
-      watchdog: { tier: 'scheduled-task', available: true, report: { result: 'ok' } },
-    },
-  })
-  const panel = await mounted.settled('dsh-autorestart')
-  const tierLine = rescueText(panel, 'watchdog-tier')
-  const lastLine = rescueText(panel, 'watchdog-last')
-  assert.notEqual(tierLine, '', 'the tier line is drawn when the Host reports a tier')
-  assert.equal(tierLine.includes('{tier}'), false, `no raw placeholder on screen: ${tierLine}`)
-  assert.equal(tierLine.includes('{'), false, `no stray brace either: ${tierLine}`)
-  assert.equal(tierLine.startsWith('看门狗的触发方式：'), true, `and it still says what it is: ${tierLine}`)
-  assert.equal(lastLine.includes('{result}'), false, `no raw placeholder on screen: ${lastLine}`)
-  assert.equal(lastLine.includes('{'), false, `no stray brace either: ${lastLine}`)
-})
-
 /* ------------------------------------------------------------------ *
  * THE SAME PICTURE ON THE PAGE AS ON THE DESKTOP (user requirement,
  * 2026-11-02): the row used to draw a made-up "DSH" tile, so the page
@@ -2193,58 +1949,6 @@ test('the watchdog rows are filled in, not printed as {tier} / {result}', async 
 
 /** A tiny but well-formed PNG data URI, standing in for the Host's answer. */
 const RESCUE_PNG_URI = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8AARQAF/gG9Vw7HAAAAAElFTkSuQmCC'
-
-test('the page draws the very bytes the desktop shortcut carries', async () => {
-  const mounted = mountSettings({
-    info: {
-      instance: { isDesktopApp: true, platform: 'win32' },
-      supervisor: { mode: 'app', installed: false, startup: { mode: 'desktop' } },
-      rescue: rescueKit({ iconDataUri: RESCUE_PNG_URI, iconDataUriHash: 'bc9efa63' }),
-    },
-  })
-  const panel = await mounted.settled('dsh-autorestart')
-  const images = marked(panel, 'data-dsh-autorestart-rescue')
-    .filter((node) => node.props['data-dsh-autorestart-rescue'] === 'rescue-icon')
-  assert.equal(images.length, 1, 'exactly one picture, next to the file name')
-  const image = images[0]
-  assert.equal(image.type, 'img', 'and it is an <img>, not a coloured box with text in it')
-  // THE PUBLISHED STRING, CHARACTER FOR CHARACTER — the page must not rebuild,
-  // re-encode or shorten it, or the two copies would stop being the same bytes.
-  assert.equal(image.props.src, RESCUE_PNG_URI, 'the src is the Host string itself')
-  assert.equal(image.props.src.startsWith('data:image/png;base64,'), true, 'as a PNG data URI')
-  assert.equal(image.props.alt, 'DSH 出事了双击这里.lnk', 'the alt is the file it puts on the desktop')
-  assert.equal(image.props.width, 16, 'sized to sit on the text baseline')
-  assert.equal(image.props.height, 16)
-  // THE STAND-IN IS GONE: one icon per row, and the tile says it is the real one.
-  const tile = marked(panel, 'data-dsh-autorestart-rescue')
-    .find((node) => node.props['data-dsh-autorestart-rescue'] === 'shortcut-icon')
-  assert.equal(tile.props['data-icon-real'], 'true', 'the tile declares that the picture is real')
-  assert.equal(textOf(tile).includes('DSH'), false, 'and the made-up "DSH" text is not drawn beside it')
-})
-
-test('without the Host field the row falls back to text and draws no broken image', async () => {
-  const mounted = mountSettings({
-    info: {
-      instance: { isDesktopApp: true, platform: 'win32' },
-      supervisor: { mode: 'app', installed: false, startup: { mode: 'desktop' } },
-      // An older Host: `iconPath` only, no bytes. Nothing may throw, nothing may
-      // show a broken-image marker, and the rest of the row stays intact.
-      rescue: rescueKit(),
-    },
-  })
-  const panel = await mounted.settled('dsh-autorestart')
-  assert.deepEqual(
-    marked(panel, 'data-dsh-autorestart-rescue')
-      .filter((node) => node.props['data-dsh-autorestart-rescue'] === 'rescue-icon'),
-    [],
-    'no <img> when the Host sent no bytes',
-  )
-  const tile = marked(panel, 'data-dsh-autorestart-rescue')
-    .find((node) => node.props['data-dsh-autorestart-rescue'] === 'shortcut-icon')
-  assert.equal(tile.props['data-icon-real'], 'false', 'the tile says the picture is the stand-in')
-  assert.equal(textOf(tile), 'DSH', 'and it is the text tile, as before')
-  assert.equal(rescueText(panel, 'shortcut-name'), 'DSH 出事了双击这里.lnk', 'the file name is still there')
-})
 
 test('a data URI that is not a PNG is ignored instead of half-rendered', async () => {
   // DEFENSIVE ON PURPOSE: a wrong media type would render a broken image, and a
@@ -2265,15 +1969,6 @@ test('a data URI that is not a PNG is ignored instead of half-rendered', async (
       'refused: ' + bad.slice(0, 32),
     )
   }
-})
-
-test('no base64 icon is baked into the bundle — the picture always comes from the Host', () => {
-  // THE POINT OF THE WHOLE CHANGE: two copies of the same image that are allowed
-  // to be edited separately drift. An inlined constant would do exactly that, so
-  // its absence is pinned here rather than trusted to review.
-  const source = fs.readFileSync(new URL('../client.js', import.meta.url), 'utf8')
-  assert.equal(source.includes('iVBORw0KGgo'), false, 'no PNG payload is written into client.js')
-  assert.equal(source.includes('data:image/png;base64,'), true, 'the prefix it accepts is named, not inlined')
 })
 
 // ---------------------------------------------------------------------------

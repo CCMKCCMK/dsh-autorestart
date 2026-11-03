@@ -1672,15 +1672,14 @@ test('the section shows two titled groups, the restart one first', async () => {
   )
   assert.deepEqual(
     groups.map((node) => node.props['data-dsh-autorestart-group']),
-    ['restart', 'shutdown', 'supervisor', 'rescue', 'report'],
+    ['restart', 'shutdown', 'supervisor', 'report'],
     'the restart group must come before the shutdown group',
   )
   const titles = groups.map((group) => textOf(group.children[0]))
   assert.equal(titles[0], '重启相关设置', 'the restart group must have a visible title')
   assert.equal(titles[1], '关机相关设置', 'the shutdown group must have a visible title')
   assert.equal(titles[2], '开机自启', 'the supervisor group must have a visible title')
-  assert.equal(titles[3], '桌面救援入口', 'the rescue group must have a visible title')
-  assert.equal(titles[4], '遇到问题', 'the report group must have a visible title')
+  assert.equal(titles[3], '遇到问题', 'the report group must have a visible title')
 
   // The restart group carries four controls: the wait, the two switches, and the
   // copy limit (which decides what a restart keeps).

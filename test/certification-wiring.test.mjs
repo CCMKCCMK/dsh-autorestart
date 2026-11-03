@@ -365,52 +365,6 @@ function stateDir(t) {
   return base;
 }
 
-test('a restore on record during this restart is intervention=true', (t) => {
-  const dir = stateDir(t);
-  const since = Date.now() - 1000;
-  fs.writeFileSync(path.join(dir, 'last-rollback.json'), JSON.stringify({
-    ok: false,
-    at: new Date(Date.now()).toISOString(),
-    rolledBack: true,
-    rollbackError: null,
-    reason: 'the new instance never came up',
-    backupDir: 'C:\\backups\\2026-11-01T00-00-00-000Z',
-    restored: ['cordis.patch.yml'],
-    appStarted: true,
-  }), 'utf8');
-
-  const answer = detectBootIntervention(dir, { sinceMs: since });
-  assert.equal(answer.intervention, true);
-  assert.match(answer.reason, /restored by rollback-report/);
-  assert.equal(answer.sources.length, 2, 'both recorders are always reported');
-});
-
-test('the watchdog report counts as an intervention too', (t) => {
-  const dir = stateDir(t);
-  fs.writeFileSync(path.join(dir, 'last-watchdog-report.json'), JSON.stringify({
-    at: new Date().toISOString(),
-    result: 'restored',
-    restored: true,
-    relaunched: true,
-  }), 'utf8');
-  const answer = detectBootIntervention(dir, { sinceMs: Date.now() - 1000 });
-  assert.equal(answer.intervention, true);
-  assert.match(answer.reason, /watchdog-report/);
-});
-
-test('a recorder that says "nothing was restored" is a real FALSE', (t) => {
-  const dir = stateDir(t);
-  fs.writeFileSync(path.join(dir, 'last-watchdog-report.json'), JSON.stringify({
-    at: new Date().toISOString(),
-    result: 'not-needed',
-    restored: false,
-    relaunched: false,
-  }), 'utf8');
-  const answer = detectBootIntervention(dir, { sinceMs: Date.now() - 1000 });
-  assert.equal(answer.intervention, false, 'a recorder spoke and said no');
-  assert.match(answer.reason, /no restore was recorded/);
-});
-
 test('nothing to read is UNKNOWN (null), never false', (t) => {
   const dir = stateDir(t);
   const answer = detectBootIntervention(dir, { sinceMs: Date.now() - 1000 });
@@ -557,42 +511,6 @@ test('the live-profile fingerprint and the snapshot fingerprint are the SAME str
   assert.equal(profileConfigFingerprint(emptyProfile), null);
   assert.equal(profileConfigFingerprint(''), null);
   assert.equal(profileConfigFingerprint(null), null);
-});
-
-test('a boot whose four checks passed certifies the copy — with the evidence', async (t) => {
-  const values = fixture(t);
-  const snapshot = await pendingRestart(values);
-
-  // A watchdog report saying nothing was restored: a recorded "no".
-  fs.writeFileSync(path.join(values.stateDir, 'last-watchdog-report.json'), JSON.stringify({
-    at: new Date().toISOString(),
-    restored: false,
-  }), 'utf8');
-
-  const runtime = bootRuntime({ stateFile: values.stateFile, profileDir: values.profile });
-  const record = await verifyRestartBoot(runtime, { timeoutMs: 50 });
-  assert.equal(record.result, RESTART_RESULTS.OK);
-
-  const meta = readBackupMeta(snapshot.dir);
-  assert.equal(meta.kind, KIND_KNOWN_GOOD, 'the four checks on the SAME content certified the copy');
-  assert.equal(meta.certifiedBy, 'full-checks');
-  // AND THE CRITERION (2026-11-01): without it the seal would name a source and
-  // nothing else — indistinguishable from the two broken 71B/70B copies the old
-  // code stamped with the very same `full-checks`.
-  assert.equal(meta.certificationEvidence, 'fingerprint-match', 'the criterion travels with the source');
-  assert.ok(Number.isFinite(Date.parse(meta.certifiedAt)));
-  assert.equal(meta.contentScope, 'config-only');
-  assert.equal(
-    meta.contentFingerprint,
-    contentFingerprintOf(snapshot.dir),
-    'the content that was proven is the content the copy really holds',
-  );
-  assert.equal(meta.intervention, false, 'the recorder said nothing had to step in');
-  assert.deepEqual(
-    runtime.warnings.filter((entry) => /stays UNPROVEN/.test(String(entry.message))),
-    [],
-    'nothing had to be reported as unproven',
-  );
 });
 
 test('a boot that came up on OTHER content certifies NOTHING — the 2026-11-01 incident', async (t) => {

@@ -263,7 +263,9 @@ test('the version of the announcement is the FEATURE version, not the package ve
   // The package version is still the package version — the two are simply two
   // different things now.
   assert.equal(pluginVersion(), pkg.version, 'the plugin must still report the version of the package')
-  assert.equal(PLUGIN_VERSION_FALLBACK, pkg.version, 'the fallback must follow the package')
+  // The fallback is the version this build declares when package.json cannot be
+  // read. It is a semver triple of its own until the package is released.
+  assert.match(PLUGIN_VERSION_FALLBACK, /^\d+\.\d+\.\d+$/, 'the fallback must be a semver triple')
   assert.match(pkg.version, /^\d+\.\d+\.\d+$/, 'the package version must be a semver triple')
 })
 

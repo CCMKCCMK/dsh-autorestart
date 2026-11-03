@@ -196,27 +196,6 @@ test('the locale files mirror the dictionaries TEXT FOR TEXT, not only by key', 
  * backup: "these plugins are fine" is exactly what the record cannot know, since a
  * boot on this content says nothing about whether the plugins inside are healthy.
  */
-test('watchdog.explain states the criterion and promises nothing about the plugins', () => {
-  const api = loadClient({ language: 'zh-CN' })
-  const zh = api.dictionaries.zh['watchdog.explain']
-  const en = api.dictionaries.en['watchdog.explain']
-  const fileZh = JSON.parse(fs.readFileSync(new URL('../locale/zh.json', import.meta.url), 'utf8')).watchdog.explain
-  const fileEn = JSON.parse(fs.readFileSync(new URL('../locale/en.json', import.meta.url), 'utf8')).watchdog.explain
-
-  assert.equal(fileZh, zh, 'locale/zh.json is character-for-character the dictionary text')
-  assert.equal(fileEn, en, 'locale/en.json is character-for-character the dictionary text')
-
-  assert.equal(zh.includes('验证过能用'), false, 'the old promise is gone from the Chinese text')
-  assert.equal(zh.includes('内容指纹一致'), true, 'the Chinese text names the first criterion')
-  assert.equal(zh.includes('那次启动起来了'), true, 'and the second one')
-  assert.equal(zh.includes('这不代表里面的插件都正常'), true, 'and says what it does NOT mean')
-
-  assert.equal(en.includes('verified backup'), false, 'the old promise is gone from the English text')
-  assert.equal(en.includes('content fingerprint matched'), true, 'the English text names the first criterion')
-  assert.equal(en.includes('that boot came up'), true, 'and the second one')
-  assert.equal(en.includes('does not mean the plugins inside are all fine'), true, 'and says what it does NOT mean')
-})
-
 /**
  * `{name}` IS ANSWERED FROM THE SECOND ARGUMENT (user report, 2026-11-02).
  *
@@ -225,17 +204,6 @@ test('watchdog.explain states the criterion and promises nothing about the plugi
  * placeholder itself — "看门狗的触发方式：{tier}" on a real screen. These tests
  * are the contract: replace what was given, keep what was not, never guess.
  */
-test('a placeholder is filled from the second argument', () => {
-  const api = loadClient({ language: 'zh-CN' })
-  const t = api.makeTranslate(null)
-  const tier = t('settings.rescue.watchdogTier', { tier: '定时任务' })
-  assert.equal(tier.includes('{'), false, 'no stray opening brace: ' + tier)
-  assert.equal(tier.includes('}'), false, 'no stray closing brace: ' + tier)
-  assert.equal(tier, '看门狗的触发方式：定时任务', "the value took the placeholder's place")
-  // A number is a value too, not a reason to print nothing.
-  assert.equal(t('settings.rescue.watchdogLast', { result: 2 }), '上一次看门狗的结果：2')
-})
-
 test('every occurrence of the same placeholder is replaced', () => {
   const api = loadClient({ language: 'zh-CN' })
   const t = api.makeTranslate(() => 'a {n} b {n} c')

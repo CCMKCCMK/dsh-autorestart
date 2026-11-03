@@ -175,8 +175,7 @@
       "restart": "重启相关设置",
       "shutdown": "关机相关设置",
       "supervisor": "开机自启",
-      "report": "遇到问题",
-      "rescue": "桌面救援入口"
+      "report": "遇到问题"
     },
     "seconds": {
       "label": "关机倒数秒数",
@@ -232,7 +231,7 @@
       "scopeMissing": "（没有记录）",
       "interventionLabel": "这次启动有没有被系统介入",
       "intervention": {
-        "true": "有（自动救援动过手）",
+        "true": "有（系统还原过一份）",
         "false": "没有",
         "unknown": "没有记录"
       },
@@ -331,42 +330,6 @@
       "unknown": "看不出它是怎么被拉起来的",
       "self-supervised": "它由本插件自己的守护在管"
     },
-    "rescue": {
-      "hint": "DSH 打不开的时候，用下面这两个脚本救自己（都不用 DSH 跑起来）。",
-      "restoreProfile": "回到上一次好状态",
-      "emergencyDisable": "只把这个插件摘掉",
-      "path": "路径",
-      "copyPath": "复制路径",
-      "copied": "路径已复制",
-      "copyFailed": "复制失败，请手动选中上面的路径",
-      "reveal": "打开所在文件夹",
-      "which": "怎么选：整个环境坏了（改了配置、装了别的插件、升级崩了）→ 用「回到上一次好状态」；只怀疑这个插件 → 用「只把这个插件摘掉」。",
-      "warning": "重要：这个桌面入口和上面两个脚本，都只在你打不开 DSH 的时候用；DSH 正常开着的时候不要点它——用「回到上一次好状态」会把你现在正在用的配置覆盖掉。",
-      "rollbackOk": "自动回滚：可用（重启后起不来会自动回到上一个好状态）",
-      "rollbackBlocked": "自动回滚：**不可用** —— 这台电脑不允许创建计划任务。**会丢失：重启后 DSH 起不来时不会自动恢复**；出问题时请双击「出事了怎么办」里的还原脚本。",
-      "rollbackUnknown": "自动回滚：还不知道（这台机器的能力还没检查过）",
-      "watchdogTier": "看门狗的触发方式：{tier}",
-      "watchdogLast": "上一次看门狗的结果：{result}",
-      "watchdogStrict": "上一次自动救援没有动手：找不到同时满足两个条件的备份——那份备份有过启动记录，而且那次启动没有系统介入过。请手动处理。",
-      "watchdogRestoredFrom": "上一次自动救援还原的这一份：{dir}",
-      "tierScheduledTask": "Windows 计划任务",
-      "tierSystemdRun": "systemd 定时器",
-      "tierDetachedProcess": "自建后台进程",
-      "tierNone": "（这台机器没有可用机制）",
-      "shortcut": "在桌面放一个快捷方式",
-      "shortcutDone": "已在桌面",
-      "noDesktop": "这台机器上没有桌面目录，所以放不了快捷方式（脚本的路径在上面，可以手动复制过去）。",
-      "noDesktopPlatform": "网页版 / 服务器版没有桌面，所以没有这个一键入口；请用上面两个 .sh 脚本。",
-      "commandLabel": "救援入口（命令）",
-      "copyCommand": "复制命令",
-      "commandHint": "复制这条命令执行，效果和桌面上双击那个入口一样。",
-      "commandUnavailable": "这台机器上没有找到可用的救援命令。",
-      "shortcutScope": "它只能把整个环境退回上一次好状态，不能只摘掉某一个插件。",
-      "shortcutBlocked": "系统策略不允许创建快捷方式（比如组策略或权限限制）。把下面的脚本路径复制出来，手动放到桌面：",
-      "shortcutWriteFailed": "快捷方式没写成功：{message}。把下面的脚本路径复制出来，手动放到桌面：",
-      "shortcutFailed": "快捷方式没放成：{message}",
-      "revealFailed": "文件夹没打开：{message}"
-    },
     "report": {
       "label": "遇到问题了？",
       "github": "复制诊断信息并去 GitHub 提问题",
@@ -430,20 +393,6 @@
     "restored": "已经把 {plugin} 恢复到备份版本（备份时间 {at}）。",
     "failed": "{plugin} 恢复没有完成：{reason}",
     "noBackup": "这台机器没有可用备份，只能手动处理。"
-  },
-  "watchdog": {
-    "hint": "后面想改主意，可以到「插件」页里找 dsh-autorestart 的设置。",
-    "title": "重启失败时，会自动帮你救回来",
-    "explain": "这个插件自带自动救援：重启之后新版本一直起不来时，它会拿一份它自己认为可用的备份帮你恢复（判据是内容指纹一致、且那次启动起来了——这不代表里面的插件都正常），再把程序重新拉起来。它默认就是开着的。",
-    "whereOff": "不想要的话，到设置页把「自动救援」的开关关掉就行——关掉之后，新版本起不来就只能手动处理了。",
-    "gotIt": "知道了",
-    "noticeSaved": "好的，就这一条提示，以后不会再弹了。",
-    "warnOff": "关掉之后，万一新版本起不来，就只能手动处理了。",
-    "keepOn": "开着（推荐）",
-    "turnOff": "不要，我自己处理",
-    "savedOn": "已开启：下次重启如果起不来，会自动帮你救回来。",
-    "savedOff": "已关闭：下次重启如果起不来，不会自动救。",
-    "saveFailed": "没能保存你的选择，设置没有变。请再点一次，或到设置页里改。"
   },
   "restart": {
     "stage": {

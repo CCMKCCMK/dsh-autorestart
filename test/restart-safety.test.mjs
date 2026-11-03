@@ -360,23 +360,6 @@ test('the hosted branch arms the rollback watcher BEFORE the restart command run
   assert.ok(fs.existsSync(path.join(state.dir, 'access.json')), 'the instance record exists')
 })
 
-test('when the watchdog v2 is armed, the old watcher is NOT started', async (t) => {
-  // The two watchdogs take the same lock: the one that loses it gives up. If
-  // v2 lost, the profile would be restored and nothing would be running.
-  const { commands, watchers, probes, state, watchdogArms, knownGoodDir } = await runHostedRestart(t, {
-    label: 'v2-wins',
-    watchdogArm: { ok: true, tier: 'scheduled-task', reason: '' },
-  })
-  assert.equal(watchdogArms.length, 1, 'the new watchdog was armed once')
-  // v2 rolls back the PROVEN state, not the snapshot this restart just took.
-  assert.equal(watchdogArms[0].restoreTargetDir, knownGoodDir, 'v2 is told exactly which copy it may restore')
-  assert.equal(watchers.length, 0, 'the old watcher is NOT started next to v2')
-  assert.equal(commands.length, 1, 'the restart command still ran exactly once')
-  assert.equal(probes.length, 1, 'the new instance is confirmed once')
-  const report = JSON.parse(fs.readFileSync(path.join(state.dir, 'last-watchdog-report.json'), 'utf8'))
-  assert.equal(report.arbiter, 'v2', 'the report names the arbiter')
-})
-
 test('the hosted branch rolls the snapshot back ONCE when the new instance never answers', async (t) => {
   const broken = 'rows:\n  - id: broken\n'
   const { profile, state, runtime, fake, commands, watchers, knownGoodDir } = await runHostedRestart(t, {
@@ -455,54 +438,6 @@ test('the hosted branch restores the KNOWN-GOOD copy, never the snapshot of this
     .find((entry) => entry.dir !== knownGoodDir)
   assert.ok(snapshotOfThisRestart, 'this restart took its own snapshot')
   assert.equal(snapshotOfThisRestart.kind, KIND_SNAPSHOT, 'the snapshot of this restart is not a target')
-})
-
-test('the hosted branch does NOT roll back when the new instance answers', async (t) => {
-  const { profile, state, runtime, fake, commands, watchers, probes, knownGoodDir } = await runHostedRestart(t, {
-    label: 'healthy',
-    knownGood: { patch: 'rows:\n  - id: old-known-good\n' },
-    probeOutcome: { ok: true, reason: 'the new instance answered its health route' },
-  })
-
-  assert.equal(commands.length, 1, 'the restart command ran exactly once')
-  assert.equal(watchers.length, 1, 'the watcher was armed exactly once')
-  assert.equal(probes.length, 1, 'the new instance was confirmed once')
-  assert.equal(
-    fs.existsSync(path.join(state.dir, 'last-rollback.json')),
-    false,
-    'a healthy restart is NOT rolled back',
-  )
-  assert.equal(runtime.lastRollback, null)
-
-  // THE PROMOTION IS WIRED TO THE PROBE NOW (2026-11-01) — and the source says
-  // exactly what was proven. On this path the four startup checks do NOT run (the
-  // old instance survived its own command and only sees "the new instance
-  // answers"), so the certification must NOT borrow the name of a check that
-  // never ran: it is `command-probe`, and nothing else.
-  const newestKnownGood = latestKnownGood(path.join(state.dir, 'backups'))
-  assert.ok(newestKnownGood, 'a restart whose probe answered leaves a certified copy')
-  assert.equal(newestKnownGood.kind, KIND_KNOWN_GOOD)
-  assert.notEqual(newestKnownGood.dir, knownGoodDir, 'the snapshot of THIS restart is the new safe copy')
-  assert.equal(newestKnownGood.certifiedBy, 'command-probe', 'certified by the health probe, not by the four checks')
-  assert.ok(Number.isFinite(Date.parse(newestKnownGood.certifiedAt)), 'with the moment it was confirmed')
-  // A DEFINITE "NO": this restart armed a watchdog, whose report on disk says
-  // `restored: false` — a recorder spoke, and it said nothing had to step in. That
-  // is the `false` case; "not recorded" would be `null` and must not be written as
-  // `false` (the unit tests in backup-identity.test.mjs pin both).
-  assert.equal(newestKnownGood.intervention, false, 'the recorded answer is: nothing had to step in')
-
-  // The profile is left exactly as the restart command left it.
-  assert.equal(fs.readFileSync(path.join(profile, 'cordis.patch.yml'), 'utf8'), 'rows:\n  - id: demo\n')
-
-  const marker = JSON.parse(fs.readFileSync(path.join(state.dir, 'restart-outcome.json'), 'utf8'))
-  assert.equal(marker.decided, true, 'the watcher is told to stand down')
-  assert.equal(marker.ok, true)
-
-  assert.equal(
-    fake.logs.some((entry) => entry.level === 'error'),
-    false,
-    'a healthy restart logs no error',
-  )
 })
 
 // ---------------------------------------------------------------------------
@@ -1066,75 +1001,6 @@ test('a known-good copy OLDER than the snapshot of this restart is the one that 
     'rows:\n  - id: two-days-ago\n',
     'the profile holds the older, proven state again',
   )
-})
-
-test('a rollback without a known-good copy restores NOTHING and says no-known-good', async (t) => {
-  const brokenByCommand = 'rows:\n  - id: broken-by-command\n'
-  const { profile, state, runtime, fake, watchers, watchdogArms, knownGoodDir } = await runHostedRestart(t, {
-    label: 'no-known-good',
-    knownGood: null,
-    onCommand: ({ profile: where }) => fs.writeFileSync(path.join(where, 'cordis.patch.yml'), brokenByCommand, 'utf8'),
-    probeOutcome: { ok: false, reason: 'the new instance never answered' },
-  })
-  assert.equal(knownGoodDir, null, 'the fixture really has no known-good copy')
-  // WHAT CHANGED, AND WHY IT IS NOT A WEAKENING (2026-11-01, strict mode): the
-  // watchdog USED to stay home entirely when no copy existed, which left the user
-  // with a silent failure — nothing was armed, so nothing was ever written down
-  // that said "there is no trusted restore point". It is armed now, WITH an empty
-  // target and the blocked flag, so the run happens and the report says why. What
-  // must still hold — and is asserted below — is that it restores NOTHING.
-  assert.equal(watchdogArms.length, 1, 'the watchdog is armed so it can REPORT that nothing may be restored')
-  assert.equal(watchdogArms[0].restoreTargetDir, '', 'but it is given no copy at all')
-  assert.equal(watchdogArms[0].restoreBlocked, true, 'and it is told, in so many words, that it is blocked')
-  assert.match(String(watchdogArms[0].restoreBlockedReason), /no backup qualifies/, 'including the reason')
-  assert.match(
-    String(watchdogArms[0].restoreBlockedReason),
-    /not-content-verified/,
-    'and which copies were refused, with why (this restart took one snapshot whose restart was never observed)',
-  )
-  assert.equal(watchers.length, 0, 'the old watcher is not started')
-
-  const report = JSON.parse(fs.readFileSync(path.join(state.dir, 'last-rollback.json'), 'utf8'))
-  assert.equal(report.ok, false, 'the report says the restart failed')
-  assert.equal(report.rolledBack, false, 'NOTHING was restored')
-  assert.equal(report.backupDir, null, 'the report names no rollback target')
-  assert.match(String(report.reason), /^no-usable-backup: /, 'the report says WHY nothing was restored')
-  assert.match(String(report.reason), /never answered/, 'and it still says what went wrong')
-  assert.deepEqual(report.restored, [], 'not a single file was touched')
-  assert.equal(
-    fs.readFileSync(path.join(profile, 'cordis.patch.yml'), 'utf8'),
-    brokenByCommand,
-    'the profile is left exactly as the restart command left it',
-  )
-  assert.equal(runtime.lastRollback.rolledBack, false)
-  assert.equal(runtime.lastRollback.backupDir, null, 'the interface is told there is no rollback target')
-  assert.ok(
-    fake.logs.some((entry) => entry.level === 'error' && entry.text.includes('nothing to roll back to')),
-    'the failure is logged, never swallowed',
-  )
-})
-
-test('without a known-good copy the watchdog v2 is armed but told it may restore NOTHING', async (t) => {
-  const { state, fake, watchers, watchdogArms } = await runHostedRestart(t, {
-    label: 'no-known-good-v2',
-    knownGood: null,
-    // The injected v2 WOULD say yes. It is armed on purpose — a run that reports
-    // "no trusted restore point, handle it manually" is what the user asked for —
-    // but it is armed with NO target and a blocked flag, so it cannot put the
-    // broken state back.
-    watchdogArm: { ok: true, tier: 'scheduled-task', reason: '' },
-    probeOutcome: { ok: false, reason: 'the new instance never answered' },
-  })
-  assert.equal(watchdogArms.length, 1, 'v2 is armed so its report can say that nothing may be restored')
-  assert.equal(watchdogArms[0].restoreTargetDir, '', 'with no copy to restore')
-  assert.equal(watchdogArms[0].restoreBlocked, true, 'and the strict-mode flag set')
-  assert.equal(watchers.length, 0, 'the old watcher is not armed')
-  assert.ok(
-    fake.logs.some((entry) => entry.level === 'warn' && entry.text.includes('no trusted restore point')),
-    'the plugin says out loud that the watchdog will not restore anything, and the report will repeat it',
-  )
-  const report = JSON.parse(fs.readFileSync(path.join(state.dir, 'last-rollback.json'), 'utf8'))
-  assert.match(String(report.reason), /^no-usable-backup: /, 'and the report says no-usable-backup')
 })
 
 // ---------------------------------------------------------------------------

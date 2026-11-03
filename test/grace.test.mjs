@@ -667,14 +667,13 @@ test('the settings section offers the restart wait and the shutdown countdown', 
   )
   assert.deepEqual(
     groups.map((node) => node.props['data-dsh-autorestart-group']),
-    ['restart', 'shutdown', 'supervisor', 'rescue', 'report'],
+    ['restart', 'shutdown', 'supervisor', 'report'],
     'the restart group must come before the shutdown group',
   )
   assert.equal(textOf(groups[0].children[0]), '重启相关设置', 'the restart group has a visible title')
   assert.equal(textOf(groups[1].children[0]), '关机相关设置', 'the shutdown group has a visible title')
   assert.equal(textOf(groups[2].children[0]), '开机自启', 'the supervisor group has a visible title')
-  assert.equal(textOf(groups[3].children[0]), '桌面救援入口', 'the rescue group has a visible title')
-  assert.equal(textOf(groups[4].children[0]), '遇到问题', 'the report group has a visible title')
+  assert.equal(textOf(groups[3].children[0]), '遇到问题', 'the report group has a visible title')
 
   // The restart group carries three controls, the shutdown group exactly one.
   const restartControls = walk(groups[0]).filter((node) => node.type === 'select' || node.type === 'input')

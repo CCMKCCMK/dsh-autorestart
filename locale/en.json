@@ -175,8 +175,7 @@
       "restart": "Restart settings",
       "shutdown": "Shutdown settings",
       "supervisor": "Start at login",
-      "report": "Something is wrong",
-      "rescue": "Desktop rescue"
+      "report": "Something is wrong"
     },
     "seconds": {
       "label": "Shutdown countdown seconds",
@@ -230,9 +229,9 @@
         "slim": "slim copy (configuration and by-hand plugins)"
       },
       "scopeMissing": "(not recorded)",
-      "interventionLabel": "Was this boot rescued by the system",
+      "interventionLabel": "Was this boot restored by the system",
       "intervention": {
-        "true": "yes, the watchdog restored a copy",
+        "true": "yes, the system restored a copy",
         "false": "no, nothing had to step in",
         "unknown": "not recorded"
       },
@@ -331,42 +330,6 @@
       "unknown": "it could not be established how it was started",
       "self-supervised": "the supervisor of this plugin started it"
     },
-    "rescue": {
-      "hint": "When DSH does not come up, these two scripts rescue it for you (neither of them needs DSH running).",
-      "restoreProfile": "Back to the last good state",
-      "emergencyDisable": "Take this plugin out only",
-      "path": "Path",
-      "copyPath": "Copy the path",
-      "copied": "The path is on the clipboard",
-      "copyFailed": "The copy failed — please select the path above by hand",
-      "reveal": "Open the folder",
-      "which": "Which one: the whole environment is broken (a changed configuration, another plugin, a bad upgrade) → \"Back to the last good state\"; only this plugin is suspect → \"Take this plugin out only\".",
-      "warning": "Important: this desktop entry and the two scripts above are for when DSH does not come up. Do not click it while DSH is running — \"Back to the last good state\" overwrites the configuration you are working with right now.",
-      "rollbackOk": "Automatic rollback: available (a host that does not come up after a restart goes back to the last good state)",
-      "rollbackBlocked": "Automatic rollback: **not available** — this computer does not allow creating scheduled tasks. **What you lose: DSH will NOT recover by itself when it does not come up after a restart**; when it breaks, double-click the restore script in \"If DSH will not start\".",
-      "rollbackUnknown": "Automatic rollback: not known yet (this machine has not been checked)",
-      "watchdogTier": "How the watchdog is triggered: {tier}",
-      "watchdogLast": "The last watchdog run: {result}",
-      "watchdogStrict": "The last watchdog run did NOT act: no backup satisfies both conditions — it records a startup, and that startup had no system intervention. Please handle it by hand.",
-      "watchdogRestoredFrom": "The copy the last watchdog run restored: {dir}",
-      "tierScheduledTask": "a Windows scheduled task",
-      "tierSystemdRun": "a systemd timer",
-      "tierDetachedProcess": "a detached background process",
-      "tierNone": "(this machine has no way to run it)",
-      "shortcut": "Put a shortcut on the desktop",
-      "shortcutDone": "It is on the desktop",
-      "noDesktop": "This machine has no desktop directory, so no shortcut can be placed (the paths are above — copy them by hand).",
-      "noDesktopPlatform": "The web / server version has no desktop, so there is no one-click entry here; use the two .sh scripts above.",
-      "commandLabel": "Rescue entry (command)",
-      "copyCommand": "Copy the command",
-      "commandHint": "Copy this command and run it — the same effect as double-clicking the desktop entry.",
-      "commandUnavailable": "No usable rescue command was found on this machine.",
-      "shortcutScope": "It can only put the WHOLE environment back to the last good state — it cannot take one plugin out.",
-      "shortcutBlocked": "A system policy does not allow creating the shortcut (a group policy or a permission limit). Copy the script path below and put it on the desktop by hand:",
-      "shortcutWriteFailed": "The shortcut was not written: {message}. Copy the script path below and put it on the desktop by hand:",
-      "shortcutFailed": "The shortcut was not placed: {message}",
-      "revealFailed": "The folder did not open: {message}"
-    },
     "report": {
       "label": "Something wrong?",
       "github": "Copy the diagnostics and open a GitHub issue",
@@ -430,20 +393,6 @@
     "restored": "{plugin} was put back to the backup version (backup taken {at}).",
     "failed": "{plugin} was not restored: {reason}",
     "noBackup": "There is no usable backup on this machine; it has to be handled by hand."
-  },
-  "watchdog": {
-    "hint": "Changed your mind later? Look for the dsh-autorestart settings on the Plugins page.",
-    "title": "If a restart fails, it can rescue you automatically",
-    "explain": "This plugin ships with an automatic rescue: when a newly restarted version never comes up, it restores a backup it considers usable (the criterion is that the content fingerprint matched and that boot came up — it does not mean the plugins inside are all fine), then starts the program again. It is on by default.",
-    "whereOff": "If you do not want it, turn it off on the settings page — with it off, a new version that does not start has to be handled by hand.",
-    "gotIt": "Got it",
-    "noticeSaved": "That is the only notice; it will not appear again.",
-    "warnOff": "With it off, a new version that does not start has to be handled by hand.",
-    "keepOn": "Keep it on (recommended)",
-    "turnOff": "No, I will handle it",
-    "savedOn": "The watchdog is on: the next restart is protected.",
-    "savedOff": "The watchdog is off: the next restart will not roll back on its own.",
-    "saveFailed": "Your choice was not saved, so the watchdog setting is unchanged. Please try again, or change it on the settings page."
   },
   "restart": {
     "stage": {
