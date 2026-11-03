@@ -204,7 +204,6 @@ import {
   sweepLegacyWatcherScripts,
   writeTextFileAtomic,
 } from './lib/restart.js'
-import { sweepLegacyWatchdogArtifacts } from './lib/legacy-watchdog-cleanup.js'
 import { compareSemver } from './lib/semver.js'
 import { buildCookieClearCommand, readCookieClearReport, summarizeCookieClear } from './lib/cookie-clear.js'
 import { cleanupLegacyWatchdogArtifacts } from './lib/legacy-cleanup.js'
@@ -11903,20 +11902,6 @@ export function apply(ctx, rawConfig, options = {}) {
     })
   } else if (watcherHygiene.error !== null) {
     log.warn('could not sweep the old rollback watcher scripts:', watcherHygiene.error)
-  }
-  // 0.8.x armed a one-shot task and wrote a few state files; 0.9.0 reads none of
-  // them, so the first boot of this version removes them once (a scheduled task
-  // pointing at a script this version no longer ships can only fail).
-  const legacyWatchdog = sweepLegacyWatchdogArtifacts({
-    stateDir: path.dirname(String(runtime.stateFile ?? '')),
-  })
-  if (legacyWatchdog.removedFiles.length > 0 || legacyWatchdog.removedUnits.length > 0) {
-    log.warn('removed what the old watchdog left behind', {
-      files: legacyWatchdog.removedFiles,
-      units: legacyWatchdog.removedUnits,
-    })
-  } else if (legacyWatchdog.error !== null) {
-    log.warn('could not clean up the old watchdog leftovers:', legacyWatchdog.error)
   }
 
   trackAgents(ctx, runtime, config)
