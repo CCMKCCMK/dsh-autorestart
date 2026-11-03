@@ -32,6 +32,7 @@
     "client.js",
     "lib/**/*.js",
     "supervisor/supervisor.js",
+    "scripts/build-icon.mjs",
     "scripts/clear-dsh-auth-cookies.mjs",
     "scripts/run-tests.ps1",
     "cordis.patch.yml",
