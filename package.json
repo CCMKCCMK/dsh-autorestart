@@ -1,6 +1,6 @@
 {
   "name": "dsh-autorestart",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "type": "module",
   "description": "DeepSeek Harness plugin: idle-aware restart with session resume, a snapshot of the configuration and plugins before every restart, a clear-out of the stale login cookies behind \"Web authentication failed\", and a countdown shutdown; verified on the Windows desktop client and on hosted dsh web on WSL with systemd; implemented but not yet verified on hosted dsh web on Windows, on WSL without systemd, and on native Linux. AI-generated, not human-reviewed: use with caution.",
   "license": "MIT",

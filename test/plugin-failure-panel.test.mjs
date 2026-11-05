@@ -479,3 +479,312 @@ test('the wording the card does use never calls a plugin different from the back
     )
   }
 })
+
+// ---------------------------------------------------------------------------
+// ① THE CARD MUST NOT PROMISE A COMMAND IT DOES NOT HAVE (user report,
+//    2026-11-05).
+//
+// WHAT THE USER SAW:
+//
+//   @deepseek-ai/dsh-experimental-client-ui-forge
+//   «这个插件是第三方安装的，备份里没有它的文件。要还原就用下面那条命令，
+//     它会装回原来的那个版本（不是最新版）：»
+//   <an empty line — there was no command>
+//   «备份里查不到它的精确版本，只能按插件名重新安装。»
+//
+// The sentence «use the command below» promises a command that is not there,
+// and the sentence right below it says something else entirely. Two
+// statements, one of them a promise nobody can keep.
+//
+// THE RULE: the hint that points at the command and the command itself belong
+// to the SAME branch. No command → no promise, and a sentence that is only
+// true.
+// ---------------------------------------------------------------------------
+
+test('① the card promises a command only when it really has one', () => {
+  const hintAt = panel.indexOf("t('pluginFailure.thirdPartyHint')")
+  const checkAt = panel.indexOf("typeof action.command === 'string' && action.command !== ''")
+  assert.ok(checkAt !== -1, 'the panel still checks whether a command exists')
+  assert.ok(hintAt !== -1, 'the third-party hint still exists — it is right when a command follows')
+  assert.ok(
+    checkAt < hintAt,
+    'the hint that says «use the command below» is only reachable AFTER the command was found',
+  )
+  // The command line itself is still rendered, and it is the thing the hint
+  // talks about.
+  const cmdAt = panel.indexOf("key: 'cmd:' + entry.name")
+  assert.ok(cmdAt > hintAt, 'the command follows the hint that points at it')
+})
+
+test('① the no-command case says something true, and the old wording is gone', () => {
+  assert.ok(
+    panel.includes("t('pluginFailure.noCommandHint')"),
+    'the case without a command has its own wording',
+  )
+  assert.equal(
+    panel.includes("t('pluginFailure.noVersion')"),
+    false,
+    'the old sentence is gone — it said «it can only be reinstalled by name» right below a promise of a command',
+  )
+  // The dead key must not stay in the dictionaries either: a mirror that keeps
+  // the sentence nobody renders is one more copy to drift.
+  for (const file of ['zh', 'en']) {
+    const dict = JSON.parse(fs.readFileSync(path.join(clientDir, '..', 'locale', file + '.json'), 'utf8'))
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(dict.pluginFailure, 'noVersion'),
+      false,
+      file + ': the dead key is gone',
+    )
+    assert.equal(
+      typeof dict.pluginFailure.noCommandHint,
+      'string',
+      file + ': the new key has a text',
+    )
+  }
+})
+
+test('① the no-command wording does not point at a command either', () => {
+  for (const file of ['zh', 'en']) {
+    const dict = JSON.parse(fs.readFileSync(path.join(clientDir, '..', 'locale', file + '.json'), 'utf8'))
+    const text = dict.pluginFailure.noCommandHint
+    assert.equal(
+      /用下面那条命令|use the command below|the command below/i.test(text),
+      false,
+      file + ': the wording must not promise a command',
+    )
+    assert.equal(
+      /重新安装|reinstall/i.test(text),
+      false,
+      file + ': and it must not tell the user to reinstall it either — the system does not know how',
+    )
+  }
+})
+
+test('① a plugin without a version really gets no command, and the hint still does', () => {
+  // The model side of the same rule: the action carries a command only when
+  // the inventory knew the version.
+  const result = build({
+    watch: watchPayload({ packages: ['dsh-unknown-version'] }),
+    inventory: inventoryPayload([{ name: 'dsh-unknown-version', status: 'different' }]),
+  })
+  assert.equal(result.certain[0].action.type, 'hint')
+  assert.equal(result.certain[0].action.command, null, 'no version, no command')
+})
+
+// ---------------------------------------------------------------------------
+// ② A MODULE OF THE HOST IS NOT A PLUGIN OF THIS PROFILE (user report,
+//    2026-11-05).
+//
+// `@deepseek-ai/dsh-experimental-client-ui-forge` was listed as «did not come
+// up». It is not a plugin the user installed: the host ships it. There are no
+// files of it in the backup and no version to reinstall, so the card asked for
+// something nobody can do.
+//
+// THE INVENTORY IS THE LIST OF THIS PROFILE'S PLUGINS. A package that is not
+// in it is skipped.
+//
+// BUT ONLY WHEN THE INVENTORY ANSWERED. An unreadable inventory (no rows) must
+// not silence the whole card: a missing list is not a proof that nothing is
+// missing.
+// ---------------------------------------------------------------------------
+
+test('② a package that is not in the plugin inventory is a module of the host', () => {
+  const result = build({
+    watch: watchPayload({ packages: ['@deepseek-ai/dsh-experimental-client-ui-forge'] }),
+    inventory: inventoryPayload([
+      { name: 'dsh-cost-meter', status: 'different', version: '1.2.3' },
+    ]),
+  })
+  assert.equal(result, null, 'a module the host ships with is not something the user can put back')
+})
+
+test('② a host module does not push a real plugin out of the list', () => {
+  const result = build({
+    watch: watchPayload({
+      packages: ['@deepseek-ai/dsh-experimental-client-ui-forge', 'dsh-cost-meter@1.2.3'],
+    }),
+    inventory: inventoryPayload([
+      { name: 'dsh-cost-meter', status: 'different', version: '1.2.3' },
+    ]),
+  })
+  assert.notEqual(result, null, 'the real plugin still opens the card')
+  assert.deepEqual(
+    result.certain.map((entry) => entry.name),
+    ['dsh-cost-meter'],
+    'and the host module is not on the list',
+  )
+})
+
+test('② an unreadable inventory does not silence the card', () => {
+  // The filter must not turn a missing answer into "nothing is wrong".
+  const result = build({
+    watch: watchPayload({ packages: ['dsh-cost-meter@1.2.3'] }),
+    inventory: inventoryPayload([]),
+  })
+  assert.notEqual(result, null, 'the card still opens when the inventory could not be read')
+  assert.deepEqual(result.certain.map((entry) => entry.name), ['dsh-cost-meter'])
+})
+
+test('② a linked plugin the inventory knows still gets its one-click restore', () => {
+  const result = build({
+    profile: 'desktop',
+    watch: watchPayload({ packages: ['dsh-my-own'] }),
+    inventory: inventoryPayload([
+      { name: 'dsh-my-own', status: 'different', version: '0.1.0', linked: true },
+    ]),
+  })
+  assert.equal(result.certain[0].kind, 'linked', 'it is still a link install')
+  assert.equal(result.certain[0].action.type, 'restore', 'and it still gets the restore branch')
+})
+
+// ---------------------------------------------------------------------------
+// ③ THE TITLE DOES NOT COUNT ANYTHING (user report, 2026-11-05).
+//
+// The title said «有两件事要你看一下» / «Two things worth a look» — a claim
+// about how many things there are, written back when the card happened to
+// hold two. The card holds one list, and that list may hold one name or
+// several.
+// ---------------------------------------------------------------------------
+
+test('③ the title does not claim a number of things', () => {
+  for (const file of ['zh', 'en']) {
+    const dict = JSON.parse(fs.readFileSync(path.join(clientDir, '..', 'locale', file + '.json'), 'utf8'))
+    const title = dict.pluginFailure.title
+    assert.equal(
+      /两件事|两件|two things|two items|2 things/i.test(title),
+      false,
+      file + ': the title must not claim how many things there are — ' + title,
+    )
+    assert.ok(title.length > 0, file + ': the title still says something')
+  }
+})
+
+test('③ the title is the same in both languages', () => {
+  const zh = JSON.parse(fs.readFileSync(path.join(clientDir, '..', 'locale', 'zh.json'), 'utf8'))
+  const en = JSON.parse(fs.readFileSync(path.join(clientDir, '..', 'locale', 'en.json'), 'utf8'))
+  assert.equal(zh.pluginFailure.title, '启动后有东西没起来')
+  assert.equal(en.pluginFailure.title, 'Something did not come up after the start')
+})
+
+// ---------------------------------------------------------------------------
+// ④ THE COMMAND NAMES A REAL PROFILE (user report, 2026-11-05).
+//
+// WHAT THE USER SAW on the hosted web instance:
+//
+//   «要还原就用下面这条命令…»
+//   dsh plugin --profile <profile> add dsh-better-sidebar@0.28.2
+//
+// `<profile>` is a PLACEHOLDER: nobody can copy that line and run it. The Host
+// already knows the profile — it answers with the profile DIRECTORY, and the
+// profile NAME is its last segment.
+//
+// TWO HOSTS, TWO SEPARATORS: the hosted web instance answers with a POSIX path
+// (`/home/fg/.dsh/profiles/web`), the desktop build with a Windows one
+// (`…\.dsh\profiles\desktop`). Both must work, and both ends share this file.
+// ---------------------------------------------------------------------------
+
+const profileNameOf = model && typeof model.pluginFailureProfileName === 'function'
+  ? model.pluginFailureProfileName
+  : null
+
+test('④ the profile name is the last segment of the profile path', () => {
+  assert.equal(typeof profileNameOf, 'function', 'pluginFailureProfileName must be published for the tests')
+  assert.equal(profileNameOf({ profile: '/home/fg/.dsh/profiles/web' }), 'web', 'the hosted web instance')
+  assert.equal(profileNameOf({ profile: 'C:\\Users\\Bob\\.dsh\\profiles\\desktop' }), 'desktop', 'the desktop build')
+  assert.equal(profileNameOf({ profile: '/home/fg/.dsh/profiles/web/' }), 'web', 'a trailing separator is not a name')
+  assert.equal(profileNameOf({ profile: { dir: '/home/fg/.dsh/profiles/web' } }), 'web', 'the Host may send an object')
+})
+
+test('④ a nested health payload is read too', () => {
+  assert.equal(profileNameOf({ health: { profile: '/home/fg/.dsh/profiles/web' } }), 'web')
+  assert.equal(profileNameOf({ status: { profile: '/home/fg/.dsh/profiles/web' } }), 'web')
+  assert.equal(profileNameOf({ instance: { profile: '/home/fg/.dsh/profiles/web' } }), 'web')
+  assert.equal(profileNameOf({ restart: { profile: '/home/fg/.dsh/profiles/web' } }), 'web')
+})
+
+test('④ when the Host says nothing there is no name — and no crash', () => {
+  assert.equal(profileNameOf(null), '')
+  assert.equal(profileNameOf({}), '')
+  assert.equal(profileNameOf({ profile: '' }), '')
+  assert.equal(profileNameOf({ profile: '   ' }), '')
+  assert.equal(profileNameOf({ profile: 42 }), '')
+})
+
+test('④ the command carries the real name, and falls back to the placeholder', () => {
+  const named = build({
+    profile: profileNameOf({ profile: '/home/fg/.dsh/profiles/web' }),
+    watch: watchPayload({ packages: ['dsh-better-sidebar@0.28.2'] }),
+    inventory: inventoryPayload([{ name: 'dsh-better-sidebar', status: 'different', version: '0.28.2' }]),
+  })
+  assert.match(named.certain[0].action.command, /--profile web/, 'the command names the real profile')
+  assert.equal(named.certain[0].action.command.includes('<profile>'), false, 'the placeholder is gone')
+  assert.match(named.certain[0].action.command, /dsh-better-sidebar@0\.28\.2/, 'and the exact version')
+
+  const unnamed = build({
+    watch: watchPayload({ packages: ['dsh-better-sidebar@0.28.2'] }),
+    inventory: inventoryPayload([{ name: 'dsh-better-sidebar', status: 'different', version: '0.28.2' }]),
+  })
+  assert.match(unnamed.certain[0].action.command, /--profile <profile>/, 'without a name the placeholder stays')
+  assert.equal(/undefined|null/.test(unnamed.certain[0].action.command), false, 'and never undefined or null')
+})
+
+test('④ the panel hands the profile name to the model, at both call sites', () => {
+  assert.match(panel, /profile: profileName/, 'the profile name reaches build()')
+  assert.match(panel, /build\(\{ watch, inventory, profile: profileName \}\)/, 'the judgement inside the effect knows it')
+  assert.match(
+    panel,
+    /build\(\{ watch: loaded\.watch, inventory: loaded\.inventory, profile: profileName \}\)/,
+    'and so does the render',
+  )
+  assert.equal(
+    /build\(\{ watch, inventory \}\)/.test(panel),
+    false,
+    'no call site is left without the profile',
+  )
+})
+
+// ---------------------------------------------------------------------------
+// ⑤ THE WAY OUT FOR EVERYONE WHO DOES NOT LIKE COMMANDS (user report,
+//    2026-11-05).
+//
+// The card may say: go back to the Plugins page and reinstall it. But it has to
+// say WHAT that gets you: the LATEST version, NOT the one in the backup. The
+// command above installs the backup version; reinstalling from the interface
+// does not. A user who does not know that will think the backup version came
+// back.
+//
+// AND IT ONLY APPEARS WHERE THERE IS A COMMAND: the branch without a command
+// (noCommandHint) must not carry a promise about something that is not there.
+// ---------------------------------------------------------------------------
+
+test('⑤ the reinstall hint sits in the branch that HAS a command', () => {
+  const hintAt = panel.indexOf("t('pluginFailure.reinstallHint')")
+  assert.ok(hintAt !== -1, 'the reinstall hint exists')
+  const cmdAt = panel.indexOf("key: 'cmd:' + entry.name")
+  assert.ok(cmdAt !== -1, 'the command row exists')
+  assert.ok(hintAt > cmdAt, 'the hint follows the command it is about')
+
+  const branchStart = panel.indexOf("typeof action.command === 'string' && action.command !== ''")
+  const branchEnd = panel.indexOf("t('pluginFailure.noCommandHint')")
+  assert.ok(branchStart !== -1, 'the branch with a command is findable')
+  assert.ok(branchEnd > branchStart, 'the branch without a command is findable')
+  assert.ok(hintAt > branchStart && hintAt < branchEnd, 'the hint lives in the branch that has a command')
+  assert.equal(
+    panel.slice(branchEnd).includes("t('pluginFailure.reinstallHint')"),
+    false,
+    'and the branch WITHOUT a command does not carry it',
+  )
+})
+
+test('⑤ both languages say the reinstall gets the latest version, not the backup one', () => {
+  const zh = JSON.parse(fs.readFileSync(path.join(clientDir, '..', 'locale', 'zh.json'), 'utf8')).pluginFailure.reinstallHint
+  const en = JSON.parse(fs.readFileSync(path.join(clientDir, '..', 'locale', 'en.json'), 'utf8')).pluginFailure.reinstallHint
+  assert.equal(typeof zh, 'string', 'the Chinese hint has a text')
+  assert.equal(typeof en, 'string', 'the English hint has a text')
+  assert.match(zh, /插件/, 'the Chinese text points at the Plugins page')
+  assert.match(zh, /最新/, 'and says the reinstall gets the latest version')
+  assert.match(zh, /备份/, 'and says it is not the version in the backup')
+  assert.match(en, /Plugins page/, 'the English text points at the Plugins page')
+  assert.match(en, /latest version/, 'and says the reinstall gets the latest version')
+  assert.match(en, /not the one in the backup/, 'and says it is not the version in the backup')
+})

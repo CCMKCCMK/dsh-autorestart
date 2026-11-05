@@ -372,7 +372,7 @@
     "error": "Could not record it: {message}"
   },
   "pluginFailure": {
-    "title": "Two things worth a look",
+    "title": "Something did not come up after the start",
     "hint": "These are on record - you can restore them later from the Plugins page.",
     "dismiss": "Got it",
     "dismissLabel": "Hide this for now (it comes back on the next start)",
@@ -387,7 +387,8 @@
     "linkedHint": "You wrote this plugin yourself and installed it as a link, so it can be put back from the backup directly.",
     "thirdPartyHint": "This plugin was installed from elsewhere and the backup does not hold its files. To put it back, use the command below: it reinstalls the same version (not the latest one):",
     "commandLabel": "Copy this command",
-    "noVersion": "The backup does not record its exact version, so it can only be reinstalled by name.",
+    "reinstallHint": "Not fond of commands? You can reinstall it from the Plugins page - but a reinstall from the interface gets you the latest version, not the one in the backup.",
+    "noCommandHint": "This plugin was installed from elsewhere. The backup holds neither its files nor its exact version, so there is no restore command to hand over this time.",
     "restore": "Restore {plugin} only",
     "restoring": "Restoring {plugin}…",
     "restored": "{plugin} was put back to the backup version (backup taken {at}).",

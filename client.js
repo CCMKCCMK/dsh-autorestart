@@ -551,7 +551,7 @@
     'announcement.error': '没能记下来：{message}',
     // THE PLUGIN THAT DID NOT LOAD (用户拍板 2026-11-01)：宿主照常起来，只是某个
     // 插件这次没激活 —— 把这件事搬到前台，并且只给一个动作：只恢复这一个。
-    'pluginFailure.title': "有两件事要你看一下",
+    'pluginFailure.title': "启动后有东西没起来",
         'pluginFailure.hint': "这些功能已经记下来了，之后可以在「插件」页里再恢复。",
         'settings.description': "自动重启 DSH、重启前备份；出问题有存档可查，不会自动还原。",
         'settings.restore': "恢复",
@@ -575,7 +575,12 @@
     'pluginFailure.linkedHint': "这个插件是你自己写在本地、以链接方式安装的，可以直接恢复到备份里的版本。",
     'pluginFailure.thirdPartyHint': "这个插件是第三方安装的，备份里没有它的文件。要还原就用下面这条命令，它会装回原来的那个版本（不是最新版）：",
     'pluginFailure.commandLabel': "复制这条命令",
-    'pluginFailure.noVersion': "备份里查不到它的精确版本，只能按插件名重新安装。",
+    // THE WAY OUT FOR THE PEOPLE WHO DO NOT LIKE COMMANDS (user report,
+    // 2026-11-05). It says WHAT the reinstall gives: the LATEST version, not
+    // the one in the backup — the command above installs the backup version,
+    // reinstalling from the interface does not.
+    'pluginFailure.reinstallHint': "不习惯用命令的话，可以回「插件」页重新安装它——但从界面重装拿到的是最新版，不是备份里这个版本。",
+    'pluginFailure.noCommandHint': "这个插件是第三方安装的，备份里没有它的文件，也没有记下它的精确版本，所以这次给不出可以直接执行的还原命令。",
     'pluginFailure.restore': "只恢复 {plugin}",
     'pluginFailure.restoring': "正在恢复 {plugin}…",
     'pluginFailure.restored': "已经把 {plugin} 恢复到备份版本（备份时间 {at}）。",
@@ -981,7 +986,7 @@
     // THE PLUGIN THAT DID NOT LOAD (user decision 2026-11-01): the host came up,
     // one plugin simply did not activate this time. Say so, and offer exactly
     // one action: put THIS one plugin back.
-    'pluginFailure.title': "Two things worth a look",
+    'pluginFailure.title': "Something did not come up after the start",
         'pluginFailure.hint': "These are on record - you can restore them later from the Plugins page.",
         'settings.description': "Restarts DSH and snapshots it before every restart; there is an archive to look at, and nothing is restored automatically.",
         'settings.restore': "Restore",
@@ -1000,7 +1005,12 @@
     'pluginFailure.linkedHint': "You wrote this plugin yourself and installed it as a link, so it can be put back from the backup directly.",
     'pluginFailure.thirdPartyHint': "This plugin was installed from elsewhere and the backup does not hold its files. To put it back, use the command below: it reinstalls the same version (not the latest one):",
     'pluginFailure.commandLabel': "Copy this command",
-    'pluginFailure.noVersion': "The backup does not record its exact version, so it can only be reinstalled by name.",
+    // The way out for the people who do not like commands (user report,
+    // 2026-11-05). It says WHAT the reinstall gives: the LATEST version, not
+    // the one in the backup — the command above installs the backup version,
+    // reinstalling from the interface does not.
+    'pluginFailure.reinstallHint': "Not fond of commands? You can reinstall it from the Plugins page - but a reinstall from the interface gets you the latest version, not the one in the backup.",
+    'pluginFailure.noCommandHint': "This plugin was installed from elsewhere. The backup holds neither its files nor its exact version, so there is no restore command to hand over this time.",
     'pluginFailure.restore': "Restore {plugin} only",
     'pluginFailure.restoring': "Restoring {plugin}…",
     'pluginFailure.restored': "{plugin} was put back to the backup version (backup taken {at}).",
@@ -9069,6 +9079,19 @@
           ? helpers.pluginFailureFingerprint
           : () => ''
 
+        // WHICH PROFILE THIS HOST IS (user report, 2026-11-05). The restore
+        // command has to name a REAL profile — `--profile <profile>` is a
+        // placeholder the user cannot copy and run. The Host answers with the
+        // profile DIRECTORY and the name is its last segment (`web` on the
+        // hosted instance, `desktop` on the desktop build).
+        //
+        // IT IS READ AT RENDER TIME, NOT AT MOUNT TIME: the shared payload may
+        // still be on its way when the panel mounts, and the command is drawn
+        // from whatever the payload says NOW.
+        const profileName = helpers && typeof helpers.pluginFailureProfileName === 'function'
+          ? helpers.pluginFailureProfileName(info)
+          : ''
+
         // WHICH BOOT IS THIS? (user decision, 2026-11-02.) This card reports the
         // RESULT of a restart, so the boot identity — not the passing time —
         // decides when it may appear: `bootId` when the Host sends one,
@@ -9110,7 +9133,7 @@
             // THE RECORD IS WRITTEN EVEN WHEN THERE IS NOTHING TO REPORT: "this
             // boot was judged" is the whole point, so a file that changes later
             // in the same boot cannot make the card appear out of nowhere.
-            const modelNow = build === null ? null : build({ watch, inventory })
+            const modelNow = build === null ? null : build({ watch, inventory, profile: profileName })
             try {
               window.localStorage.setItem(judgedKey, JSON.stringify({
                 at: Date.now(),
@@ -9129,7 +9152,7 @@
         if (!judgedHere && judgedRecord(judgedKey) !== null) return null
 
         if (loaded === null || build === null) return null
-        const model = build({ watch: loaded.watch, inventory: loaded.inventory })
+        const model = build({ watch: loaded.watch, inventory: loaded.inventory, profile: profileName })
         if (model === null) return null
 
         // The fingerprint is WHICH report this is (which plugins did not come up),
@@ -9175,8 +9198,12 @@
         const line = (key, text) => rows.push(h('p', { className: 'dsh-autorestart-announcement__line', key }, text))
 
         // NO SECOND TITLE LINE (user report, 2026-11-02): the card header already
-        // says «有两件事要你看一下», and repeating it as the first paragraph made
-        // the panel look like it had two headings.
+        // says what the card is about, and repeating it as the first paragraph
+        // made the panel look like it had two headings.
+        //
+        // THE HEADER TITLE COUNTS NOTHING (user report, 2026-11-05): it used to
+        // say «有两件事要你看一下» / «Two things worth a look» — a claim about a
+        // count this card never had. It holds ONE list, of any length.
 
         // WHICH PLUGINS DID NOT COME UP. There is exactly ONE list on this card
         // now (user decision, 2026-11-02): a plugin that is declared in the
@@ -9201,13 +9228,29 @@
               }, busy === entry.name
                 ? fill(t('pluginFailure.restoring'), { plugin: entry.name })
                 : fill(t('pluginFailure.restore'), { plugin: entry.name })))
-            } else {
+            } else if (typeof action.command === 'string' && action.command !== '') {
+              // THE COMMAND IS THERE, SO THE CARD MAY POINT AT IT (user report,
+              // 2026-11-05). The hint says «use the command below» — it may only
+              // be said when a command actually follows it. It used to be pushed
+              // FIRST and unconditionally, so a plugin without a version showed
+              // «use the command below» over an empty line, and the sentence
+              // right below it («it can only be reinstalled by name») contradicted
+              // it. The promise and the command now belong to the same branch.
               rows.push(h('p', { className: 'dsh-autorestart-announcement__note', key: 'hint:' + entry.name }, t('pluginFailure.thirdPartyHint')))
-              if (typeof action.command === 'string' && action.command !== '') {
-                rows.push(h('p', { className: 'dsh-autorestart-announcement__line', key: 'cmd:' + entry.name }, action.command))
-              } else {
-                rows.push(h('p', { className: 'dsh-autorestart-announcement__note', key: 'nocmd:' + entry.name }, t('pluginFailure.noVersion')))
-              }
+              rows.push(h('p', { className: 'dsh-autorestart-announcement__line', key: 'cmd:' + entry.name }, action.command))
+              // AND THE WAY OUT FOR EVERYONE WHO DOES NOT LIKE COMMANDS (user
+              // report, 2026-11-05). It sits in the SAME branch as the command:
+              // without a command there is nothing to point at, and a promise
+              // nobody can keep is the thing this card was fixed for.
+              //
+              // IT ALSO SAYS WHAT THE REINSTALL GIVES: the LATEST version, not
+              // the one in the backup. The command above installs the backup
+              // version; reinstalling from the interface does not. The user has
+              // to be told which one they are about to get.
+              rows.push(h('p', { className: 'dsh-autorestart-announcement__note', key: 'reinstall:' + entry.name }, t('pluginFailure.reinstallHint')))
+            } else {
+              // NO COMMAND, NO PROMISE. Say what is true and stop there.
+              rows.push(h('p', { className: 'dsh-autorestart-announcement__note', key: 'nocmd:' + entry.name }, t('pluginFailure.noCommandHint')))
             }
           }
         }
@@ -9549,6 +9592,64 @@
   }
 
   /**
+   * WHICH PROFILE THIS HOST IS (user report, 2026-11-05).
+   *
+   * The restore command has to name a REAL profile. `--profile <profile>` is a
+   * placeholder the user cannot copy and run, and the card is read by people who
+   * are told to run exactly what they see.
+   *
+   * The Host already knows: it answers with the profile DIRECTORY, and the
+   * profile NAME is its last segment — `/home/fg/.dsh/profiles/web` on the
+   * hosted web instance, `…\.dsh\profiles\desktop` on the desktop build. Both
+   * separators are handled, and a path that ends in one still has a name.
+   *
+   * THE NAME IS ONLY TEXT. It is never executed, never written to a file, never
+   * put into innerHTML: it is a piece of a command line the user reads and
+   * copies on purpose.
+   *
+   * @param {object|null} info the shared health payload
+   * @returns {string} the profile name, or '' when the Host did not say
+   */
+  function pluginFailureProfileName(info) {
+    // The name is unique on purpose: `read` is already used by another helper
+    // in this module, and two functions with the same inner name shadow each
+    // other in the eyes of the code graph.
+    const readProfile = (holder) => {
+      if (holder === null || typeof holder !== 'object') return ''
+      const value = holder.profile
+      if (typeof value === 'string') return value.trim()
+      // Some builds send the profile as an object; the directory is in it.
+      if (value !== null && typeof value === 'object') {
+        for (const key of ['dir', 'path', 'name']) {
+          if (typeof value[key] === 'string' && value[key].trim() !== '') return value[key].trim()
+        }
+      }
+      return ''
+    }
+    const holders = [info]
+    if (info !== null && typeof info === 'object') {
+      for (const key of ['health', 'status', 'instance', 'restart']) {
+        if (info[key] !== null && typeof info[key] === 'object') holders.push(info[key])
+      }
+    }
+    for (const holder of holders) {
+      const raw = readProfile(holder)
+      if (raw === '') continue
+      // THE TRAILING SEPARATOR GOES FIRST: a path that ends in one has no
+      // segment after it, so the name would be lost.
+      const text = raw.replace(/[/\\]+$/, '')
+      if (text === '') continue
+      const bySlash = text.split('/')
+      let last = bySlash[bySlash.length - 1]
+      const byBackslash = last.split('\\')
+      last = byBackslash[byBackslash.length - 1]
+      const name = last.trim()
+      if (name !== '') return name
+    }
+    return ''
+  }
+
+  /**
    * Merge the two data sources into the panel's model.
    *
    * @param {{ watch?: object|null, inventory?: object|null, profile?: string }} input
@@ -9585,6 +9686,20 @@
         .find((row) => row !== null && typeof row === 'object'
           && typeof row.name === 'string' && row.name.trim() === name) || null
 
+      // THE INVENTORY IS THE LIST OF THIS PROFILE'S PLUGINS (user report,
+      // 2026-11-05). A package that is NOT in it is not a plugin the user
+      // installed — it is a module the HOST ships with
+      // (`@deepseek-ai/dsh-experimental-client-ui-forge` and friends). Such a
+      // package has no files in our backup and no version we could reinstall,
+      // so listing it as "did not come up" asked the user to do something that
+      // cannot be done. It is now skipped.
+      //
+      // THE FILTER ONLY APPLIES WHEN THE INVENTORY ACTUALLY ANSWERED. An
+      // unreadable inventory (no rows) must not silence the whole card: the
+      // list stays as it was, because a missing list is not a proof that
+      // nothing is missing.
+      const inventoryUsable = inventoryRows.length > 0
+
       const certain = []
       const byName = new Map()
       const addNotLoaded = (value, from) => {
@@ -9595,6 +9710,9 @@
         const name = at > 0 ? text.slice(0, at) : text
         if (name === '') return
         if (notInstalled.has(name)) return
+        // A module of the HOST is not a plugin of this profile: it cannot be
+        // restored, and it was never the user's to install.
+        if (inventoryUsable && inventoryRowFor(name) === null) return
         if (byName.has(name)) return
         const row = inventoryRowFor(name)
         const kind = row !== null && pluginFailureIsLinked(row) ? PLUGIN_FAILURE_LINKED : PLUGIN_FAILURE_THIRD_PARTY
@@ -9644,6 +9762,7 @@
     pluginFailureFingerprint,
     pluginFailureToolOwner,
     pluginFailurePackageName,
+    pluginFailureProfileName,
   }
   if (typeof globalThis !== 'undefined') {
     globalThis.__dshAutorestartClient = Object.assign(
