@@ -631,8 +631,11 @@
     // profile must never be rounded down to "0 MB".
     'restart.overlay.size': '{done} / {total}',
     'restart.overlay.sizeDone': '{done}',
-    // A COPY THAT TOOK LESS THAN TWO SECONDS SAYS ONE LINE (2026-11-07).
-    'restart.overlay.backedUp': '已备份 {size}',
+    // TWO STATES, NO CLOCK (2026-11-07, user decision): what is being copied,
+    // then "the copy is done, the restart is starting".
+    'restart.overlay.backingUp': '备份中，共 {size}',
+    'restart.overlay.backingUpUnknown': '备份中…',
+    'restart.overlay.backupDone': '备份完成，正在重启…',
     'restart.overlay.restarting': '正在重启…',
     // THE HONEST CARD (user report, 2026-10-30): a restart that was interrupted
     // by a new conversation said "正在重启…" for 25 s, which was not true. It now
@@ -1081,8 +1084,11 @@
     'restart.overlay.snapshotting': 'Backing up before DSH restart',
     'restart.overlay.size': '{done} / {total}',
     'restart.overlay.sizeDone': '{done}',
-    // A COPY THAT TOOK LESS THAN TWO SECONDS SAYS ONE LINE (2026-11-07).
-    'restart.overlay.backedUp': 'Backed up {size}',
+    // TWO STATES, NO CLOCK (2026-11-07, user decision): what is being copied,
+    // then "the copy is done, the restart is starting".
+    'restart.overlay.backingUp': 'Backing up, {size} in total',
+    'restart.overlay.backingUpUnknown': 'Backing up…',
+    'restart.overlay.backupDone': 'Backup done, restarting…',
     'restart.overlay.restarting': 'Restarting…',
     'restart.overlay.deferred': 'A conversation just started — restart postponed',
     'restart.overlay.deferredNote': 'It will retry automatically when idle · {count} waiting',
@@ -2705,45 +2711,47 @@
   //      SECONDS (a fast copy never draws one), and
   //   2. a copy that finished under two seconds gets ONE line — 「已备份 274.5 MB」
   //      — which the restart line takes over after half a second.
-  const RESTART_FAST_BACKUP_MS = 2000
-  const RESTART_BACKUP_RECEIPT_MS = 500
-
   /**
-   * WHAT THE CARD SAYS ABOUT THE PRE-RESTART BACKUP.
+   * WHAT THE CARD SAYS ABOUT THE PRE-RESTART BACKUP (2026-11-07, user decision).
    *
-   * The stage the Host writes carries everything this needs, so no request is
-   * added: `startedAt` is when the restart stage began (the click), `at` is the
-   * moment of the last stage change, `snapshotBytes` is the size the copy really
-   * measured, and `reason` is `'snapshot done'` exactly when the copy finished.
+   * TWO STATES, NO CLOCK. While the copy runs the card says
+   * 「备份中，共 276.5 MB」 and draws NO bar; the moment the Host says the copy
+   * finished it says 「备份完成，正在重启…」. A one-second copy and a
+   * sixty-second copy take exactly the same path — there is no duration
+   * threshold anywhere in this file any more.
+   *
+   * WHY NO BAR (measured on the real machine, 2026-11-07): the page polls every
+   * 500 ms while a restart is moving, and a 276.5 MB copy finishes inside one or
+   * two polls — the bar is therefore either never drawn or caught at 5%
+   * (12.9 / 276.5 MB). The total is the only honest number, so the card states
+   * it once instead of animating towards it.
+   *
+   * The stage the Host already writes carries everything used here, so no
+   * request is added: `progress.total` is what this copy has to move and
+   * `reason` is `'snapshot done'` exactly when the copy finished.
    *
    * @param {object|null} stage the `restartPhase` of the state route
-   * @param {{ slow?: boolean, receiptHeld?: boolean }} [state]
-   *   `slow` — the copy has been running for two seconds (the card re-renders
-   *   when that moment passes); `receiptHeld` — the receipt already had its
-   *   half second and the restart line takes over
-   * @returns {{
-   *   showBar: boolean, receiptBytes: number|null, ms: number|null,
-   *   bytes: number|null, done: boolean
-   * }}
+   * @returns {{ copying: boolean, finished: boolean, totalBytes: number|null, done: boolean }}
    */
-  function restartBackupCard(stage, state = {}) {
+  function restartBackupCard(stage) {
     const record = stage !== null && typeof stage === 'object' ? stage : {}
     const phase = typeof record.phase === 'string' ? record.phase : ''
     const reason = typeof record.reason === 'string' ? record.reason : ''
-    const measured = Number(record.snapshotBytes)
-    const bytes = Number.isFinite(measured) === true && measured > 0 ? Math.trunc(measured) : null
-    const from = Number(record.startedAt)
-    const to = Number(record.at)
-    const ms = Number.isFinite(from) === true && Number.isFinite(to) === true && to >= from ? to - from : null
-    // THE HOST'S OWN WORD FOR "THE COPY FINISHED": a cancelled or skipped
-    // snapshot says something else, and must never be reported as a receipt.
+    const progress = record.progress !== null && typeof record.progress === 'object' ? record.progress : null
+    const total = Number(progress !== null ? progress.total : NaN)
+    const totalBytes = Number.isFinite(total) === true && total > 0 ? Math.trunc(total) : null
+    // THE HOST'S OWN WORD FOR "THE COPY FINISHED": a skipped or cancelled
+    // snapshot says something else and must never be reported as 备份完成.
     const done = reason === 'snapshot done'
-    // THE BAR, ONLY FOR A COPY THAT IS REALLY SLOW.
-    const showBar = phase === 'snapshotting' && (state.slow === true || (ms !== null && ms >= RESTART_FAST_BACKUP_MS))
-    // THE RECEIPT, ONLY FOR A COPY THAT FINISHED FAST AND WAS MEASURED.
-    const receiptBytes = phase === 'snapshotting' || state.receiptHeld === true ? null
-      : (done === true && ms !== null && ms < RESTART_FAST_BACKUP_MS && bytes !== null ? bytes : null)
-    return { showBar, receiptBytes, ms, bytes, done }
+    const copying = phase === 'snapshotting'
+    return {
+      // THE COPY IS RUNNING: say what is being copied.
+      copying,
+      // THE COPY IS OVER AND THE RESTART HAS NOT HAPPENED YET.
+      finished: copying !== true && done === true,
+      totalBytes: copying === true ? totalBytes : null,
+      done,
+    }
   }
 
   function restartOverlayTitle(stage, translator) {
@@ -2857,10 +2865,9 @@
     RESTART_SNAPSHOT_FRESH_MS,
     restartPillStageText,
     restartOverlayTitle,
-    // WHAT THE CARD SAYS ABOUT THE PRE-RESTART BACKUP (2026-11-07)
+    // WHAT THE CARD SAYS ABOUT THE PRE-RESTART BACKUP (2026-11-07, user
+    // decision): two states and nothing time-based — no bar, no clock.
     restartBackupCard,
-    RESTART_FAST_BACKUP_MS,
-    RESTART_BACKUP_RECEIPT_MS,
     // The size with the unit that fits it ("92 KB", "156 MB"): a hosted profile
     // is small enough that megabytes would round it to "0 MB".
     formatOverlaySize,
@@ -4572,9 +4579,10 @@
         // seconds — the bar is drawn from that moment on, so a 997 ms copy never
         // draws one at all. `receiptHeld` blanks the receipt after its half
         // second, and 「正在重启…」 (the phase title) is what remains.
-        const [slowBackup, setSlowBackup] = useState(false)
-        const [receiptHeld, setReceiptHeld] = useState(false)
-        const backupCard = restartBackupCard(stage, { slow: slowBackup, receiptHeld })
+        // THE CARD SAYS ONE OF TWO THINGS ABOUT THE BACKUP (2026-11-07, user
+        // decision): 「备份中，共 276.5 MB」 while the copy runs, then
+        // 「备份完成，正在重启…」. No bar and no clock anywhere.
+        const backupCard = restartBackupCard(stage)
 
         // A POSTPONED RESTART IS NOT A RUNNING ONE (user report, 2026-10-30): when
         // the Host says the restart went back to waiting because a conversation
@@ -4594,30 +4602,6 @@
           return () => clearTimeout(timer)
         }, [phase])
 
-        // THE BAR ONLY APPEARS FOR A COPY THAT IS REALLY SLOW (2026-11-07): the
-        // clock starts at the stage's own `startedAt` (the click), so a copy
-        // that ends in under two seconds never draws a bar — and one that does
-        // not gets the bar at the two-second mark instead of at the first byte.
-        useEffect(() => {
-          if (phase !== 'snapshotting') {
-            setSlowBackup(false)
-            return undefined
-          }
-          const started = Number(stage && stage.startedAt)
-          const waited = Number.isFinite(started) === true ? Math.max(0, Date.now() - started) : 0
-          const left = Math.max(0, RESTART_FAST_BACKUP_MS - waited)
-          const timer = setTimeout(() => setSlowBackup(true), left)
-          return () => clearTimeout(timer)
-        }, [phase, stage && stage.startedAt])
-
-        // THE RECEIPT STAYS HALF A SECOND, THEN THE RESTART LINE TAKES OVER.
-        useEffect(() => {
-          setReceiptHeld(false)
-          if (backupCard.receiptBytes === null) return undefined
-          const timer = setTimeout(() => setReceiptHeld(true), RESTART_BACKUP_RECEIPT_MS)
-          return () => clearTimeout(timer)
-        }, [backupCard.receiptBytes, phase])
-
         // THE CARD IS ONLY DRAWN WHILE SOMETHING IS REALLY IN PROGRESS — or while
         // the restart is honestly postponed.
         const visible = running || postponed || (phase === 'back' && sawRunning && !backGone)
@@ -4634,9 +4618,18 @@
         // says 'restarting' in the same render is downgraded here, so the old word
         // can never survive a single frame once the Host said "deferred".
         const deferredCount = postponed ? waitingTaskCount(info, info && Array.isArray(info.blockedBy) ? info.blockedBy : []) : 0
+        // TWO STATES OF A BACKUP ON THE CARD (2026-11-07, user decision): while
+        // the copy runs the title says what is being copied; once the Host says
+        // the copy has finished it says so and the restart line follows. No bar
+        // and no clock — a one-second copy and a sixty-second copy read the same.
+        const backupTitle = backupCard.copying === true
+          ? (backupCard.totalBytes === null
+            ? t('restart.overlay.backingUpUnknown')
+            : fill(t('restart.overlay.backingUp'), { size: formatOverlaySize(backupCard.totalBytes) }))
+          : (backupCard.finished === true ? t('restart.overlay.backupDone') : '')
         const title = postponed
           ? t('restart.overlay.deferred')
-          : restartOverlayTitle(stage, t)
+          : (backupTitle !== '' ? backupTitle : restartOverlayTitle(stage, t))
 
         let bar = null
         let detail = null
@@ -4655,52 +4648,10 @@
             ),
           )
         }
-        if (!postponed && phase === 'snapshotting') {
-          // The numbers are the ones the copy loop really measured; when there is
-          // no measurement yet, the card shows no number at all (an invented
-          // progress bar is worse than none). The unit fits the size, so a 92 KB
-          // profile is "92 KB" and never "0 MB".
-          const done = bytes === null ? '' : formatOverlaySize(bytes)
-          const all = total === null ? '' : formatOverlaySize(total)
-          const sizeText = done === ''
-            ? ''
-            : (all === '' ? fill(t('restart.overlay.sizeDone'), { done }) : fill(t('restart.overlay.size'), { done, total: all }))
-          bar = h(
-            'div',
-            {
-              className: 'dsh-autorestart-restart-overlay__bar',
-              role: 'progressbar',
-              'aria-valuemin': 0,
-              'aria-valuemax': 100,
-              'aria-valuenow': percent === null ? 0 : percent,
-            },
-            h('div', {
-              className: 'dsh-autorestart-restart-overlay__bar-fill',
-              'data-dsh-autorestart-restart-overlay-bar': 'true',
-              style: { width: (percent === null ? 0 : percent) + '%' },
-            }),
-          )
-          detail = sizeText === ''
-            ? null
-            : h(
-              'p',
-              { className: 'dsh-autorestart-restart-overlay__size' },
-              h('span', { 'data-dsh-autorestart-restart-overlay-size': 'true' }, sizeText),
-              h('span', { 'data-dsh-autorestart-restart-overlay-percent': 'true' }, percent === null ? '' : percent + '%'),
-            )
-        } else if (!postponed && backupCard.receiptBytes !== null) {
-          // UNDER TWO SECONDS: ONE LINE, NO BAR (2026-11-07, user decision).
-          // The number is the size the copy really measured — never a constant.
-          detail = h(
-            'p',
-            { className: 'dsh-autorestart-restart-overlay__size' },
-            h(
-              'span',
-              { 'data-dsh-autorestart-restart-overlay-backup': 'done' },
-              fill(t('restart.overlay.backedUp'), { size: formatOverlaySize(backupCard.receiptBytes) }),
-            ),
-          )
-        }
+        // NO BAR, NO PERCENT (2026-11-07, user decision): the page polls every
+        // 500 ms while a restart moves, so a 276.5 MB copy is over inside one or
+        // two polls and a bar can only ever be caught at 0–5%. The title states
+        // the total instead — see `backupTitle` above.
 
         ensureRestartOverlayStyle()
 

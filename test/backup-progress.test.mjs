@@ -214,126 +214,93 @@ function loadClient() {
   return sandbox.__dshAutorestartClient
 }
 
-/** The two thresholds the user decided on. */
-const FAST_BACKUP_MS = 2000
-const RECEIPT_MS = 500
+/** The real machine's numbers: 289 908 164 bytes is 276.5 MB. */
+const REAL_TOTAL_BYTES = 289_908_164
 
 /** The real machine's numbers: 997 ms for 287 860 164 bytes. */
 const REAL_STARTED_AT = 1_791_000_000_000
 const REAL_BYTES = 287_860_164
 
-test('⑯ under two seconds: no bar, one line with the REAL size', () => {
+test('⑯ while the copy runs: no bar, the title says 「备份中，共 276.5 MB」', () => {
   const api = loadClient()
-  assert.equal(api.RESTART_FAST_BACKUP_MS, FAST_BACKUP_MS, 'the threshold is two seconds')
-  assert.equal(api.RESTART_BACKUP_RECEIPT_MS, RECEIPT_MS, 'and the receipt stays half a second')
-
-  // WHILE THE COPY RUNS: a bar is never drawn before the two-second mark.
+  // ① THE COPY IS RUNNING: no bar, and the title states the real total.
   const copying = api.restartBackupCard({
     phase: 'snapshotting',
-    startedAt: REAL_STARTED_AT,
-    at: REAL_STARTED_AT + 500,
-    progress: { bytes: 1024, total: REAL_BYTES, percent: 1 },
-    snapshotBytes: 1024,
-  }, { slow: false })
-  assert.equal(copying.showBar, false, 'no progressbar under two seconds')
-
-  // THE COPY IS OVER IN 997 ms: the card says what was backed up.
-  const done = api.restartBackupCard({
-    phase: 'restarting',
-    reason: 'snapshot done',
-    startedAt: REAL_STARTED_AT,
-    at: REAL_STARTED_AT + 997,
-    snapshotBytes: REAL_BYTES,
+    progress: { bytes: 12_900_000, total: REAL_TOTAL_BYTES, percent: 5 },
+    snapshotBytes: 12_900_000,
   })
-  assert.equal(done.showBar, false, 'and no bar afterwards either')
-  assert.equal(done.ms, 997, 'the duration is the stage’s own clock')
-  assert.equal(done.receiptBytes, REAL_BYTES, 'the receipt carries the measured size')
-  assert.equal(api.formatOverlaySize(done.receiptBytes), '274.5 MB', '287 860 164 bytes is 274.5 MB')
+  assert.equal(copying.copying, true, 'the copy is running')
+  assert.equal(copying.finished, false, 'and it has not finished')
+  assert.equal('showBar' in copying, false, 'there is no bar to draw any more')
+  assert.equal(copying.totalBytes, REAL_TOTAL_BYTES, 'the title states the total the Host reported')
+  assert.equal(api.formatOverlaySize(copying.totalBytes), '276.5 MB', '289 908 164 bytes is 276.5 MB')
 
   // THE SENTENCE, in both dictionaries, with that size.
-  const size = api.formatOverlaySize(done.receiptBytes)
+  const size = api.formatOverlaySize(copying.totalBytes)
   assert.equal(
-    api.dictionaries.zh['restart.overlay.backedUp'].replace('{size}', size),
-    '已备份 274.5 MB',
-    'the Chinese line',
+    api.dictionaries.zh['restart.overlay.backingUp'].replace('{size}', size),
+    '备份中，共 276.5 MB',
+    'the Chinese title',
   )
   assert.equal(
-    api.dictionaries.en['restart.overlay.backedUp'].replace('{size}', size),
-    'Backed up 274.5 MB',
+    api.dictionaries.en['restart.overlay.backingUp'].replace('{size}', size),
+    'Backing up, 276.5 MB in total',
     'and the English one',
   )
 
-  // HALF A SECOND LATER the receipt is gone and only 「正在重启…」 is left.
-  const held = api.restartBackupCard({
-    phase: 'restarting',
-    reason: 'snapshot done',
-    startedAt: REAL_STARTED_AT,
-    at: REAL_STARTED_AT + 997,
-    snapshotBytes: REAL_BYTES,
-  }, { receiptHeld: true })
-  assert.equal(held.receiptBytes, null, 'the receipt had its half second')
-  assert.equal(held.showBar, false, 'and no bar is left behind')
+  // ①b NO TOTAL YET (the first sample has not arrived): a plain sentence.
+  const noTotal = api.restartBackupCard({ phase: 'snapshotting', progress: null })
+  assert.equal(noTotal.copying, true, 'the copy is still running')
+  assert.equal(noTotal.totalBytes, null, 'nothing measured yet')
+  assert.equal(api.dictionaries.zh['restart.overlay.backingUpUnknown'], '备份中…', 'the fallback title')
 })
 
-test('⑯ two seconds and over: the bar is drawn exactly as before', () => {
+test('⑯ the copy is over: 「备份完成，正在重启…」 — the same for 1 s and for 60 s', () => {
   const api = loadClient()
 
-  // STILL COPYING AFTER TWO SECONDS: the bar appears.
-  const slow = api.restartBackupCard({
-    phase: 'snapshotting',
-    startedAt: REAL_STARTED_AT,
-    at: REAL_STARTED_AT + 2400,
-    progress: { bytes: 100_000_000, total: REAL_BYTES, percent: 35 },
-    snapshotBytes: 100_000_000,
-  }, { slow: true })
-  assert.equal(slow.showBar, true, 'a slow copy gets its progressbar')
-  assert.equal(slow.receiptBytes, null, 'and no receipt')
+  // NO CLOCK: the two stages below differ by 59 seconds and read the same.
+  const quick = api.restartBackupCard({ phase: 'restarting', reason: 'snapshot done', startedAt: 0, at: 1000 })
+  const slow = api.restartBackupCard({ phase: 'restarting', reason: 'snapshot done', startedAt: 0, at: 60_000 })
+  for (const [label, card] of [['1 s', quick], ['60 s', slow]]) {
+    assert.equal(card.copying, false, label + ': the copy is not running')
+    assert.equal(card.finished, true, label + ': and it finished')
+  }
 
-  // AND IT FINISHED SLOWLY: no receipt either (the bar already told the story).
-  const slowDone = api.restartBackupCard({
-    phase: 'restarting',
-    reason: 'snapshot done',
-    startedAt: REAL_STARTED_AT,
-    at: REAL_STARTED_AT + 5000,
-    snapshotBytes: REAL_BYTES,
-  })
-  assert.equal(slowDone.ms, 5000, 'the duration is read from the stage')
-  assert.equal(slowDone.receiptBytes, null, 'a slow backup gets no receipt')
-  assert.equal(slowDone.showBar, false, 'and the bar does not follow it into the restart')
+  assert.equal(api.dictionaries.zh['restart.overlay.backupDone'], '备份完成，正在重启…', 'the Chinese title')
+  assert.equal(api.dictionaries.en['restart.overlay.backupDone'], 'Backup done, restarting…', 'and the English one')
+  assert.notEqual(
+    api.dictionaries.zh['restart.overlay.backupDone'],
+    api.dictionaries.zh['restart.overlay.restarting'],
+    'the finished line is not the old 「正在重启…」 sentence',
+  )
+
+  // NOTHING TIME-BASED IS LEFT IN THE CLIENT.
+  assert.equal(api.RESTART_FAST_BACKUP_MS, undefined, 'the old two-second threshold is gone')
+  assert.equal(api.RESTART_BACKUP_RECEIPT_MS, undefined, 'and so is the 500 ms receipt')
+  assert.equal('restart.overlay.backedUp' in api.dictionaries.zh, false, 'the old receipt key is gone too')
 })
 
-test('⑯ a backup that FAILED or was skipped never claims 已备份', () => {
+test('⑯ a failed or skipped backup never says 备份完成', () => {
   const api = loadClient()
 
   // SKIPPED ON PURPOSE (a manual rollback carries its own undo copy).
   const skipped = api.restartBackupCard({
     phase: 'restarting',
     reason: 'no snapshot for this restart (manual rollback)',
-    startedAt: REAL_STARTED_AT,
-    at: REAL_STARTED_AT + 300,
     snapshotBytes: null,
   })
-  assert.equal(skipped.done, false, 'the Host did not say the copy finished')
-  assert.equal(skipped.receiptBytes, null, 'so no receipt')
+  assert.equal(skipped.finished, false, 'nothing was copied, so nothing finished')
+  assert.equal(skipped.copying, false, 'and nothing is being copied')
 
   // CANCELLED WHILE THE FILES WERE BEING COPIED.
   const cancelled = api.restartBackupCard({
     phase: 'waiting',
     reason: 'the restart was cancelled while the snapshot was being written',
-    startedAt: REAL_STARTED_AT,
-    at: REAL_STARTED_AT + 400,
-    snapshotBytes: 4096,
   })
-  assert.equal(cancelled.receiptBytes, null, 'a cancelled copy is not a receipt')
+  assert.equal(cancelled.finished, false, 'a cancelled copy is not a finished one')
 
-  // FINISHED BUT NOTHING WAS MEASURED: the card may not invent a size.
-  const unmeasured = api.restartBackupCard({
-    phase: 'restarting',
-    reason: 'snapshot done',
-    startedAt: REAL_STARTED_AT,
-    at: REAL_STARTED_AT + 900,
-    snapshotBytes: null,
-  })
-  assert.equal(unmeasured.receiptBytes, null, 'no measurement, no number')
-  assert.equal(unmeasured.showBar, false, 'and still no bar')
+  // A STAGE THAT SAYS NOTHING CLAIMS NOTHING.
+  const idle = api.restartBackupCard({ phase: 'waiting' })
+  assert.equal(idle.finished, false, 'and an empty stage claims nothing')
+  assert.equal(idle.copying, false, 'it is not copying either')
 })
