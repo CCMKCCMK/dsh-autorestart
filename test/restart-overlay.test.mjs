@@ -12,7 +12,9 @@
  *
  *   1. the DETAIL moved to a CENTRED OVERLAY (320px, one short line):
  *      waiting = "等待会话空闲" + "还有 N 个会话",
- *      snapshotting = "备份中，共 40 MB" and then "备份完成，正在重启…"
+ *      comparing = "正在比对配置和插件有没有变化…" (card ①, 2026-11-07),
+ *      snapshotting = "配置有变化，正在备份，共 40 MB" and then
+ *      "备份完成，将执行重启" — or "…没有变化，跳过备份，将执行重启"
  *      (no bar, no clock — user decision, 2026-11-07),
  *      restarting = "正在重启…", back = "已回来" for 1.5s and then gone;
  *   2. the composer row got SHORT again: one line, never a sentence, and the
@@ -417,7 +419,7 @@ test('no restart at all: an idle host draws nothing, ever', async () => {
  * 2. The centred overlay: the backup, with the real numbers.
  * ------------------------------------------------------------------ */
 
-test('phase=snapshotting: the overlay says 「备份中，共 40 MB」 — no bar, no percentage', async () => {
+test('phase=snapshotting: the overlay says 「配置有变化，正在备份，共 40 MB」 — no bar, no percentage', async () => {
   const progress = {
     bytes: Math.round(12.3 * 1024 * 1024),
     total: 40 * 1024 * 1024,
@@ -431,11 +433,15 @@ test('phase=snapshotting: the overlay says 「备份中，共 40 MB」 — no ba
   assert.ok(overlay, 'the overlay shows the backup')
   assert.equal(overlay.props['data-dsh-autorestart-restart-overlay-phase'], 'snapshotting')
   const copy = textOf(overlay)
-  // THE OWNER'S DECISION (2026-11-07): "从『备份中，共XXX MB』备份完就切换到
-  // 『备份完成，正在重启…』，这样就不用考虑进度条的事情了". The title states the
-  // REAL total (formatOverlaySize keeps the unit, so 40 MB never degrades to 0).
-  assert.match(copy, /备份中，共 40 MB/, `the card states the total being copied: ${copy}`)
-  assert.doesNotMatch(copy, /正在备份/, `no bare "正在备份" on the card any more: ${copy}`)
+  // THE TWO CARDS OF 2026-11-07: the copy card states what changed and the REAL
+  // total (formatOverlaySize keeps the unit, so 40 MB never degrades to 0). The
+  // stage carries no `+plugins` suffix here, so the configuration-only wording
+  // is the one on screen.
+  assert.match(copy, /配置有变化，正在备份，共 40 MB/, `the card states the total being copied: ${copy}`)
+  // 「正在备份」 IS the copy card's own word now — but it must never share a line
+  // with 「正在重启」: those are two different states of the restart.
+  assert.match(copy, /正在备份/, `the copy card says what is running: ${copy}`)
+  assert.doesNotMatch(copy, /正在重启/, `the copy card never claims the restart is running: ${copy}`)
   // NO BAR AND NO PERCENTAGE (user decision): the page polls every 500 ms while
   // a restart moves and a 276.5 MB copy is over inside one or two polls, so a
   // bar can only ever be caught at 0–5% — the card measures nothing any more.
@@ -450,8 +456,11 @@ test('phase=snapshotting: before the first measurement no number is invented', a
   const mounted = mountClient({ health: statePayload({ phase: 'snapshotting', progress: null }) })
   const overlay = await mounted.settled('autorestart-restart-overlay')
   assert.ok(overlay)
-  assert.match(textOf(overlay), /备份中…/)
+  // THE SAME CARD WITHOUT THE SIZE: "configuration changed, backing up" — no
+  // number, because nothing has been measured yet.
+  assert.match(textOf(overlay), /配置有变化，正在备份/)
   assert.doesNotMatch(textOf(overlay), /MB/, 'nothing is measured yet, so nothing is claimed')
+  assert.doesNotMatch(textOf(overlay), /共/, 'and no total is claimed either')
   assert.equal(findByAttribute(overlay, 'data-dsh-autorestart-restart-overlay-size'), undefined)
 })
 
@@ -858,20 +867,32 @@ test('a real restart keeps pendingRestart true while it snapshots and while it r
 test('the card states the total being copied, in BOTH languages', async () => {
   const progress = { bytes: 1024 * 1024, total: 2 * 1024 * 1024, percent: 50 }
 
-  // Chinese: the total, in the user's own wording ("备份中，共 XXX MB").
+  // Chinese: the configuration-only copy card, in the user's own wording.
   const zh = mountClient({ health: statePayload({ phase: 'snapshotting', progress }) })
   const zhCard = await zh.settled('autorestart-restart-overlay')
   const zhCopy = textOf(zhCard)
-  assert.match(zhCopy, /备份中，共 2 MB/, `the card states the total: ${zhCopy}`)
-  assert.doesNotMatch(zhCopy, /正在备份/, `and never the bare "正在备份": ${zhCopy}`)
+  assert.match(zhCopy, /配置有变化，正在备份，共 2 MB/, `the card states the total: ${zhCopy}`)
+  assert.doesNotMatch(zhCopy, /正在重启/, `and never claims the restart is running: ${zhCopy}`)
 
   // English: the same sentence (locale/en.json mirrors the key).
   const en = mountClient({ health: statePayload({ phase: 'snapshotting', progress }), language: 'en' })
   const enCard = await en.settled('autorestart-restart-overlay')
   const enCopy = textOf(enCard)
-  assert.match(enCopy, /Backing up, 2 MB in total/i, `the English card says it too: ${enCopy}`)
+  assert.match(enCopy, /Configuration changed, backing up 2 MB/i, `the English card says it too: ${enCopy}`)
   // The bar is gone in both languages: the title carries the total instead.
   assert.equal(findByAttribute(enCard, 'data-dsh-autorestart-restart-overlay-bar'), undefined, 'and no bar in English either')
+
+  // WITH THE PLUGINS IN THE COPY the same card names both halves — the scope
+  // travels in the Host's stage reason ('config+plugins').
+  const withPlugins = mountClient({
+    health: statePayload({ phase: 'snapshotting', progress, reason: 'config+plugins' }),
+  })
+  const withPluginsCard = await withPlugins.settled('autorestart-restart-overlay')
+  assert.match(
+    textOf(withPluginsCard),
+    /配置和插件有变化，正在备份，共 2 MB/,
+    `the plugins copy names both halves: ${textOf(withPluginsCard)}`,
+  )
 
   // The composer row stays a WORD in both languages (never the sentence).
   const enPill = await mountClient({ health: statePayload({ phase: 'snapshotting', progress }), language: 'en' })
@@ -983,7 +1004,7 @@ test('a stale snapshot stage draws NOTHING, a fresh one draws the card', async (
   });
   const card = await fresh.settled('autorestart-restart-overlay');
   assert.equal(card.props['data-dsh-autorestart-restart-overlay-phase'], 'snapshotting');
-  assert.match(textOf(card), /备份中，共/);
+  assert.match(textOf(card), /正在备份，共/);
 })
 
 /* ------------------------------------------------------------------ *
@@ -1199,5 +1220,5 @@ test('a running stage is NOT folded away (only the announcement is)', async () =
   await new Promise((resolve) => setTimeout(resolve, 4200));
   const card = mounted.render('autorestart-restart-overlay');
   assert.ok(card, 'a copy that is still running keeps its card');
-  assert.match(textOf(card), /备份中，共/);
+  assert.match(textOf(card), /正在备份，共/);
 })

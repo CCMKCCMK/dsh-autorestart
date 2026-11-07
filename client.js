@@ -300,6 +300,13 @@
     'settings.restartGrace.immediate': '不等（立即重启）',
     'settings.backup.label': '重启前备份',
     'settings.backup.details': '详情',
+    'settings.backup.when': '什么时候会备份？',
+    'settings.backup.whenBody': '每次重启前先比对 DSH 配置（勾了「备份包含已安装插件」时还会比对已安装插件）有没有变化：有变化才新建一份备份；没变化就跳过、沿用最近一份。备份条数等于「配置真正改过几次」。关掉「重启前备份」开关时不做比对，也不产生备份。',
+    // THE TRACE OF A SKIPPED COPY (user decision, 2026-11-07): "no new backup"
+    // must never look like "the backup broke" — the list says which restart
+    // skipped it and which copy it kept on using.
+    'settings.backup.lastSkipped': '上次重启（{time}）：配置和插件没有变化，未新建备份，沿用 {dir}',
+    'settings.backup.lastSkippedConfig': '上次重启（{time}）：配置没有变化，未新建备份，沿用 {dir}',
     'settings.backup.section': '备份说明及手动备份操作',
     'settings.backup.hint': '重启前自动存一份存档；插件不会自动还原，要回退得在下面自己点。存的是：你的设置（一定）；你自己写的、直接链接到源码目录的插件（连文件一起拷）；从网上下载装的插件（只记下装过哪些、什么版本，不拷文件，真出事时按清单重装）。',
     'settings.backupPlugins.label': '备份包含已安装插件',
@@ -633,9 +640,18 @@
     'restart.overlay.sizeDone': '{done}',
     // TWO STATES, NO CLOCK (2026-11-07, user decision): what is being copied,
     // then "the copy is done, the restart is starting".
-    'restart.overlay.backingUp': '备份中，共 {size}',
-    'restart.overlay.backingUpUnknown': '备份中…',
-    'restart.overlay.backupDone': '备份完成，正在重启…',
+    'restart.overlay.comparing': '正在比对配置和插件有没有变化…',
+    'restart.overlay.comparingConfig': '正在比对配置有没有变化…',
+    'restart.overlay.changed': '配置和插件有变化，正在备份，共 {size}',
+    'restart.overlay.changedConfig': '配置有变化，正在备份，共 {size}',
+    'restart.overlay.changedUnknown': '配置和插件有变化，正在备份',
+    'restart.overlay.changedUnknownConfig': '配置有变化，正在备份',
+    'restart.overlay.backupDone': '备份完成，将执行重启',
+    'restart.overlay.skipped': '配置和插件没有变化，跳过备份，将执行重启',
+    'restart.overlay.skippedConfig': '配置没有变化，跳过备份，将执行重启',
+    'restart.overlay.compareUnusable': '无法比对配置和插件，仍会备份',
+    'restart.overlay.compareUnusableConfig': '无法比对配置，仍会备份',
+    'restart.overlay.backupFailed': '备份失败，重启继续进行',
     'restart.overlay.restarting': '正在重启…',
     // THE HONEST CARD (user report, 2026-10-30): a restart that was interrupted
     // by a new conversation said "正在重启…" for 25 s, which was not true. It now
@@ -792,6 +808,13 @@
     'settings.restartGrace.immediate': 'Do not wait (restart right away)',
     'settings.backup.label': 'Backup before a restart',
     'settings.backup.details': 'Details',
+    'settings.backup.when': 'When is a backup taken?',
+    'settings.backup.whenBody': 'Before every restart the DSH configuration is compared (with 「include the installed plugins」 on, the installed plugins too): only a real change writes a new copy; no change skips the copy and keeps the newest one. The number of copies equals the number of times the configuration really changed. With 「backup before a restart」 off there is no comparison and no copy.',
+    // THE TRACE OF A SKIPPED COPY (user decision, 2026-11-07): "no new backup"
+    // must never look like "the backup broke" — the list says which restart
+    // skipped it and which copy it kept on using.
+    'settings.backup.lastSkipped': 'The last restart ({time}): no change to configuration or plugins, no new copy written, reusing {dir}',
+    'settings.backup.lastSkippedConfig': 'The last restart ({time}): no change to the configuration, no new copy written, reusing {dir}',
     'settings.backup.section': 'What is backed up, and the manual backup steps',
     'settings.backup.hint': 'A copy is taken before every restart - an archive, not an automatic rollback: nothing is put back unless you click it below. What it holds: your settings (always); plugins you wrote and linked from a source directory (copied file by file); plugins downloaded from the internet (only which ones and which version are recorded - never copied; they are reinstalled from that list).',
     'settings.backupPlugins.label': 'Include the installed plugins in the backup',
@@ -1086,9 +1109,18 @@
     'restart.overlay.sizeDone': '{done}',
     // TWO STATES, NO CLOCK (2026-11-07, user decision): what is being copied,
     // then "the copy is done, the restart is starting".
-    'restart.overlay.backingUp': 'Backing up, {size} in total',
-    'restart.overlay.backingUpUnknown': 'Backing up…',
-    'restart.overlay.backupDone': 'Backup done, restarting…',
+    'restart.overlay.comparing': 'Comparing configuration and plugins for changes…',
+    'restart.overlay.comparingConfig': 'Comparing configuration for changes…',
+    'restart.overlay.changed': 'Configuration and plugins changed, backing up {size}',
+    'restart.overlay.changedConfig': 'Configuration changed, backing up {size}',
+    'restart.overlay.changedUnknown': 'Configuration and plugins changed, backing up',
+    'restart.overlay.changedUnknownConfig': 'Configuration changed, backing up',
+    'restart.overlay.backupDone': 'Backup done, the restart will now proceed',
+    'restart.overlay.skipped': 'No change to configuration or plugins, backup skipped, the restart will now proceed',
+    'restart.overlay.skippedConfig': 'No change to configuration, backup skipped, the restart will now proceed',
+    'restart.overlay.compareUnusable': 'Could not compare, backing up anyway',
+    'restart.overlay.compareUnusableConfig': 'Could not compare the configuration, backing up anyway',
+    'restart.overlay.backupFailed': 'Backup failed, the restart continues',
     'restart.overlay.restarting': 'Restarting…',
     'restart.overlay.deferred': 'A conversation just started — restart postponed',
     'restart.overlay.deferredNote': 'It will retry automatically when idle · {count} waiting',
@@ -2536,6 +2568,7 @@
    * always was: "待重启 · 等待 N 个会话".
    */
   const RESTART_OVERLAY_KEYS = Object.freeze({
+    comparing: 'restart.overlay.comparing',
     snapshotting: 'restart.overlay.snapshotting',
     restarting: 'restart.overlay.restarting',
     back: 'restart.overlay.back',
@@ -2715,8 +2748,8 @@
    * WHAT THE CARD SAYS ABOUT THE PRE-RESTART BACKUP (2026-11-07, user decision).
    *
    * TWO STATES, NO CLOCK. While the copy runs the card says
-   * 「备份中，共 276.5 MB」 and draws NO bar; the moment the Host says the copy
-   * finished it says 「备份完成，正在重启…」. A one-second copy and a
+   * 「配置和插件有变化，正在备份，共 276.5 MB」 and draws NO bar; the moment the
+   * Host says the copy finished it says 「备份完成，将执行重启」. A one-second copy and a
    * sixty-second copy take exactly the same path — there is no duration
    * threshold anywhere in this file any more.
    *
@@ -2740,17 +2773,32 @@
     const progress = record.progress !== null && typeof record.progress === 'object' ? record.progress : null
     const total = Number(progress !== null ? progress.total : NaN)
     const totalBytes = Number.isFinite(total) === true && total > 0 ? Math.trunc(total) : null
+    // THE SCOPE OF THE COMPARISON travels in the Host's reason:
+    // 'config' / 'config+plugins' while comparing, and the same suffix on the
+    // copy reasons — the configuration-only wording is chosen from it.
+    const includePlugins = reason.indexOf('+plugins') !== -1
     // THE HOST'S OWN WORD FOR "THE COPY FINISHED": a skipped or cancelled
     // snapshot says something else and must never be reported as 备份完成.
     const done = reason === 'snapshot done'
     const copying = phase === 'snapshotting'
+    const unusable = copying === true && reason.indexOf('compare unusable') === 0
     return {
-      // THE COPY IS RUNNING: say what is being copied.
-      copying,
+      // ① THE COMPARISON IS RUNNING: the first card of a restart.
+      comparing: phase === 'comparing',
+      // ② THE COPY IS RUNNING — unless the Host could not compare: that has its
+      // own line (「无法比对…仍会备份」) instead of a size.
+      copying: copying === true && unusable !== true,
+      // THE COMPARISON COULD NOT BE MADE, so the copy runs anyway.
+      unusable,
       // THE COPY IS OVER AND THE RESTART HAS NOT HAPPENED YET.
-      finished: copying !== true && done === true,
+      finished: copying !== true && phase !== 'comparing' && done === true,
+      // THE COMPARISON FOUND NOTHING NEW: no copy was written at all.
+      skipped: reason === 'snapshot skipped: unchanged',
+      // THE COPY FAILED: the restart goes on without a rollback point.
+      failed: reason === 'snapshot failed',
       totalBytes: copying === true ? totalBytes : null,
       done,
+      includePlugins,
     }
   }
 
@@ -4580,8 +4628,8 @@
         // draws one at all. `receiptHeld` blanks the receipt after its half
         // second, and 「正在重启…」 (the phase title) is what remains.
         // THE CARD SAYS ONE OF TWO THINGS ABOUT THE BACKUP (2026-11-07, user
-        // decision): 「备份中，共 276.5 MB」 while the copy runs, then
-        // 「备份完成，正在重启…」. No bar and no clock anywhere.
+        // decision): 「配置和插件有变化，正在备份，共 276.5 MB」 while the copy
+        // runs, then 「备份完成，将执行重启」. No bar and no clock anywhere.
         const backupCard = restartBackupCard(stage)
 
         // A POSTPONED RESTART IS NOT A RUNNING ONE (user report, 2026-10-30): when
@@ -4622,11 +4670,30 @@
         // the copy runs the title says what is being copied; once the Host says
         // the copy has finished it says so and the restart line follows. No bar
         // and no clock — a one-second copy and a sixty-second copy read the same.
-        const backupTitle = backupCard.copying === true
-          ? (backupCard.totalBytes === null
-            ? t('restart.overlay.backingUpUnknown')
-            : fill(t('restart.overlay.backingUp'), { size: formatOverlaySize(backupCard.totalBytes) }))
-          : (backupCard.finished === true ? t('restart.overlay.backupDone') : '')
+        // TWO CARDS FOR ONE RESTART (2026-11-07, user decision): the comparing
+        // card first (「正在比对配置和插件有没有变化…」), then either the copy card
+        // with the real total (「配置和插件有变化，正在备份，共 276.5 MB」), the
+        // skip card (「…没有变化，跳过备份，将执行重启」), or the failure line. The
+        // configuration-only wording is chosen when the plugins are not in the
+        // copy — the scope travels in the Host's reason (`config` vs
+        // `config+plugins`).
+        const pluginsInCopy = backupCard.includePlugins === true
+        const backupTitle = backupCard.comparing === true
+          ? t(pluginsInCopy ? 'restart.overlay.comparing' : 'restart.overlay.comparingConfig')
+          : (backupCard.unusable === true
+            ? t(pluginsInCopy ? 'restart.overlay.compareUnusable' : 'restart.overlay.compareUnusableConfig')
+            : (backupCard.copying === true
+              ? (backupCard.totalBytes === null
+                ? t(pluginsInCopy ? 'restart.overlay.changedUnknown' : 'restart.overlay.changedUnknownConfig')
+                : fill(
+                  t(pluginsInCopy ? 'restart.overlay.changed' : 'restart.overlay.changedConfig'),
+                  { size: formatOverlaySize(backupCard.totalBytes) },
+                ))
+              : (backupCard.skipped === true
+                ? t(pluginsInCopy ? 'restart.overlay.skipped' : 'restart.overlay.skippedConfig')
+                : (backupCard.failed === true
+                  ? t('restart.overlay.backupFailed')
+                  : (backupCard.finished === true ? t('restart.overlay.backupDone') : '')))))
         const title = postponed
           ? t('restart.overlay.deferred')
           : (backupTitle !== '' ? backupTitle : restartOverlayTitle(stage, t))
@@ -6548,6 +6615,35 @@
         // WHAT HAPPENED TO THE LAST RESTART REQUEST, computed once (2026-11-03).
         const cancelledRestart = cancelledRestartNote(info, props && typeof props.t === 'function' ? props.t : translate)
         const backupItems = Array.isArray(backupsInfo.items) ? backupsInfo.items : []
+        // THE TRACE OF A SKIPPED COPY (user decision, 2026-11-07): the verdict
+        // of the previous restart says it compared and found nothing new, so
+        // the list has to say WHICH restart skipped the copy and which copy it
+        // kept using — otherwise "only three backups after ten restarts" reads
+        // like a broken backup instead of the feature working.
+        //
+        // It is read from the VERDICT, not from the list: a copy that was
+        // pruned afterwards must still leave the sentence behind.
+        const lastSkipTrace = (() => {
+          const lastRestart = info && typeof info === 'object' && info.lastRestart
+            && typeof info.lastRestart === 'object' ? info.lastRestart : null
+          if (lastRestart === null || lastRestart.skipped !== 'unchanged') return null
+          const dir = typeof lastRestart.backupDir === 'string' ? lastRestart.backupDir : ''
+          if (dir === '') return null
+          const parts = dir.split(/[\\/]+/).filter((part) => part !== '')
+          if (parts.length === 0) return null
+          const name = parts[parts.length - 1]
+          // WHAT THAT COPY HOLDS decides the words ("configuration and plugins"
+          // is a claim about the copy, so it is read from the copy when the
+          // list still has it).
+          const kept = backupItems.find((item) => item && (item.name === name || item.dir === dir))
+          const pluginsInCopy = kept && typeof kept.includePlugins === 'boolean'
+            ? kept.includePlugins === true
+            : info && typeof info === 'object' && info.backupIncludePlugins !== false
+          return fill(t(pluginsInCopy ? 'settings.backup.lastSkipped' : 'settings.backup.lastSkippedConfig'), {
+            time: formatBackupTime(typeof lastRestart.skippedAtLocal === 'string' ? lastRestart.skippedAtLocal : ''),
+            dir: name,
+          })
+        })()
         // WHICH COPY THE ONE SENTENCE BELONGS TO (user decision, 2026-11-02):
         // resolved ONCE from the copies' own records, so the sentence follows the
         // copy and not the row it happens to be drawn in.
@@ -7066,6 +7162,32 @@
               ),
               h('span', { className: 'dsh-autorestart-settings__hint' }, t('settings.restartGrace.hint')),
             ),
+            // WHEN A COPY IS TAKEN (user decision, 2026-11-07): the page now
+            // says, ABOVE the switches that govern it, that a restart first
+            // compares the configuration (and, with plugins in the copy, the
+            // installed plugins) and only writes a copy when something really
+            // changed. Without this the count ("only three backups after ten
+            // restarts") had no explanation anywhere on the page.
+            h(
+              'div',
+              { className: 'dsh-autorestart-settings__field', 'data-dsh-autorestart-backup': 'when' },
+              h(
+                'span',
+                {
+                  className: 'dsh-autorestart-settings__label',
+                  'data-dsh-autorestart-backup': 'when-label',
+                },
+                t('settings.backup.when'),
+              ),
+              h(
+                'span',
+                {
+                  className: 'dsh-autorestart-settings__hint',
+                  'data-dsh-autorestart-backup': 'when-body',
+                },
+                t('settings.backup.whenBody'),
+              ),
+            ),
             h(
               'label',
               { className: 'dsh-autorestart-settings__field' },
@@ -7204,6 +7326,18 @@
                   ),
                 }),
               ),
+              // Line 1b: WHY THE LAST RESTART WROTE NO NEW COPY — only when the
+              // verdict actually says so (user decision, 2026-11-07).
+              lastSkipTrace === null
+                ? null
+                : h(
+                  'span',
+                  {
+                    className: 'dsh-autorestart-settings__hint',
+                    'data-dsh-autorestart-backup': 'last-skipped',
+                  },
+                  lastSkipTrace,
+                ),
               // Line 2: the rule that bounds them, with the limit in force — the
               // dropdown below is what changes that number.
               h(

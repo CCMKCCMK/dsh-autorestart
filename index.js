@@ -101,6 +101,7 @@ import {
   DEFAULT_MAX_BACKUPS,
   enabledBundlesOf,
   isRestoreEligible,
+  findUnchangedBackup,
   isUsableRestorePoint,
   KIND_KNOWN_GOOD,
   KIND_SNAPSHOT,
@@ -2342,6 +2343,40 @@ export async function seedFirstInstallBackup(runtime, config = {}, overrides = {
     ? overrides.profileDir
     : resolveProfileDir()
   if (profileDir === null) return failed('the profile directory could not be resolved')
+  // A COPY THAT MATCHES THIS BOOT IS NOT A FIRST INSTALL (real machine,
+  // 2026-11-07). The copy `08-19-18-328Z` (842 files / 296,859,493 B, 7 plugins)
+  // was written before the restart; the instance that came up at 16:20:23 asked
+  // `latestKnownGood()`, got null — the boot check only stamped
+  // `boot.contentMatched` on that copy at 16:20:33, TEN SECONDS LATER — and wrote
+  // a 92 KB configuration-only seed beside it, every single boot.
+  //
+  // WHAT IS ASKED HERE INSTEAD: does the newest COMPLETE copy already hold the
+  // content this boot is running? That is a fact about bytes (the same digest the
+  // comparison uses), not a grade — CERTIFICATION IS UNTOUCHED: a copy still only
+  // becomes `known-good` when a boot proves it came up with matching content, so
+  // the seed's own `present` answer says "there is a copy", never "that copy is
+  // safe".
+  const matchingDir = (() => {
+    try {
+      const compared = findUnchangedBackup(profileDir, backupsDir, { includePlugins: true })
+      return compared && compared.state === 'unchanged' && typeof compared.dir === 'string' && compared.dir !== ''
+        ? compared.dir
+        : null
+    } catch {
+      // A comparison that cannot be made must never block the seed: the machine
+      // still needs a copy of what it is running.
+      return null
+    }
+  })()
+  if (matchingDir !== null) {
+    try {
+      runtime.log.info('a complete copy already holds what this boot loaded; no first-install seed', {
+        dir: matchingDir,
+        certified: false,
+      })
+    } catch {}
+    return record({ result: 'present', at: Date.now(), dir: matchingDir, bytes: null, error: null })
+  }
   const maxBackups = Number(config.maxBackups)
   let result = null
   try {
@@ -4730,13 +4765,37 @@ const titleOfSummary = (item) => {
    * @returns {object|null} the summary (null when no restart happened yet)
    */
   const lastRestartVerdict = () => {
-    const verdict = summarizeRestartVerdict(readRestartVerdict(stateDirOf()))
-    if (!verdict || !isPlainObject(verdict.snapshot) || verdict.snapshot.taken !== true) return verdict
+    const raw = readRestartVerdict(stateDirOf())
+    const verdict = summarizeRestartVerdict(raw)
+    if (!verdict) return verdict
+    // WHEN THAT RESTART HAPPENED, IN LOCAL TIME (user decision, 2026-11-07):
+    // the record stores UTC, the settings page shows the operator's clock — so
+    // the trace of a skipped copy can say "上次重启（2026-11-07 16:20）：…" with
+    // the same formatting the backup list already uses.
+    const skippedAt = raw && typeof raw.verifiedAt === 'string'
+      ? raw.verifiedAt
+      : (raw && typeof raw.startedAt === 'string' ? raw.startedAt : null)
+    const trace = {
+      // WHY THE COMPARISON WROTE NO NEW COPY: `unchanged` plus the directory it
+      // reused. `null` for every restart that copied (or never compared).
+      skipped: typeof verdict.skipped === 'string' ? verdict.skipped : null,
+      backupDir: typeof verdict.backupDir === 'string' ? verdict.backupDir : null,
+      skippedAtLocal: skippedAt === null ? null : localIsoTime(Date.parse(skippedAt)),
+    }
+    if (!isPlainObject(verdict.snapshot) || verdict.snapshot.taken !== true) {
+      return { ...verdict, ...trace }
+    }
     // THE COPY IT NAMES MAY BE GONE (see `snapshotStillOnDisk`): then this
     // report must not offer it as a rollback point. `missing` is an addition,
     // not a rewrite — the directory and its time stay readable.
-    if (snapshotStillOnDisk(verdict.snapshot.dir) !== false) return verdict
-    return { ...verdict, snapshot: { ...verdict.snapshot, taken: false, missing: true } }
+    if (snapshotStillOnDisk(verdict.snapshot.dir) !== false) {
+      return { ...verdict, ...trace }
+    }
+    return {
+      ...verdict,
+      ...trace,
+      snapshot: { ...verdict.snapshot, taken: false, missing: true },
+    }
   }
 
   /**
@@ -5893,8 +5952,78 @@ const titleOfSummary = (item) => {
           error: null,
           reused: true,
         }
+      } else if (config.backupOnRestart === false) {
+        // NOTHING TO COMPARE AND NOTHING TO COPY (user decision, 2026-11-07).
+        // The operator turned the pre-restart backup off: the overlay must draw
+        // no comparing card and no backup card at all — it goes straight to
+        // 「正在重启…」 with the stage title it already had.
+        const offProfile = runtimeProfileDirFor(options)
+        const offProfileDir = typeof offProfile.dir === 'string' ? offProfile.dir : null
+        snapshot = {
+          backup: null,
+          profileDir: offProfileDir,
+          profile: {
+            dir: offProfileDir,
+            source: typeof offProfile.source === 'string' ? offProfile.source : 'unknown',
+          },
+          requested: false,
+          skipped: true,
+          durationMs: 0,
+          error: null,
+        }
       } else {
-        markRestartStage('snapshotting')
+        // COMPARE BEFORE COPYING (user decision, 2026-11-07): a restart that
+        // finds the newest backup already holding exactly what the profile holds
+        // must NOT write a duplicate — the copy would only push an older, still
+        // useful one out of the list. The comparison is the first card the user
+        // sees; it is never allowed to block or fail a restart.
+        const compareProfile = runtimeProfileDirFor(options)
+        const compareDir = typeof compareProfile.dir === 'string' ? compareProfile.dir : null
+        const compareIncludePlugins = config.backupIncludePlugins !== false
+        let comparison = { state: 'unusable', dir: null, reason: 'no-profile' }
+        if (compareDir !== null) {
+          markRestartStage('comparing', {
+            reason: compareIncludePlugins === true ? 'config+plugins' : 'config',
+          })
+          try {
+            comparison = findUnchangedBackup(compareDir, backupsDirFor(stateDir), {
+              includePlugins: compareIncludePlugins,
+            })
+          } catch (error) {
+            log.warn('the pre-restart comparison failed; the copy is taken as before:', String(error))
+            comparison = { state: 'unusable', dir: null, reason: 'error' }
+          }
+        }
+        log.info('pre-restart comparison', {
+          state: comparison.state,
+          backupDir: comparison.dir,
+          includePlugins: compareIncludePlugins,
+          reason: comparison.reason ?? null,
+        })
+        if (comparison.state === 'unchanged') {
+          // THE SAME CONFIGURATION IS ALREADY COPIED: the newest backup IS this
+          // restart's rollback point. Nothing is written, and the conclusion
+          // records `skipped: 'unchanged'` with the directory that was reused.
+          snapshot = {
+            backup: {
+              ok: true,
+              dir: comparison.dir,
+              bytes: null,
+              totalBytes: null,
+              fileCount: null,
+              reused: true,
+            },
+            profileDir: compareDir,
+            profile: { dir: compareDir, source: 'reused-unchanged' },
+            requested: true,
+            skipped: 'unchanged',
+            durationMs: 0,
+            error: null,
+          }
+        } else {
+        markRestartStage('snapshotting', {
+          reason: comparison.state === 'unusable' ? 'compare unusable' : 'changed',
+        })
         try {
           snapshot = await snapshotFn({
             config,
@@ -5919,6 +6048,7 @@ const titleOfSummary = (item) => {
         // Remember it: if this restart is postponed now, the retry must not copy
         // the profile a second time.
         if (!cancelled) rememberSnapshot(snapshot)
+        }
       }
       if (cancelled) {
         // The user called it off while the files were being copied: the
@@ -5965,7 +6095,13 @@ const titleOfSummary = (item) => {
       // watchdog, the supervisor hand-off, the command) is "the restart is being
       // executed", and a deferral from here on goes back to 'waiting'.
       markRestartStage('restarting', {
-        reason: skipBackup ? 'no snapshot for this restart (manual rollback)' : 'snapshot done',
+        reason: skipBackup
+          ? 'no snapshot for this restart (manual rollback)'
+          : (snapshot && snapshot.skipped === 'unchanged'
+            ? 'snapshot skipped: unchanged'
+            : (snapshot && snapshot.skipped === true
+              ? 'no snapshot: backup is off'
+              : (snapshot && snapshot.backup && snapshot.backup.ok === true ? 'snapshot done' : 'snapshot failed'))),
       })
       // The snapshot is the rollback point of BOTH branches.
       const backup = snapshot && snapshot.backup ? snapshot.backup : null
@@ -6007,6 +6143,11 @@ const titleOfSummary = (item) => {
               ? 'no pre-restart backup on purpose: this restart carries out a manual rollback, and the undo copy that rollback wrote is its rollback point'
               : null),
         }),
+        // THE COMPARISON'S OUTCOME (2026-11-07): a restart that found the
+        // profile already copied says so, and names the copy it reuses — "why
+        // was there no new backup?" has to be answerable from this file.
+        skipped: snapshot && typeof snapshot.skipped === 'string' ? snapshot.skipped : null,
+        backupDir: backup && typeof backup.dir === 'string' ? backup.dir : null,
         checks: [],
       })
       // The marker of an EARLIER decision must not confuse this restart's

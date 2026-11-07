@@ -29,7 +29,11 @@ import path from 'node:path'
 import test from 'node:test'
 import vm from 'node:vm'
 
-import { createBackup } from '../lib/backup.js'
+import { createBackup, contentDigestOf, findUnchangedBackup } from '../lib/backup.js'
+// THE COMPARISON BEFORE A RESTART lives in this file too (see the last section):
+// it drives the real restart path, so it needs the host-side runtime.
+import { createRuntime, normalizeConfig } from '../index.js'
+import { requestRestart } from '../lib/checkpoint.js'
 
 /** How many files the linked plugin holds (the copy reports every 25). */
 const LINK_FILES = 60
@@ -221,7 +225,7 @@ const REAL_TOTAL_BYTES = 289_908_164
 const REAL_STARTED_AT = 1_791_000_000_000
 const REAL_BYTES = 287_860_164
 
-test('⑯ while the copy runs: no bar, the title says 「备份中，共 276.5 MB」', () => {
+test('⑯ while the copy runs: no bar, the title says 「配置有变化，正在备份，共 276.5 MB」', () => {
   const api = loadClient()
   // ① THE COPY IS RUNNING: no bar, and the title states the real total.
   const copying = api.restartBackupCard({
@@ -235,27 +239,62 @@ test('⑯ while the copy runs: no bar, the title says 「备份中，共 276.5 M
   assert.equal(copying.totalBytes, REAL_TOTAL_BYTES, 'the title states the total the Host reported')
   assert.equal(api.formatOverlaySize(copying.totalBytes), '276.5 MB', '289 908 164 bytes is 276.5 MB')
 
-  // THE SENTENCE, in both dictionaries, with that size.
+  // THE SENTENCE, in both dictionaries, with that size — both scopes.
   const size = api.formatOverlaySize(copying.totalBytes)
   assert.equal(
-    api.dictionaries.zh['restart.overlay.backingUp'].replace('{size}', size),
-    '备份中，共 276.5 MB',
-    'the Chinese title',
+    api.dictionaries.zh['restart.overlay.changed'].replace('{size}', size),
+    '配置和插件有变化，正在备份，共 276.5 MB',
+    'the Chinese title (plugins in the copy)',
   )
   assert.equal(
-    api.dictionaries.en['restart.overlay.backingUp'].replace('{size}', size),
-    'Backing up, 276.5 MB in total',
+    api.dictionaries.zh['restart.overlay.changedConfig'].replace('{size}', size),
+    '配置有变化，正在备份，共 276.5 MB',
+    'the Chinese title (configuration only)',
+  )
+  assert.equal(
+    api.dictionaries.en['restart.overlay.changed'].replace('{size}', size),
+    'Configuration and plugins changed, backing up 276.5 MB',
     'and the English one',
+  )
+  assert.equal(
+    api.dictionaries.en['restart.overlay.changedConfig'].replace('{size}', size),
+    'Configuration changed, backing up 276.5 MB',
+    'and the English configuration-only one',
   )
 
   // ①b NO TOTAL YET (the first sample has not arrived): a plain sentence.
   const noTotal = api.restartBackupCard({ phase: 'snapshotting', progress: null })
   assert.equal(noTotal.copying, true, 'the copy is still running')
   assert.equal(noTotal.totalBytes, null, 'nothing measured yet')
-  assert.equal(api.dictionaries.zh['restart.overlay.backingUpUnknown'], '备份中…', 'the fallback title')
+  assert.equal(api.dictionaries.zh['restart.overlay.changedUnknown'], '配置和插件有变化，正在备份', 'the fallback title')
+  assert.equal(api.dictionaries.zh['restart.overlay.changedUnknownConfig'], '配置有变化，正在备份', 'and its configuration-only form')
+
+  // ①c THE COMPARISON CARD AND THE BRANCHES IT LEADS TO, verbatim (the copy the
+  // user confirmed on 2026-11-07).
+  assert.equal(api.dictionaries.zh['restart.overlay.comparing'], '正在比对配置和插件有没有变化…', 'card ① with plugins')
+  assert.equal(api.dictionaries.zh['restart.overlay.comparingConfig'], '正在比对配置有没有变化…', 'card ① configuration only')
+  assert.equal(api.dictionaries.en['restart.overlay.comparing'], 'Comparing configuration and plugins for changes…')
+  assert.equal(api.dictionaries.en['restart.overlay.comparingConfig'], 'Comparing configuration for changes…')
+  assert.equal(api.dictionaries.zh['restart.overlay.skipped'], '配置和插件没有变化，跳过备份，将执行重启')
+  assert.equal(api.dictionaries.zh['restart.overlay.skippedConfig'], '配置没有变化，跳过备份，将执行重启')
+  assert.equal(api.dictionaries.zh['restart.overlay.compareUnusable'], '无法比对配置和插件，仍会备份')
+  assert.equal(api.dictionaries.zh['restart.overlay.compareUnusableConfig'], '无法比对配置，仍会备份')
+  assert.equal(api.dictionaries.zh['restart.overlay.backupFailed'], '备份失败，重启继续进行')
+  assert.equal(api.dictionaries.en['restart.overlay.backupFailed'], 'Backup failed, the restart continues')
+
+  // ①d THE CARD'S STATE MACHINE follows those keys.
+  const comparing = api.restartBackupCard({ phase: 'comparing', reason: 'config+plugins' })
+  assert.equal(comparing.comparing, true, 'the comparison is card ①')
+  assert.equal(comparing.copying, false, 'and it is not a copy yet')
+  assert.equal(comparing.includePlugins, true, 'the scope travels in the reason')
+
+  const skippedCard = api.restartBackupCard({ phase: 'restarting', reason: 'snapshot skipped: unchanged' })
+  assert.equal(skippedCard.skipped, true, 'nothing was written: the card says so')
+  assert.equal(skippedCard.finished, false, 'and it is not a finished copy')
+  assert.equal(skippedCard.copying, false, 'and nothing is being copied')
 })
 
-test('⑯ the copy is over: 「备份完成，正在重启…」 — the same for 1 s and for 60 s', () => {
+test('⑯ the copy is over: 「备份完成，将执行重启」 — the same for 1 s and for 60 s', () => {
   const api = loadClient()
 
   // NO CLOCK: the two stages below differ by 59 seconds and read the same.
@@ -266,18 +305,24 @@ test('⑯ the copy is over: 「备份完成，正在重启…」 — the same fo
     assert.equal(card.finished, true, label + ': and it finished')
   }
 
-  assert.equal(api.dictionaries.zh['restart.overlay.backupDone'], '备份完成，正在重启…', 'the Chinese title')
-  assert.equal(api.dictionaries.en['restart.overlay.backupDone'], 'Backup done, restarting…', 'and the English one')
+  assert.equal(api.dictionaries.zh['restart.overlay.backupDone'], '备份完成，将执行重启', 'the Chinese title')
+  assert.equal(api.dictionaries.en['restart.overlay.backupDone'], 'Backup done, the restart will now proceed', 'and the English one')
   assert.notEqual(
     api.dictionaries.zh['restart.overlay.backupDone'],
     api.dictionaries.zh['restart.overlay.restarting'],
     'the finished line is not the old 「正在重启…」 sentence',
   )
+  // ONE LINE, ONE CLAIM: the copy is over, so the finished line must not also
+  // say a copy is running — that would be two states in one sentence.
+  assert.doesNotMatch(api.dictionaries.zh['restart.overlay.backupDone'], /正在备份/)
+  assert.doesNotMatch(api.dictionaries.en['restart.overlay.backupDone'], /backing up/i)
 
   // NOTHING TIME-BASED IS LEFT IN THE CLIENT.
   assert.equal(api.RESTART_FAST_BACKUP_MS, undefined, 'the old two-second threshold is gone')
   assert.equal(api.RESTART_BACKUP_RECEIPT_MS, undefined, 'and so is the 500 ms receipt')
   assert.equal('restart.overlay.backedUp' in api.dictionaries.zh, false, 'the old receipt key is gone too')
+  assert.equal('restart.overlay.backingUp' in api.dictionaries.zh, false, 'and so is the old copy title')
+  assert.equal('restart.overlay.backingUpUnknown' in api.dictionaries.zh, false, 'and its no-total fallback')
 })
 
 test('⑯ a failed or skipped backup never says 备份完成', () => {
@@ -303,4 +348,473 @@ test('⑯ a failed or skipped backup never says 备份完成', () => {
   const idle = api.restartBackupCard({ phase: 'waiting' })
   assert.equal(idle.finished, false, 'and an empty stage claims nothing')
   assert.equal(idle.copying, false, 'it is not copying either')
+})
+
+/* ------------------------------------------------------------------ *
+ * THE COMPARISON BEFORE A RESTART (user decision, 2026-11-07) — moved here
+ * verbatim from the throwaway ackup-dedupe.test.mjs when the task scope
+ * closed: same four names, same assertions.
+ * ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ *
+ * Fixtures: a profile the backup can really copy.
+ * ------------------------------------------------------------------ */
+
+/** The Cordis context the runtime needs (logging only). */
+function hostContext() {
+  return {
+    logger: Object.assign(() => undefined, { info: () => {}, warn: () => {}, error: () => {} }),
+    agents: { list: () => [], roots: () => [], get: () => undefined },
+    goals: { get: () => undefined, disarm: () => undefined, pause: () => undefined, resume: () => undefined },
+    tools: { register: () => () => {}, guard: () => () => {} },
+    get: () => undefined,
+    on: () => () => {},
+    effect: (fn) => {
+      const disposer = fn()
+      return () => {
+        if (typeof disposer === 'function') disposer()
+      }
+    },
+    interval: () => () => {},
+    timeout: () => () => {},
+    provide: () => {},
+    emit: () => {},
+  }
+}
+
+/**
+ * A profile whose plugin is LINKED (the case the copy really holds file by
+ * file), a state directory and a backups root.
+ *
+ * The real layout (checked against `~/.dsh/profiles/desktop`): a profile keeps
+ * `cordis.patch.yml`, `package.json` and `pnpm-lock.yaml` at its ROOT, stores
+ * them under `config/` in a copy, and installs a linked plugin as a
+ * `node_modules/<name>` junction whose source lives outside the profile. A slim
+ * copy carries exactly that source under `node_modules-link/<name>`.
+ */
+function fixture(t, label) {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), `dsh-ar-dedupe-${label}-`))
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }))
+  const profile = path.join(base, 'profile')
+  const source = path.join(base, 'demo-source')
+  fs.mkdirSync(path.join(profile, 'node_modules'), { recursive: true })
+  fs.mkdirSync(source, { recursive: true })
+  fs.writeFileSync(path.join(source, 'package.json'), '{"name":"demo-plugin","version":"1.0.0"}\n', 'utf8')
+  fs.writeFileSync(path.join(source, 'index.js'), 'export default 1\n', 'utf8')
+  // A FIXED, UNAMBIGUOUS TIME for the source tree: the digest reads modification
+  // times at second resolution, so the fixture keeps them a quarter second away
+  // from every boundary the copy could round across.
+  const fixedAt = new Date(Math.floor(Date.now() / 1000) * 1000 - 60_000 + 250)
+  for (const name of ['package.json', 'index.js']) {
+    fs.utimesSync(path.join(source, name), fixedAt, fixedAt)
+  }
+  fs.writeFileSync(path.join(profile, 'cordis.patch.yml'), 'rows:\n  - id: demo\n', 'utf8')
+  fs.writeFileSync(
+    path.join(profile, 'package.json'),
+    JSON.stringify({ name: 'demo-profile', dsh: { profile: { bundles: ['demo-plugin'] } } }, null, 2) + '\n',
+    'utf8',
+  )
+  fs.writeFileSync(path.join(profile, 'pnpm-lock.yaml'), 'lockfileVersion: 9\n', 'utf8')
+  let linked = true
+  try {
+    fs.symlinkSync(source, path.join(profile, 'node_modules', 'demo-plugin'), 'junction')
+  } catch {
+    linked = false
+  }
+  const previous = process.env.DSH_PROFILE_DIR
+  process.env.DSH_PROFILE_DIR = profile
+  t.after(() => {
+    if (previous === undefined) delete process.env.DSH_PROFILE_DIR
+    else process.env.DSH_PROFILE_DIR = previous
+  })
+  const stateDir = path.join(base, 'storage')
+  fs.mkdirSync(stateDir, { recursive: true })
+  return {
+    base,
+    profile,
+    source,
+    linked,
+    stateDir,
+    stateFile: path.join(stateDir, 'state.json'),
+    backups: path.join(stateDir, 'backups'),
+  }
+}
+
+/** A runtime that really runs the snapshot path, with a command that never starts a process. */
+function makeRuntime(setup, overrides = {}) {
+  const commands = []
+  const runtime = createRuntime(hostContext(), normalizeConfig({
+    stateFile: setup.stateFile,
+    restartMode: 'command',
+    restartCommand: 'restart-the-host',
+    settleMs: 0,
+    restartGraceMs: 0,
+    backupOnRestart: true,
+    backupIncludePlugins: true,
+    ...overrides,
+  }), {
+    env: { isDesktopApp: false, appExePath: null },
+    runCommand: ({ command }) => {
+      commands.push(command)
+      return { ok: true, command, pid: null }
+    },
+    armWatchdog: () => ({ ok: false, tier: 'none', reason: 'the test forces the fallback' }),
+    launchWatcher: () => ({ ok: false, method: 'none', error: 'the test launches no watcher', verified: 'nothing', pid: null }),
+    probeInstance: async () => ({ ok: true, reason: 'the new instance answered' }),
+    // THE PROFILE IS THIS TEST'S OWN, named explicitly: the runtime would
+    // otherwise resolve the profile of whoever runs the suite, and the copy
+    // would be a real one.
+    profileDir: setup.profile,
+  })
+  return { runtime, commands }
+}
+
+/** The copies on disk, oldest name first (the names are UTC timestamps). */
+function copies(setup) {
+  try {
+    return fs.readdirSync(setup.backups).sort()
+  } catch {
+    return []
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * ① ONE COPY FOR TWO RESTARTS.
+ * ------------------------------------------------------------------ */
+
+test('① the same profile restarted twice writes ONE copy; the second verdict says skipped=unchanged', async (t) => {
+  const setup = fixture(t, 'same')
+
+  const first = makeRuntime(setup)
+  requestRestart(first.runtime.state, { reason: 'the first restart', bySessionId: 'sess-1' })
+  await first.runtime.executeRestart()
+  assert.deepEqual(first.commands, ['restart-the-host'], 'the first restart really ran')
+  const afterFirst = copies(setup)
+  assert.equal(afterFirst.length, 1, 'the first restart wrote one copy, got: ' + JSON.stringify(afterFirst))
+  const keptDir = path.join(setup.backups, afterFirst[0])
+  assert.equal(fs.existsSync(keptDir), true, 'and it is on disk')
+
+  // SECOND RESTART — a fresh instance, exactly like the host that came back up,
+  // on a profile nobody touched in between.
+  const second = makeRuntime(setup)
+  requestRestart(second.runtime.state, { reason: 'the second restart', bySessionId: 'sess-2' })
+  await second.runtime.executeRestart()
+
+  assert.deepEqual(second.commands, ['restart-the-host'], 'the second restart really ran too')
+  assert.deepEqual(
+    copies(setup),
+    afterFirst,
+    'NO new directory: the comparison found the newest copy already holding this profile',
+  )
+
+  const verdict = second.runtime.lastRestartVerdict()
+  assert.ok(verdict, 'the second restart recorded its conclusion')
+  assert.equal(verdict.skipped, 'unchanged', 'and says WHY no copy was written')
+  assert.equal(verdict.backupDir, keptDir, 'naming the copy it reused')
+  // THE ROLLBACK POINT OF THIS RESTART IS THAT COPY — a skipped run is not a
+  // restart without a restore point.
+  assert.equal(verdict.snapshot.taken, true, 'this restart still has a rollback point')
+  assert.equal(verdict.snapshot.dir, keptDir, 'and it is the reused copy')
+  assert.equal(verdict.snapshot.requested, true, 'the comparison was asked for and answered')
+})
+
+/* ------------------------------------------------------------------ *
+ * ② A CHANGED PLUGIN FILE DEFEATS THE COMPARISON.
+ * ------------------------------------------------------------------ */
+
+test('② a plugin file that changed is a real difference: the next restart copies again', async (t) => {
+  const setup = fixture(t, 'changed')
+  if (setup.linked !== true) {
+    t.skip('this filesystem refuses symlinks/junctions, so no plugin is linked')
+    return
+  }
+
+  const first = makeRuntime(setup)
+  requestRestart(first.runtime.state, { reason: 'the first restart', bySessionId: 'sess-1' })
+  await first.runtime.executeRestart()
+  const afterFirst = copies(setup)
+  assert.equal(afterFirst.length, 1, 'the first restart wrote one copy')
+  // THE COPY REALLY HOLDS THE PLUGIN: `node_modules-link/<name>` is the file-by-file
+  // copy of the linked source.
+  assert.equal(
+    fs.existsSync(path.join(setup.backups, afterFirst[0], 'node_modules-link', 'demo-plugin', 'index.js')),
+    true,
+    'the linked plugin was copied into the backup',
+  )
+
+  // THE EDIT: a file INSIDE the plugin the copy holds.
+  const pluginFile = path.join(setup.source, 'index.js')
+  fs.writeFileSync(pluginFile, 'export default 2\n', 'utf8')
+  // A timestamp far enough in the future that no filesystem can round it away.
+  const later = Date.now() + 2000
+  fs.utimesSync(pluginFile, new Date(later), new Date(later))
+
+  const second = makeRuntime(setup)
+  requestRestart(second.runtime.state, { reason: 'the second restart', bySessionId: 'sess-2' })
+  await second.runtime.executeRestart()
+
+  const afterSecond = copies(setup)
+  assert.equal(
+    afterSecond.length,
+    afterFirst.length + 1,
+    'a changed plugin file must produce a FULL new copy, got: ' + JSON.stringify(afterSecond),
+  )
+  const verdict = second.runtime.lastRestartVerdict()
+  assert.equal(verdict.skipped, null, 'nothing was skipped: a real difference was copied')
+  assert.notEqual(verdict.backupDir, path.join(setup.backups, afterFirst[0]), 'the new copy is the newest one')
+})
+
+/* ------------------------------------------------------------------ *
+ * ③ NO SWITCH = NO COMPARISON AND NO COPY.
+ * ------------------------------------------------------------------ */
+
+test('③ with backupOnRestart off the restart neither compares nor copies', async (t) => {
+  const setup = fixture(t, 'off')
+  const off = makeRuntime(setup, { backupOnRestart: false })
+  requestRestart(off.runtime.state, { reason: 'the user asked for a restart', bySessionId: 'sess-1' })
+  await off.runtime.executeRestart()
+
+  assert.deepEqual(off.commands, ['restart-the-host'], 'the restart still happens')
+  assert.deepEqual(copies(setup), [], 'and nothing was copied')
+
+  // NEITHER STAGE IS DRAWN: no comparison card, no copy card. The restart goes
+  // straight to 「正在重启…」 (the phase title it already had).
+  const stage = off.runtime.restartStageInfo()
+  assert.notEqual(stage.phase, 'comparing', 'there is nothing to compare: no comparison card')
+  assert.notEqual(stage.phase, 'snapshotting', 'and nothing is being copied either')
+  assert.equal(stage.phase, 'restarting', 'it goes straight to the restart')
+
+  const verdict = off.runtime.lastRestartVerdict()
+  assert.equal(verdict.skipped, null, 'a switch that is off is not a "nothing changed" skip')
+  assert.equal(verdict.backupDir, null, 'and there is no copy to name')
+})
+
+/* ------------------------------------------------------------------ *
+ * ④ THE COMPARISON ITSELF — the unit the whole feature stands on.
+ * ------------------------------------------------------------------ */
+
+test('④ the comparison answers unchanged / changed / no-backup / unusable without blocking', async (t) => {
+  const setup = fixture(t, 'compare')
+
+  // ① NO COPY YET: a first restart has nothing to compare against.
+  assert.equal(
+    findUnchangedBackup(setup.profile, setup.backups, { includePlugins: true }).state,
+    'no-backup',
+  )
+
+  // ② A REAL COPY, THEN THE COMPARISON AGAINST IT.
+  const first = makeRuntime(setup)
+  requestRestart(first.runtime.state, { reason: 'the first restart', bySessionId: 'sess-1' })
+  await first.runtime.executeRestart()
+  const [name] = copies(setup)
+  assert.ok(name, 'the first restart wrote the copy this compares against')
+
+  const unchanged = findUnchangedBackup(setup.profile, setup.backups, { includePlugins: true })
+  assert.equal(unchanged.state, 'unchanged', 'the copy holds exactly what the profile holds')
+  assert.equal(unchanged.dir, path.join(setup.backups, name), 'and it names that copy')
+  assert.equal(unchanged.current, unchanged.previous, 'same digest, so there is nothing to copy')
+  assert.equal(String(unchanged.current).startsWith('sha256:'), true, 'the digest is a sha256, as always')
+
+  // THE SAME QUESTION WITHOUT THE PLUGINS: also unchanged (the configuration
+  // half of the digest is the one the copies already record).
+  assert.equal(
+    findUnchangedBackup(setup.profile, setup.backups, { includePlugins: false }).state,
+    'unchanged',
+  )
+
+  // ③ A CHANGED CONFIGURATION FILE IS A DIFFERENCE.
+  fs.writeFileSync(
+    path.join(setup.profile, 'cordis.patch.yml'),
+    'rows:\n  - id: demo\n  - id: added\n',
+    'utf8',
+  )
+  const changed = findUnchangedBackup(setup.profile, setup.backups, { includePlugins: true })
+  assert.equal(changed.state, 'changed', 'a config edit is a real change')
+  assert.notEqual(changed.current, changed.previous, 'the digests differ')
+
+  // ④ A COMPARISON THAT CANNOT BE MADE SAYS SO — it never throws and never
+  // blocks the restart.
+  const unusable = findUnchangedBackup(setup.profile, setup.backups, { includePlugins: true, limits: { files: 0 } })
+  assert.equal(unusable.state, 'unusable', 'the budget was exhausted')
+  assert.equal(typeof unusable.reason, 'string', 'and the reason travels with the answer: ' + unusable.reason)
+
+  // ⑤ AN UNKNOWN PROFILE IS 'unusable' TOO, not a crash.
+  assert.equal(contentDigestOf('', { includePlugins: true }).unusable, 'no-profile')
+  assert.equal(findUnchangedBackup('', setup.backups).state, 'unusable')
+})
+
+/* ------------------------------------------------------------------ *
+ * ⑤ THE DIGEST AND THE COPY SKIP THE SAME NAMES (real machine, 2026-11-07).
+ *
+ * WHAT WENT WRONG ON THE REAL MACHINE (second restart, 16:15): the content had
+ * not changed at all and the restart still wrote `2026-11-07T08-15-39-308Z`
+ * (294,817,675 bytes, `skipped` empty) next to the identical 08-14 copy. The
+ * cause was a SCOPE mismatch inside the comparison itself:
+ *
+ *   source  218 files / 9,908,999 bytes
+ *   copy    139 files / 5,601,116 bytes   (218 − 79 = 139, exactly the `.git`)
+ *   `.git`   79 files / 4,307,883 bytes
+ *
+ * `copyTreeWithProgress` has always skipped `BACKUP_SKIP_NAMES` (`.git` — it is
+ * rebuildable and it was the bulk of every backup), but `pluginTreeDigest` walked
+ * the whole tree, so the two sides could never produce the same digest: every
+ * restart said "changed" and took a full duplicate copy.
+ *
+ * THIS TEST PINS THE SAME SHAPE: a linked plugin whose source carries a `.git`
+ * history of 79 files that the copy cannot have.
+ * ------------------------------------------------------------------ */
+
+/** The real history: 79 files inside `.git`, never copied. */
+const GIT_HISTORY_FILES = 79
+
+/** Write a `.git` history of `count` files under `dir` (a plain tree, no git needed). */
+function writeGitHistory(dir, count) {
+  const gitDir = path.join(dir, '.git')
+  fs.mkdirSync(path.join(gitDir, 'objects', 'pack'), { recursive: true })
+  fs.writeFileSync(path.join(gitDir, 'HEAD'), 'ref: refs/heads/main\n', 'utf8')
+  for (let index = 0; index < count - 1; index += 1) {
+    const bucket = String(index % 16).padStart(2, '0')
+    fs.mkdirSync(path.join(gitDir, 'objects', bucket), { recursive: true })
+    fs.writeFileSync(path.join(gitDir, 'objects', bucket, `obj-${index}`), `blob ${index}\n`, 'utf8')
+  }
+}
+
+/** Count the regular files under `dir` (what both the digest and the copy walk). */
+function countFilesUnder(dir) {
+  let files = 0
+  const stack = ['']
+  while (stack.length > 0) {
+    const rel = stack.pop()
+    const abs = rel === '' ? dir : path.join(dir, rel)
+    let entries = []
+    try {
+      entries = fs.readdirSync(abs, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory()) stack.push(rel === '' ? entry.name : rel + '/' + entry.name)
+      else files += 1
+    }
+  }
+  return files
+}
+
+test('⑤ a .git history the copy never takes does not make the profile "changed"', async (t) => {
+  const setup = fixture(t, 'git')
+  if (setup.linked !== true) {
+    t.skip('this filesystem refuses symlinks/junctions, so no plugin is linked')
+    return
+  }
+  writeGitHistory(setup.source, GIT_HISTORY_FILES)
+
+  const first = makeRuntime(setup)
+  requestRestart(first.runtime.state, { reason: 'the first restart', bySessionId: 'sess-1' })
+  await first.runtime.executeRestart()
+  const [name] = copies(setup)
+  assert.ok(name, 'the first restart wrote a copy')
+
+  // THE SHAPE OF THE BUG: the source holds the history, the copy does not.
+  const copiedTree = path.join(setup.backups, name, 'node_modules-link', 'demo-plugin')
+  const sourceFiles = countFilesUnder(setup.source)
+  const copyFiles = countFilesUnder(copiedTree)
+  assert.equal(fs.existsSync(path.join(copiedTree, '.git')), false, 'the copy never takes .git')
+  assert.equal(
+    sourceFiles - copyFiles,
+    GIT_HISTORY_FILES,
+    `the copy is short by exactly the history: ${sourceFiles} vs ${copyFiles}`,
+  )
+
+  // THE ACCEPTANCE: the two sides are comparable, so this is "unchanged".
+  const unchanged = findUnchangedBackup(setup.profile, setup.backups, { includePlugins: true })
+  assert.equal(unchanged.state, 'unchanged', 'a .git-only difference must NOT count as a change')
+  assert.equal(unchanged.current, unchanged.previous, 'both digests are the same')
+  assert.equal(unchanged.dir, path.join(setup.backups, name), 'and it names the copy it would reuse')
+
+  // A REAL EDIT IS STILL SEEN (the skip list must not swallow everything).
+  const pluginFile = path.join(setup.source, 'index.js')
+  fs.writeFileSync(pluginFile, 'export default 3\n', 'utf8')
+  const later = new Date(Math.floor(Date.now() / 1000) * 1000 + 30_000 + 250)
+  fs.utimesSync(pluginFile, later, later)
+  const changed = findUnchangedBackup(setup.profile, setup.backups, { includePlugins: true })
+  assert.equal(changed.state, 'changed', 'editing a real file still counts as a change')
+  assert.notEqual(changed.current, changed.previous, 'and the digests differ')
+
+  // AND THE RESTART ITSELF AGREES: the edit produced exactly one new copy, and
+  // that copy is not a "skipped" one.
+  const second = makeRuntime(setup)
+  requestRestart(second.runtime.state, { reason: 'the second restart', bySessionId: 'sess-2' })
+  await second.runtime.executeRestart()
+  const afterSecond = copies(setup)
+  assert.equal(afterSecond.length, 2, 'the edit produced exactly one new copy: ' + JSON.stringify(afterSecond))
+  assert.equal(second.runtime.lastRestartVerdict().skipped, null, 'a real edit is not a skip')
+})
+
+/* ------------------------------------------------------------------ *
+ * ⑥ A CONFIG-ONLY COPY IS NOT A BASELINE FOR A PLUGIN-CARRYING PROFILE
+ *   (real machine, 2026-11-07 — the DANGEROUS direction of the bug).
+ *
+ * WHAT HAPPENED: the newest copy was the first-install seed — `includePlugins:
+ * false`, three configuration files, 92,888 bytes. The comparison took it as the
+ * baseline, compared only the configuration, answered `unchanged`, and the
+ * restart SKIPPED its copy — while `plugins/dsh-autorestart/index.js` had really
+ * changed (source 575,255 bytes at 16:22:12 against the 573,584-byte file in the
+ * copy taken at 16:06:12). A duplicate is annoying; a copy that was never taken
+ * is a rollback point that no longer exists.
+ *
+ * THE RULE PINNED HERE: a candidate must have the SAME SCOPE as what this run
+ * would copy. `config-only` copies are passed over; with no same-scope copy the
+ * answer is `changed` (copy), never `unchanged`.
+ * ------------------------------------------------------------------ */
+
+/** A complete configuration-only copy — exactly what `seedFirstInstallBackup` writes. */
+async function writeConfigOnlySeed(profile, backups) {
+  const written = await createBackup({
+    profileDir: profile,
+    backupsDir: backups,
+    includePlugins: false,
+    kind: 'known-good',
+    trigger: 'first-install',
+  })
+  assert.equal(written.ok, true, 'the seed was written: ' + String(written.error))
+  return written.dir
+}
+
+test('⑥ a config-only seed cannot make a plugin-carrying profile look "unchanged"', async (t) => {
+  const setup = fixture(t, 'seed-only')
+  if (setup.linked !== true) {
+    t.skip('this filesystem refuses symlinks/junctions, so no plugin is linked')
+    return
+  }
+  const seed = await writeConfigOnlySeed(setup.profile, setup.backups)
+  assert.equal(fs.existsSync(path.join(seed, 'node_modules-link')), false, 'the seed holds no plugin tree')
+
+  // ① THE SOURCE CHANGED (the real machine's case): must be `changed`.
+  const pluginFile = path.join(setup.source, 'index.js')
+  fs.writeFileSync(pluginFile, 'export default 42\n', 'utf8')
+  const later = new Date(Math.floor(Date.now() / 1000) * 1000 + 30_000 + 250)
+  fs.utimesSync(pluginFile, later, later)
+  const afterEdit = findUnchangedBackup(setup.profile, setup.backups, { includePlugins: true })
+  assert.equal(afterEdit.state, 'changed', 'a config-only seed cannot answer a plugin question')
+  assert.equal(afterEdit.dir, null, 'and it is not offered as the baseline')
+
+  // ② THE SOURCE IS UNCHANGED: STILL `changed`, because there is nothing to
+  // compare the plugin tree against. Only a full copy may answer `unchanged`.
+  const untouched = fixture(t, 'seed-only-fresh')
+  if (untouched.linked !== true) {
+    t.skip('this filesystem refuses symlinks/junctions, so no plugin is linked')
+    return
+  }
+  await writeConfigOnlySeed(untouched.profile, untouched.backups)
+  const firstAnswer = findUnchangedBackup(untouched.profile, untouched.backups, { includePlugins: true })
+  assert.equal(firstAnswer.state, 'changed', 'no same-scope copy exists, so this run must copy')
+  assert.equal(firstAnswer.dir, null, 'and no directory is named as the baseline')
+
+  // ③ ONE REAL RESTART LATER a full copy exists — NOW `unchanged` is allowed
+  // (the fix must not degrade into "copy every time").
+  const first = makeRuntime(untouched)
+  requestRestart(first.runtime.state, { reason: 'the first restart', bySessionId: 'sess-1' })
+  await first.runtime.executeRestart()
+  const secondAnswer = findUnchangedBackup(untouched.profile, untouched.backups, { includePlugins: true })
+  assert.equal(secondAnswer.state, 'unchanged', 'with a same-scope copy the answer is honest again')
+  assert.equal(typeof secondAnswer.dir, 'string', 'and it names that copy')
 })
