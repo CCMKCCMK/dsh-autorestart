@@ -6117,11 +6117,16 @@ const titleOfSummary = (item) => {
             comparison = { state: 'unusable', dir: null, reason: 'error' }
           }
         }
+        // THE REASON TRAVELS (2026-11-07): "changed" must say WHICH half differed,
+        // and for the plugin tree up to five concrete files with the kind of
+        // difference. Without it the real machine's "identical copies but still
+        // copied again" could only be guessed at.
         log.info('pre-restart comparison', {
           state: comparison.state,
           backupDir: comparison.dir,
           includePlugins: compareIncludePlugins,
           reason: comparison.reason ?? null,
+          differences: Array.isArray(comparison.differences) ? comparison.differences : [],
         })
         if (comparison.state === 'unchanged') {
           // THE SAME CONFIGURATION IS ALREADY COPIED: the newest backup IS this
@@ -6171,6 +6176,12 @@ const titleOfSummary = (item) => {
         // Remember it: if this restart is postponed now, the retry must not copy
         // the profile a second time.
         if (!cancelled) rememberSnapshot(snapshot)
+        }
+        // THE COMPARISON'S REASON, CARRIED WITH THE SNAPSHOT so the verdict below
+        // (and the log above) can say why this copy was taken.
+        if (snapshot !== null && typeof snapshot === 'object') {
+          snapshot.compareReason = typeof comparison.reason === 'string' ? comparison.reason : null
+          snapshot.compareDifferences = Array.isArray(comparison.differences) ? comparison.differences : []
         }
       }
       if (cancelled) {
@@ -6271,6 +6282,12 @@ const titleOfSummary = (item) => {
         // was there no new backup?" has to be answerable from this file.
         skipped: snapshot && typeof snapshot.skipped === 'string' ? snapshot.skipped : null,
         backupDir: backup && typeof backup.dir === 'string' ? backup.dir : null,
+        // WHY THIS COPY WAS TAKEN (2026-11-07): `config-differs` /
+        // `plugin-tree-differs` / `no-same-scope-copy`, plus up to five concrete
+        // files for the plugin half. "Why did it back up again?" is now readable
+        // from this file instead of guessed.
+        compareReason: snapshot && typeof snapshot.compareReason === 'string' ? snapshot.compareReason : null,
+        compareDifferences: snapshot && Array.isArray(snapshot.compareDifferences) ? snapshot.compareDifferences : [],
         checks: [],
       })
       // The marker of an EARLIER decision must not confuse this restart's
