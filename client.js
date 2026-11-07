@@ -414,6 +414,9 @@
     'settings.backup.limitMore': '已选 {requested} 份，实际保留 {kept} 份。',
     'settings.backup.limitFailed': '没能改成功，份数保持原样。',
     'settings.backup.empty': '还没有备份；每次重启前会自动生成一份。',
+    // THE SKIPPED BACKUP MUST BE VISIBLE (2026-11-07): a backup that was not
+    // taken, announced only in the log, is a backup the user believes exists.
+    'settings.backup.profileUnknown': '这次没有备份：没找到你的配置目录（发现 {n} 个候选）。',
     'settings.backup.path': '存放路径',
     'settings.backup.copyPath': '复制路径',
     'settings.backup.copied': '路径已复制',
@@ -549,6 +552,30 @@
     'announcement.disabled': '按钮目前关闭，可在设置里打开。',
     'announcement.button': '知道了',
     'announcement.error': '没能记下来：{message}',
+    // THE LEFTOVERS OF AN OLDER BUILD (2026-11-06): asked ONCE, and gone for
+    // good after the answer. There is deliberately no settings entry and no
+    // permanent banner for this — the problem must disappear with the answer.
+    'shellBackups.title': '旧版本留下的备份残留',
+    'shellBackups.line1': '残留 {count} 个目录，共 {size}。',
+    'shellBackups.line2': '它们是没有 manifest 的半成品备份：恢复不了，也不会再被用到。',
+    'shellBackups.clean': '清理掉',
+    'shellBackups.self': '我自己处理',
+    'shellBackups.cleaned': '已清理 {count} 个目录，释放 {size}。',
+    'shellBackups.cleanedNothing': '没有需要清理的残留。',
+    'shellBackups.failed': '有 {count} 个目录删不掉：{reason}',
+    'shellBackups.selfDone': '好，之后不再提醒。',
+    'shellBackups.error': '没能记下来：{message}',
+    'shellBackups.line1.noSize': '残留 {count} 个目录（占用未统计）。',
+    'shellBackups.working': '正在清理，请稍候',
+    'shellBackups.refused': '宿主没有接受这个操作。',
+    'shellBackups.maybeLater': '清理可能还在进行，刷新一下页面就能看到结果。',
+    // THE CLICK MUST BE SEEN (2026-11-07): a click that fails is a SENTENCE,
+    // and the sentence is in the language of the user — never a silence and
+    // never an English sentence from the browser.
+    'shellBackups.error.cleanup': '没能完成清理：{message}',
+    'shellBackups.error.failed': '请再试一次。',
+    'shellBackups.error.broken': '页面出了点问题，请刷新一下再试。',
+    'shellBackups.workingSelf': '正在记下来，请稍候',
     // THE PLUGIN THAT DID NOT LOAD (用户拍板 2026-11-01)：宿主照常起来，只是某个
     // 插件这次没激活 —— 把这件事搬到前台，并且只给一个动作：只恢复这一个。
     'pluginFailure.title': "启动后有东西没起来",
@@ -854,6 +881,9 @@
     'settings.backup.limitMore': 'You picked {requested}; {kept} are kept.',
     'settings.backup.limitFailed': 'The change did not go through; the copy limit is unchanged.',
     'settings.backup.empty': 'No backup yet; one is written before every restart.',
+    // THE SKIPPED BACKUP MUST BE VISIBLE (2026-11-07): a backup that was not
+    // taken, announced only in the log, is a backup the user believes exists.
+    'settings.backup.profileUnknown': 'No backup this time: your profile directory could not be found ({n} candidates).',
     'settings.backup.path': 'Where they live',
     'settings.backup.copyPath': 'Copy the path',
     'settings.backup.copied': 'The path is on the clipboard',
@@ -983,6 +1013,30 @@
     'announcement.disabled': 'The button is currently switched off; you can turn it on in the settings.',
     'announcement.button': 'Got it',
     'announcement.error': 'Could not record it: {message}',
+    // THE LEFTOVERS OF AN OLDER BUILD (2026-11-06): asked ONCE, and gone for
+    // good after the answer. There is deliberately no settings entry and no
+    // permanent banner for this - the problem must disappear with the answer.
+    'shellBackups.title': 'Backup leftovers from an older build',
+    'shellBackups.line1': '{count} leftover directories, {size} in total.',
+    'shellBackups.line2': 'They are half-finished copies without a manifest: nothing can restore them and nothing reads them any more.',
+    'shellBackups.clean': 'Delete them',
+    'shellBackups.self': 'I will handle them',
+    'shellBackups.cleaned': '{count} directories removed, {size} freed.',
+    'shellBackups.cleanedNothing': 'There was nothing left to clean.',
+    'shellBackups.failed': '{count} directories could not be removed: {reason}',
+    'shellBackups.selfDone': 'All right, it will not come back.',
+    'shellBackups.error': 'Could not record it: {message}',
+    'shellBackups.line1.noSize': '{count} leftover directories (their size was not measured).',
+    'shellBackups.working': 'Cleaning, please wait',
+    'shellBackups.refused': 'The host refused the answer.',
+    'shellBackups.maybeLater': 'The cleanup may still be running — refresh the page to see the result.',
+    // THE CLICK MUST BE SEEN (2026-11-07): a click that fails is a SENTENCE,
+    // and the sentence is in the language of the user - never a silence and
+    // never an English sentence from the browser.
+    'shellBackups.error.cleanup': 'Could not finish the cleanup: {message}',
+    'shellBackups.error.failed': 'Please try again.',
+    'shellBackups.error.broken': 'Something went wrong on this page. Please refresh it and try again.',
+    'shellBackups.workingSelf': 'Recording, please wait',
     // THE PLUGIN THAT DID NOT LOAD (user decision 2026-11-01): the host came up,
     // one plugin simply did not activate this time. Say so, and offer exactly
     // one action: put THIS one plugin back.
@@ -2665,6 +2719,27 @@
     if (value < 1024) return Math.round(value) + ' B'
     if (value < 1024 * 1024) return Math.round(value / 1024) + ' KB'
     return String(Math.round((value / (1024 * 1024)) * 10) / 10) + ' MB'
+  }
+
+  /**
+   * A SIZE, WITH THE UNIT THAT FITS IT — and GIGABYTES, because the leftovers
+   * of an old build are measured in gigabytes (the real machine: 23 966 MB).
+   *
+   * The rest is the rule of `formatOverlaySize`: the unit travels with the
+   * number, a whole number of megabytes keeps no ".0", and a missing
+   * measurement is never printed as "0".
+   *
+   * @param {number|null|undefined} bytes
+   * @returns {string} '' when there is no measurement
+   */
+  function formatShellSize(bytes) {
+    if (bytes === null || bytes === undefined || bytes === '') return ''
+    const value = Number(bytes)
+    if (!Number.isFinite(value) || value < 0) return ''
+    if (value < 1024) return Math.round(value) + ' B'
+    if (value < 1024 * 1024) return Math.round(value / 1024) + ' KB'
+    if (value < 1024 * 1024 * 1024) return String(Math.round((value / (1024 * 1024)) * 10) / 10) + ' MB'
+    return String(Math.round((value / (1024 * 1024 * 1024)) * 10) / 10) + ' GB'
   }
 
   /**
@@ -7187,6 +7262,25 @@
                     t('settings.backup.empty'),
                   )
                 : null,
+              // THE BACKUP THAT WAS SKIPPED, SAID OUT LOUD (2026-11-07): the
+              // Host could not name the profile directory, so no copy was
+              // taken — and a copy nobody mentions is a copy the user believes
+              // exists. The count comes from the Host's own scan.
+              profileUnknown === true
+                ? h(
+                    'span',
+                    {
+                      className: 'dsh-autorestart-settings__hint',
+                      'data-dsh-autorestart-backup': 'profile-unknown',
+                      role: 'alert',
+                    },
+                    fill(t('settings.backup.profileUnknown'), {
+                      n: String(Number.isFinite(Number(info && info.profileCandidates))
+                        ? Number(info.profileCandidates)
+                        : 0),
+                    }),
+                  )
+                : null,
               // ONE ROW PER COPY, AND ONE SENTENCE ON ONE COPY
               // (user decision, 2026-11-02).
               //
@@ -8577,7 +8671,7 @@
         '  line-height:20px;',
         '  color:var(--dsw-alias-label-primary);',
         '}',
-        '.dsh-autorestart-announcement p{margin:0;}',
+        '.dsh-autorestart-announcement p{margin:0;overflow-wrap:anywhere;}',
         '.dsh-autorestart-announcement__note{',
         '  color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));',
         '}',
@@ -8604,6 +8698,20 @@
         '.dsh-autorestart-announcement__cta:focus-visible{',
         '  outline:2px solid var(--dsw-alias-state-business-primary,var(--dsw-alias-brand-primary,#4d6bfe));',
         '  outline-offset:2px;',
+        '}',
+        // THE CARD THAT FITS ITS TEXT (user report, 2026-11-06).
+        //
+        // The card above is a fixed 560px wide, which is right for a card with
+        // three lines of copy. The leftovers card has one or two short lines,
+        // and in a wide window that left a long empty band to the right of the
+        // text — the "floating window" the user complained about.
+        //
+        // So this card takes the width of its own text (up to about forty
+        // Chinese characters) and sits on the left, like the text in it.
+        '.dsh-autorestart-announcement--fit{',
+        '  width:auto;',
+        '  max-width:min(40em,94vw);',
+        '  align-self:flex-start;',
         '}',
       ].join('\n')
 
@@ -8746,6 +8854,416 @@
             },
             t('announcement.button'),
           ),
+        )
+      }
+
+      /**
+       * THE LEFTOVERS OF AN OLDER BUILD — asked ONCE, gone for good (2026-11-06).
+       *
+       * The Host counts the directories under the backups root that carry NO
+       * manifest: a copy that never finished. On the real machine there were
+       * 105 of them (23 966 MB), and every restart tried to delete them again.
+       *
+       * THE CARD IS NOT A SETTINGS ENTRY AND NOT A BANNER. It appears only when
+       * the Host says there is something to decide, it offers exactly two
+       * answers ("delete them" / "I will handle them myself"), and after the
+       * answer it is gone: nothing of it is left on the screen, and the
+       * question never comes back — not with the next boot, not with the next
+       * release. The leftovers are a leftover of an old build, not a permanent
+       * feature of the interface.
+       *
+       * It sits in the composer dock, like the announcement: it never covers
+       * the interface and never touches the countdown.
+       */
+      const DEFAULT_SHELL_BACKUPS_URL = ROUTE_PREFIX + '/shell-backups'
+
+      /**
+       * What the Host knows about the leftovers.
+       *
+       * @returns {Promise<object|null>} null when the Host cannot be asked
+       */
+      async function fetchShellBackups() {
+        try {
+          const response = await fetch(DEFAULT_SHELL_BACKUPS_URL, { cache: 'no-store' })
+          if (!response.ok) return null
+          const body = await response.json().catch(() => null)
+          return body && typeof body === 'object' ? body : null
+        } catch {
+          return null
+        }
+      }
+
+      /**
+       * Give the Host one of the two answers.
+       *
+       * @param {string} action 'clean' or 'self'
+       * @returns {Promise<object>} the Host's answer
+       */
+      async function answerShellBackups(action) {
+        const response = await fetch(DEFAULT_SHELL_BACKUPS_URL, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ action }),
+        })
+        const body = await response.json().catch(() => null)
+        if (!response.ok || !body || body.ok !== true) {
+          // A MARKED REFUSAL, NOT A SENTENCE (2026-11-06): the card shows the
+          // text of the user's own language. A Chinese user must never read an
+          // English fallback.
+          const failure = new Error('shell-backups-refused')
+          failure.refused = true
+          throw failure
+        }
+        return body
+      }
+
+      function ShellBackupsPanel() {
+        const [state, setState] = useState({
+          loaded: false,
+          pending: false,
+          count: 0,
+          bytes: null,
+          truncated: false,
+          working: false,
+          // WHICH ACTION IS IN FLIGHT (2026-11-07): the card says what it is
+          // doing — 「正在清理…」 or 「正在记下来…」.
+          workingFor: '',
+          // THE ANSWER OF THE CLICK: the old host carries the result in it,
+          // and the receipt of a cleanup that the new host is still running is
+          // read out of it when the job is done.
+          answer: null,
+          note: '',
+          error: '',
+        })
+        const [busy, setBusy] = useState(false)
+        // IS THE PAGE ON THE SCREEN? (2026-11-07): a card that vanishes while
+        // nobody looks at it is a sentence the user never reads.
+        const [visible, setVisible] = useState(
+          () => !(typeof document !== 'undefined' && document.hidden === true),
+        )
+        const t = makeTranslate(translate)
+
+        /**
+         * THE TEXT OF A RECEIPT — out of whatever the Host answered.
+         *
+         * @param {object|null} payload an answer of the click or of a GET
+         * @returns {{ note: string, error: string }}
+         */
+        const receiptText = (payload) => {
+          const receipt = shellCleanupReceipt(payload)
+          return {
+            note: receipt.removed > 0
+              ? fill(t('shellBackups.cleaned'), {
+                count: String(receipt.removed),
+                size: formatShellSize(receipt.freedBytes),
+              })
+              : t('shellBackups.cleanedNothing'),
+            error: receipt.failures.length > 0
+              ? fill(t('shellBackups.failed'), {
+                count: String(receipt.failures.length),
+                reason: receipt.failures
+                  .map((entry) => (entry && entry.name ? entry.name : ''))
+                  .filter((name) => name !== '')
+                  .join(', '),
+              })
+              : '',
+          }
+        }
+
+        // THE WATCH OF THE LEFTOVERS (2026-11-07): THE CARD MUST COME BY
+        // ITSELF. The page is usually already open when the leftovers show up
+        // (the boot sweep is what found them), and a user does not press
+        // "refresh" — for a user there is no such thing. So the panel watches:
+        // one check at once, then one every five seconds, and nothing at all
+        // while the page is hidden.
+        const watcherRef = useRef(null)
+
+        useEffect(() => {
+          const watcher = createShellBackupsWatcher({
+            fetchStatus: fetchShellBackups,
+            onStatus: (body) => {
+              setState((current) => shellBackupsStatus(current, body))
+            },
+            // THE PAGE IS NOT ON THE SCREEN: nobody sees a card that is not
+            // there, so the watch waits for the visibility event.
+            isVisible: () => !(typeof document !== 'undefined' && document.hidden === true),
+            schedule: (fn, ms) => setTimeout(fn, ms),
+            cancel: (id) => clearTimeout(id),
+          })
+          watcherRef.current = watcher
+          watcher.start()
+          const onVisibility = () => { watcher.resume() }
+          if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+            document.addEventListener('visibilitychange', onVisibility)
+          }
+          return () => {
+            if (typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
+              document.removeEventListener('visibilitychange', onVisibility)
+            }
+            watcher.stop()
+            watcherRef.current = null
+          }
+        }, [])
+
+        /**
+         * THE ANSWER IS GIVEN: THE WATCH IS OVER.
+         *
+         * The user answered, so the question must not come back — and the
+         * panel must not keep asking the Host either.
+         */
+        const stopWatch = () => {
+          const watcher = watcherRef.current
+          if (watcher && typeof watcher.stop === 'function') watcher.stop()
+        }
+
+        // THE PAGE CAME BACK OR WENT AWAY (2026-11-07).
+        useEffect(() => {
+          if (typeof document === 'undefined' || typeof document.addEventListener !== 'function') return undefined
+          const onVisibility = () => {
+            setVisible(!(typeof document !== 'undefined' && document.hidden === true))
+          }
+          document.addEventListener('visibilitychange', onVisibility)
+          return () => document.removeEventListener('visibilitychange', onVisibility)
+        }, [])
+
+        // THE CARD GOES AWAY BY ITSELF (2026-11-07): the user pressed a button,
+        // the work is done, and the card has nothing left to say. THREE seconds
+        // for the receipt, TEN for an error — three seconds would swallow a
+        // sentence before it was read.
+        //
+        // THE CLOCK STARTS WHEN THE WORDS REALLY APPEAR: while the cleanup is
+        // running there is nothing to count, and a card that vanished during
+        // the work would look like a button that does nothing.
+        //
+        // AND IT ONLY RUNS WHILE THE PAGE IS ON THE SCREEN: the card must not
+        // disappear where nobody can read it.
+        useEffect(() => {
+          if (state.working === true) return undefined
+          const hasReceipt = typeof state.note === 'string' && state.note !== ''
+          const hasError = typeof state.error === 'string' && state.error !== ''
+          if (hasReceipt !== true && hasError !== true) return undefined
+          if (visible !== true) return undefined
+          const timer = setTimeout(() => {
+            setState((current) => ({ ...current, note: '', error: '' }))
+          }, hasError === true ? SHELL_CARD_ERROR_MS : SHELL_CARD_RECEIPT_MS)
+          // THE TIMER DIES WITH THE CARD: a card that is taken off the screen
+          // (the session changed, the panel was unmounted) must not fire later
+          // and pop up somewhere else.
+          return () => clearTimeout(timer)
+        }, [state.note, state.error, state.working, visible])
+
+        /**
+         * THE CLEANUP RUNS IN THE BACKGROUND (2026-11-06).
+         *
+         * The Host answers the click at once and deletes in batches, so this
+         * card polls for the receipt instead of waiting inside a fetch that
+         * would time out on 23 GB of deletion.
+         */
+        useEffect(() => {
+          if (state.working !== true) return undefined
+          const startedAt = Date.now()
+          const timer = setInterval(() => {
+            void (async () => {
+              try {
+                const body = await fetchShellBackups()
+                if (!body) return
+                if (shellCleanupFinished(body) !== true) {
+                  // NOT DONE YET — and the card must NOT wait for ever: after the
+                  // ceiling it says that the result may still be on its way.
+                  if (shellCleanupTimedOut(startedAt, Date.now()) === true) {
+                    setState((current) => ({
+                      ...current,
+                      working: false,
+                      workingFor: '',
+                      note: t('shellBackups.maybeLater'),
+                    }))
+                  }
+                  return
+                }
+                // THE RECEIPT: out of the job of the new host, out of the answer
+                // of the click for the old one (whose GET has no job at all).
+                const receipt = receiptText(shellCleanupJob(body) ?? state.answer ?? {})
+                setState((current) => ({
+                  ...current,
+                  working: false,
+                  workingFor: '',
+                  pending: false,
+                  note: receipt.note,
+                  error: receipt.error,
+                }))
+              } catch (failure) {
+                // A POLL THAT THROWS IS A MESSAGE, NOT A SILENCE (2026-11-07):
+                // the card says what happened instead of spinning for ever.
+                setState((current) => ({
+                  ...current,
+                  working: false,
+                  workingFor: '',
+                  error: shellCleanupFailureText(failure, t),
+                }))
+              }
+            })()
+          }, SHELL_CLEANUP_POLL_MS)
+          return () => clearInterval(timer)
+        }, [state.working])
+
+        /** 「清理掉」: the leftovers go now, and the receipt says what happened. */
+        const clean = () => {
+          if (busy) return
+          // THE ANSWER IS GIVEN: NO MORE CHECKS.
+          stopWatch()
+          setBusy(true)
+          // THE CLICK MUST BE SEEN (2026-11-07): the card says 「正在清理…」 and
+          // the two buttons are disabled AT ONCE. A click that shows nothing at
+          // all looks like a broken button — that is what the user reported.
+          setState((current) => ({ ...current, error: '', working: true, workingFor: 'clean' }))
+          void (async () => {
+            try {
+              const body = await answerShellBackups('clean')
+              if (shellCleanupAnswerIsFinal(body) === true) {
+                // THE OLD HOST: the answer IS the receipt. The cleanup is done
+                // (it always was — it took milliseconds), so the card shows
+                // the result NOW instead of spinning on "清理中" for ever.
+                const receipt = receiptText(body)
+                setState((current) => ({
+                  ...current,
+                  pending: false,
+                  working: false,
+                  workingFor: '',
+                  answer: body,
+                  note: receipt.note,
+                  error: receipt.error,
+                }))
+                return
+              }
+              // THE NEW HOST: the delete runs in the background, and the
+              // receipt comes with a later GET — but only up to the ceiling.
+              setState((current) => ({
+                ...current,
+                // THE QUESTION IS GONE: the answer is final, so the card does
+                // not offer the two buttons any more — it waits for the
+                // receipt.
+                pending: false,
+                working: true,
+                workingFor: 'clean',
+                answer: body,
+              }))
+            } catch (failure) {
+              // A REFUSAL OR A BROKEN CONNECTION IS A MESSAGE, NOT A SILENCE
+              // (2026-11-07): the question stays open, the card says what
+              // happened, and the user may press the button again.
+              setState((current) => ({
+                ...current,
+                pending: true,
+                working: false,
+                workingFor: '',
+                error: shellCleanupFailureText(failure, t),
+              }))
+            }
+            setBusy(false)
+          })()
+        }
+
+        /** 「我自己处理」: the user takes over and the question is never asked again. */
+        const self = () => {
+          if (busy) return
+          // THE ANSWER IS GIVEN: NO MORE CHECKS.
+          stopWatch()
+          setBusy(true)
+          // THE CLICK MUST BE SEEN (2026-11-07): the card says what it is
+          // doing, at once — a click that shows nothing looks broken.
+          setState((current) => ({ ...current, error: '', working: true, workingFor: 'self' }))
+          void (async () => {
+            try {
+              await answerShellBackups('self')
+              setState((current) => ({
+                ...current,
+                pending: false,
+                working: false,
+                workingFor: '',
+                note: t('shellBackups.selfDone'),
+              }))
+            } catch (failure) {
+              // A REFUSAL OR A BROKEN CONNECTION IS A MESSAGE, NOT A SILENCE
+              // (2026-11-07): the question stays open and the card says what
+              // happened.
+              setState((current) => ({
+                ...current,
+                pending: true,
+                working: false,
+                workingFor: '',
+                error: shellCleanupFailureText(failure, t),
+              }))
+            }
+            setBusy(false)
+          })()
+        }
+
+        // NOTHING TO SAY: no leftovers, or the user already answered. The card
+        // does not exist then — not as an empty box, not as a greyed-out entry.
+        if (shellBackupsCardVisible(state) !== true) return null
+        ensureAnnouncementStyle()
+
+        const rows = []
+        const actions = []
+        try {
+          if (state.pending) {
+            rows.push(h('h3', { className: 'dsh-autorestart-announcement__title' }, t('shellBackups.title')))
+            rows.push(h('p', { className: 'dsh-autorestart-announcement__line' }, state.bytes === null
+              ? fill(t('shellBackups.line1.noSize'), { count: String(state.count) })
+              : fill(t('shellBackups.line1'), {
+                count: String(state.count),
+                size: formatShellSize(state.bytes),
+              })))
+            rows.push(h('p', { className: 'dsh-autorestart-announcement__line' }, t('shellBackups.line2')))
+          }
+          if (state.working === true) {
+            rows.push(h('p', { className: 'dsh-autorestart-announcement__note' }, state.workingFor === 'self'
+              ? t('shellBackups.workingSelf')
+              : t('shellBackups.working')))
+          }
+          if (state.note !== '') {
+            rows.push(h('p', { className: 'dsh-autorestart-announcement__note' }, state.note))
+          }
+          if (state.error !== '') {
+            rows.push(h('p', { className: 'dsh-autorestart-announcement__error', role: 'alert' }, state.error))
+          }
+          if (state.pending) {
+            actions.push(h('button', {
+              type: 'button',
+              className: 'dsh-autorestart-announcement__cta',
+              'data-dsh-autorestart-shell-backups': 'clean',
+              disabled: busy,
+              onClick: clean,
+            }, t('shellBackups.clean')))
+            actions.push(h('button', {
+              type: 'button',
+              className: 'dsh-autorestart-announcement__cta',
+              'data-dsh-autorestart-shell-backups': 'self',
+              disabled: busy,
+              onClick: self,
+            }, t('shellBackups.self')))
+          }
+        } catch (failure) {
+          // A CARD THAT THROWS WHILE IT DRAWS MUST STILL SAY SOMETHING
+          // (2026-11-07): the user may not be left with a vanished card — or a
+          // black screen — and no word about it.
+          rows.length = 0
+          actions.length = 0
+          rows.push(h('p', {
+            className: 'dsh-autorestart-announcement__error',
+            role: 'alert',
+          }, t('shellBackups.error.broken')))
+        }
+
+        return h(
+          'div',
+          {
+            className: 'dsh-autorestart-announcement dsh-autorestart-announcement--fit',
+            role: 'status',
+            'data-dsh-autorestart-shell-backups': 'true',
+          },
+          rows,
+          actions,
         )
       }
 
@@ -9324,6 +9842,12 @@
           // same dock (it never covers the interface and never touches the
           // countdown) and disappears for good once the user answered it.
           ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({ name: 'conversation.input.dock', id: 'autorestart-feature-announcement', order: 8, locale: NS }, FeatureAnnouncementPanel))
+          // THE LEFTOVERS OF AN OLDER BUILD (2026-11-06): a card that appears
+          // ONLY when the Host says there is something to decide, and that is
+          // gone for good after the answer. It is deliberately NOT a settings
+          // entry and NOT a permanent banner — the problem must disappear with
+          // the answer.
+          ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({ name: 'conversation.input.dock', id: 'autorestart-shell-backups', order: 9, locale: NS }, ShellBackupsPanel))
           // THE PLUGIN THAT DID NOT LOAD (user decision, 2026-11-01): the boot
           // pass only REPORTS now, so this panel is where the user finds out
           // which plugin did not activate — and where the ONE action lives:
@@ -9397,9 +9921,6 @@
     },
   })
 
-})()
-
-;(function () {
   // ---------------------------------------------------------------------------
   // THE PLUGIN-FAILURE MODEL (pure, testable, no React and no fetch)
   //
@@ -9755,6 +10276,364 @@
     }
   }
 
+  /**
+   * THE CLEANUP, AS THE HOST ANSWERED IT (2026-11-06).
+   *
+   * TWO HOST SHAPES, ONE RECEIPT.
+   *
+   * The NEW host answers the click with `{ started, cleanup: { state } }`: it
+   * deletes in the background and sends the receipt with a later GET. The OLD
+   * host answers with the RESULT ITSELF (`{ removed, failures, freedBytes }`)
+   * and its GET has no `cleanup` field at all — that was the host running on
+   * the real machine.
+   *
+   * The card used to wait for `cleanup.state === 'done'` and so spun on
+   * "清理中" for ever on that host: the cleanup had finished in milliseconds
+   * (the directories were gone, the count was 0) and the screen did not know,
+   * because it waited for a field that host never sends.
+   *
+   * So: the answer of the click is read FIRST (on the old host it IS the
+   * receipt — no polling, no spinning), the polling is only for the host that
+   * says "running", and the polling has a CEILING and a terminal state that
+   * does not depend on the `cleanup` field.
+   */
+  const SHELL_CLEANUP_POLL_MS = 800
+  const SHELL_CLEANUP_POLL_LIMIT_MS = 60000
+
+  /**
+   * THE WATCH OF THE LEFTOVERS (2026-11-07).
+   *
+   * THE CARD MUST COME BY ITSELF. The page is usually already open when the
+   * leftovers show up (the boot sweep is what found them), and a user does not
+   * press "refresh" — for a user there is no such thing. So the panel keeps
+   * watching: one check at once, then one every five seconds.
+   *
+   * NOT FASTER THAN FIVE SECONDS: every check makes the Host walk what is on
+   * the disk, and the Host measures the leftovers while the question is open.
+   * NOT SLOWER THAN TEN: the card must be on the screen within ten seconds of
+   * the leftovers appearing — so the distance between two checks is bound at
+   * both ends, five seconds at the least and ten at the most.
+   */
+  const SHELL_BACKUPS_WATCH_MS = 5000
+  const SHELL_BACKUPS_WATCH_MIN_MS = 5000
+  const SHELL_BACKUPS_WATCH_MAX_MS = 10000
+
+  /**
+   * HOW LONG THE CARD STAYS AFTER IT HAS SAID ITS PIECE (2026-11-07).
+   *
+   * The user pressed a button, the work is done, and the card has nothing
+   * left to say — three seconds and it goes, on its own. An ERROR gets ten:
+   * three seconds would swallow a sentence before it was read.
+   */
+  const SHELL_CARD_RECEIPT_MS = 3000
+  const SHELL_CARD_ERROR_MS = 10000
+
+  /**
+   * The job of a Host answer, if it has one.
+   *
+   * @param {object|null} payload
+   * @returns {object|null}
+   */
+  function shellCleanupJob(payload) {
+    if (payload === null || typeof payload !== 'object') return null
+    const job = payload.cleanup
+    return job !== null && typeof job === 'object' ? job : null
+  }
+
+  /**
+   * THE RECEIPT OF A CLEANUP — out of whatever the Host answered.
+   *
+   * The old host sends the names of the removed directories, the new host
+   * sends their number: both are read here, so the receipt is the same text
+   * either way.
+   *
+   * @param {object|null} payload an answer of the click or of a GET
+   * @returns {{ removed: number, failures: Array<object>, freedBytes: number }}
+   */
+  function shellCleanupReceipt(payload) {
+    const source = payload !== null && typeof payload === 'object' ? payload : {}
+    const job = shellCleanupJob(source)
+    const removed = job !== null ? job.removed : source.removed
+    const failures = job !== null ? job.failures : source.failures
+    const freedBytes = job !== null ? job.freedBytes : source.freedBytes
+    return {
+      removed: Array.isArray(removed)
+        ? removed.length
+        : (Number.isFinite(Number(removed)) ? Number(removed) : 0),
+      failures: Array.isArray(failures) ? failures : [],
+      freedBytes: Number.isFinite(Number(freedBytes)) ? Number(freedBytes) : 0,
+    }
+  }
+
+  /**
+   * DOES THE ANSWER OF THE CLICK ALREADY CARRY THE RESULT?
+   *
+   * The old host does — and then the card is DONE at once: the receipt is
+   * printed, no polling starts, nothing spins. The new host says "running",
+   * and only then the card waits.
+   *
+   * @param {object|null} payload an answer of the click
+   * @returns {boolean}
+   */
+  function shellCleanupAnswerIsFinal(payload) {
+    const source = payload !== null && typeof payload === 'object' ? payload : {}
+    const job = shellCleanupJob(source)
+    if (job !== null) return job.state !== 'running'
+    // THE OLD HOST: the answer carries the removed directories.
+    return Array.isArray(source.removed) || source.freedBytes !== undefined
+  }
+
+  /**
+   * IS THE CLEANUP DONE?
+   *
+   * The new host says so (`cleanup.state === 'done'`). The old host does not
+   * have that field — but its GET says how many are left, and a cleanup that
+   * left nothing behind is a finished cleanup.
+   *
+   * @param {object|null} payload an answer of a GET
+   * @returns {boolean}
+   */
+  function shellCleanupFinished(payload) {
+    const source = payload !== null && typeof payload === 'object' ? payload : {}
+    const job = shellCleanupJob(source)
+    if (job !== null) return job.state === 'done'
+    return source.pending !== true && Number(source.count) === 0
+  }
+
+  /**
+   * THE CEILING OF THE POLLING.
+   *
+   * A card that waits for ever is worse than a card that gives up with a
+   * sentence: after a minute the card stops waiting and says that the result
+   * may still be on its way.
+   *
+   * @param {number} startedAt when the polling began
+   * @param {number} now
+   * @returns {boolean}
+   */
+  function shellCleanupTimedOut(startedAt, now) {
+    const start = Number(startedAt)
+    const at = Number(now)
+    if (!Number.isFinite(start) || !Number.isFinite(at)) return false
+    return at - start >= SHELL_CLEANUP_POLL_LIMIT_MS
+  }
+
+  /**
+   * THE STATE OF THE CARD, OUT OF AN ANSWER OF THE HOST.
+   *
+   * A LATER ANSWER MUST NOT WIPE A RECEIPT: the note of a finished cleanup
+   * says what happened, and a check of the watcher must not take it away.
+   *
+   * @param {object} current the state of the card
+   * @param {object|null} body the answer of the Host
+   * @returns {object} the next state of the card
+   */
+  function shellBackupsStatus(current, body) {
+    const base = current !== null && typeof current === 'object' ? current : {}
+    const source = body !== null && typeof body === 'object' ? body : {}
+    const pending = source.pending === true
+    const next = {
+      ...base,
+      loaded: true,
+      // THE HOST DECIDES: a machine without leftovers, and a machine that
+      // already answered, never see this card at all.
+      pending,
+      count: Number.isFinite(Number(source.count)) ? Number(source.count) : 0,
+      // THE SIZE MAY BE UNKNOWN: the Host measures it only while the question
+      // is open, and only inside its budget. `null` means "not measured" — the
+      // card then says so instead of guessing.
+      bytes: source.bytes !== null && source.bytes !== undefined && Number.isFinite(Number(source.bytes))
+        ? Number(source.bytes)
+        : null,
+      truncated: source.truncated === true,
+    }
+    // THE QUESTION IS OPEN: an error of an earlier refused click must not stay
+    // on the card.
+    if (pending === true) {
+      next.note = ''
+      next.error = ''
+    }
+    return next
+  }
+
+  /**
+   * MUST THE CARD BE ON THE SCREEN?
+   *
+   * NO: a machine without leftovers, and a machine that already answered, see
+   * nothing at all — not an empty box, not a greyed-out entry.
+   *
+   * @param {object} state the state of the card
+   * @returns {boolean}
+   */
+  function shellBackupsCardVisible(state) {
+    if (state === null || typeof state !== 'object') return false
+    if (state.loaded !== true) return false
+    if (state.pending === true) return true
+    if (state.working === true) return true
+    if (typeof state.note === 'string' && state.note !== '') return true
+    // AN ERROR IS A REASON TO STAY (2026-11-07): a failed click must leave a
+    // sentence on the screen — the card may not vanish and take the reason
+    // with it.
+    if (typeof state.error === 'string' && state.error !== '') return true
+    return false
+  }
+
+  /**
+   * THE TEXT OF A FAILED CLICK (2026-11-07).
+   *
+   * A click that fails must SAY SO: in the language of the user, never as a
+   * silence and never as an English sentence from the browser. The Host may
+   * refuse, the network may break, and the page may throw while it draws —
+   * every one of them ends here, as one sentence the card can show.
+   *
+   * @param {object} failure what went wrong
+   * @param {(key: string) => string} translate the translator of the card
+   * @returns {string} the sentence for the card
+   */
+  function shellCleanupFailureText(failure, translate) {
+    const t = typeof translate === 'function' ? translate : (key) => key
+    const refused = failure !== null && typeof failure === 'object' && failure.refused === true
+    const message = refused === true
+      ? t('shellBackups.refused')
+      : t('shellBackups.error.failed')
+    return fillTemplate(t('shellBackups.error.cleanup'), { message })
+  }
+
+  /**
+   * THE WATCHER OF THE LEFTOVERS (2026-11-07).
+   *
+   * It is written WITHOUT React, so that a fake clock can prove what it does:
+   * one check at once, one every five seconds, nothing at all while the page
+   * is hidden, an immediate check when the page comes back, and never another
+   * one once the question is closed.
+   *
+   * IT STOPS IN THREE CASES, AND ONLY IN THREE:
+   *   - the user answered (the marker of the Host says so): the question must
+   *     never come back;
+   *   - the card is on the screen: the user has something to decide, and
+   *     asking again would gain nothing;
+   *   - the user pressed one of the two buttons: the panel stops the watch at
+   *     once, without another request.
+   *
+   * WHILE THERE IS NOTHING TO SHOW, IT KEEPS WATCHING: the leftovers may show
+   * up long after the page was opened, and the card has to come by itself.
+   *
+   * @param {object} options the parts it needs
+   * @param {() => Promise<object|null>} options.fetchStatus asks the Host
+   * @param {(body: object) => void} options.onStatus what to do with an answer
+   * @param {() => boolean} [options.isVisible] whether the page is on the screen
+   * @param {(fn: Function, ms: number) => any} [options.schedule] the clock
+   * @param {(id: any) => void} [options.cancel] the clock
+   * @param {number} [options.intervalMs] the distance between two checks
+   * @returns {{ start: Function, stop: Function, resume: Function, isStopped: Function }}
+   */
+  function createShellBackupsWatcher(options) {
+    const settings = options !== null && typeof options === 'object' ? options : {}
+    const fetchStatus = typeof settings.fetchStatus === 'function' ? settings.fetchStatus : async () => null
+    const onStatus = typeof settings.onStatus === 'function' ? settings.onStatus : () => {}
+    const isVisible = typeof settings.isVisible === 'function' ? settings.isVisible : () => true
+    const schedule = typeof settings.schedule === 'function'
+      ? settings.schedule
+      : (fn, ms) => setTimeout(fn, ms)
+    const cancel = typeof settings.cancel === 'function' ? settings.cancel : (id) => clearTimeout(id)
+    const wanted = Number(settings.intervalMs)
+    // THE DISTANCE BETWEEN TWO CHECKS IS BOUNDED: five seconds at the least,
+    // ten at the most.
+    const intervalMs = Number.isFinite(wanted) && wanted > 0
+      ? Math.min(Math.max(Math.trunc(wanted), SHELL_BACKUPS_WATCH_MIN_MS), SHELL_BACKUPS_WATCH_MAX_MS)
+      : SHELL_BACKUPS_WATCH_MS
+    let timer = null
+    let stopped = false
+    let busy = false
+
+    const clear = () => {
+      if (timer !== null) {
+        cancel(timer)
+        timer = null
+      }
+    }
+
+    const tick = async () => {
+      // THE TIMER THAT BROUGHT US HERE HAS FIRED.
+      timer = null
+      if (stopped === true || busy === true) return
+      // THE PAGE IS NOT ON THE SCREEN: nobody sees a card that is not there,
+      // and the disk does not need to be walked for nobody. The visibility
+      // event brings the watch back.
+      if (isVisible() !== true) return
+      busy = true
+      let body = null
+      try {
+        body = await fetchStatus()
+      } catch {
+        body = null
+      }
+      busy = false
+      if (stopped === true) return
+      if (body !== null && typeof body === 'object') {
+        onStatus(body)
+        // THE QUESTION IS CLOSED FOR GOOD: the marker of the answer is durable,
+        // so the card must never come back.
+        if (body.handled === true) {
+          stopped = true
+          clear()
+          return
+        }
+        // THE CARD IS ON THE SCREEN: there is nothing left to look for.
+        if (body.pending === true) {
+          stopped = true
+          clear()
+          return
+        }
+      }
+      if (stopped === true) return
+      timer = schedule(() => { void tick() }, intervalMs)
+    }
+
+    return {
+      /** THE FIRST CHECK, AT ONCE. */
+      start() {
+        if (stopped === true) return
+        void tick()
+      },
+      /** NO MORE CHECKS, FOR GOOD. */
+      stop() {
+        stopped = true
+        clear()
+      },
+      /** THE PAGE CAME BACK: CHECK AT ONCE. */
+      resume() {
+        if (stopped === true) return
+        // THE PENDING CHECK IS REPLACED BY THIS ONE.
+        clear()
+        void tick()
+      },
+      isStopped() {
+        return stopped
+      },
+    }
+  }
+
+  const SHELL_BACKUPS_EXPORTS = {
+    SHELL_CLEANUP_POLL_MS,
+    SHELL_CLEANUP_POLL_LIMIT_MS,
+    shellCleanupAnswerIsFinal,
+    shellCleanupFinished,
+    shellCleanupReceipt,
+    shellCleanupTimedOut,
+    // THE WATCH OF THE LEFTOVERS (2026-11-07)
+    SHELL_BACKUPS_WATCH_MS,
+    SHELL_BACKUPS_WATCH_MIN_MS,
+    SHELL_BACKUPS_WATCH_MAX_MS,
+    // HOW LONG THE CARD STAYS AFTER IT HAS SAID ITS PIECE (2026-11-07)
+    SHELL_CARD_RECEIPT_MS,
+    SHELL_CARD_ERROR_MS,
+    createShellBackupsWatcher,
+    shellBackupsStatus,
+    shellBackupsCardVisible,
+    shellCleanupFailureText,
+  }
+
   const PLUGIN_FAILURE_EXPORTS = {
     buildPluginFailureModel,
     pluginFailureBootId,
@@ -9768,6 +10647,7 @@
     globalThis.__dshAutorestartClient = Object.assign(
       globalThis.__dshAutorestartClient || {},
       PLUGIN_FAILURE_EXPORTS,
+      SHELL_BACKUPS_EXPORTS,
     )
   }
 

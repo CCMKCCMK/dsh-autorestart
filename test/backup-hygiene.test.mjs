@@ -34,11 +34,13 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { spawn } from 'node:child_process'
 
 import {
   BACKUP_SKIP_NAMES,
   CONFIG_DIR,
   MANIFEST_NAME,
+  clearReadOnlyAttributes,
   createBackup,
   removeIncompleteBackups,
 } from '../lib/backup.js'
@@ -487,4 +489,101 @@ test('boot sweep: a copy with a manifest but no meta.json is kept, only counted'
   assert.deepEqual(report.kept, ['2026-11-02T06-00-00-000Z'], 'and it is reported as kept')
   assert.equal(fs.existsSync(legacy), true, 'it stays on disk')
   assert.equal(countIncompleteBackups(leftovers).incomplete, 1, 'while the page still says it is not complete')
+})
+
+// ---------------------------------------------------------------------------
+// THE DELETE THAT STOPPED HALF WAY THROUGH (2026-11-06)
+//
+// ON THE REAL MACHINE: 105 directories under the backups root held nothing but
+// `node_modules-link/`, and every one of them had to be deleted at every
+// restart. The delete threw `EPERM` on the first read-only file inside
+// (`fs.rmSync` removed `config/`, `manifest.json` and `meta.json`, then
+// stopped), so the shell survived — 255 MB of it — and the next restart tried
+// the same directory again and failed at the same file.
+//
+// TWO THINGS ARE PINNED HERE:
+//   1. the read-only attribute comes off BEFORE the delete, and the directory
+//      is really gone afterwards (not "the first half is gone");
+//   2. a delete that STILL fails is REPORTED with a reason — the old code
+//      caught the error and said nothing, so a sweep that deleted nothing
+//      looked exactly like a sweep that had nothing to do.
+// ---------------------------------------------------------------------------
+
+test('a shell with a READ-ONLY file in it is really deleted, not half deleted', (t) => {
+  const root = tempRoot(t)
+  const shell = path.join(root, '2026-11-06T10-00-00-000Z')
+  const plugin = path.join(shell, 'node_modules-link', 'dsh-linked')
+  fs.mkdirSync(plugin, { recursive: true })
+  // THE READ-ONLY FILE — the real machine had six of them (PNG files).
+  const png = path.join(plugin, 'logo.png')
+  fs.writeFileSync(png, 'x'.repeat(128), 'utf8')
+  fs.chmodSync(png, 0o444)
+  // ...and the files around it, so the delete has to walk the whole tree.
+  fs.writeFileSync(path.join(plugin, 'index.js'), 'export const x = 1\n', 'utf8')
+  // NO MANIFEST: that is what makes this a leftover and not a copy — the real
+  // machine's shells had lost their manifest to the half-finished delete.
+
+  const answer = removeIncompleteBackups(root)
+
+  assert.deepEqual(answer.removed, ['2026-11-06T10-00-00-000Z'], 'the shell is gone')
+  assert.deepEqual(answer.failures, [], 'and nothing failed')
+  assert.equal(
+    fs.existsSync(shell),
+    false,
+    'the WHOLE tree is gone — not only its config, and not only its manifest',
+  )
+})
+
+test('the read-only attribute is taken off before the delete', (t) => {
+  const root = tempRoot(t)
+  const dir = path.join(root, 'tree')
+  fs.mkdirSync(path.join(dir, 'sub'), { recursive: true })
+  const file = path.join(dir, 'sub', 'logo.png')
+  fs.writeFileSync(file, 'x', 'utf8')
+  fs.chmodSync(file, 0o444)
+
+  const cleared = clearReadOnlyAttributes(dir)
+
+  assert.ok(cleared.cleared >= 3, 'the directory and the file were unlocked: ' + cleared.cleared)
+  assert.deepEqual(cleared.errors, [], 'and nothing failed')
+  // THE OWNER MAY WRITE IT NOW — that is exactly what a delete needs.
+  const mode = fs.statSync(file).mode & 0o222
+  assert.ok(mode !== 0, 'the file is writable again: ' + mode.toString(8))
+})
+
+test('a directory that will NOT delete is reported with a reason, not swallowed', async (t) => {
+  if (process.platform !== 'win32') {
+    t.skip('the lock this test uses is a Windows behaviour')
+    return
+  }
+  const root = tempRoot(t)
+  const shell = path.join(root, '2026-11-06T11-00-00-000Z')
+  fs.mkdirSync(path.join(shell, 'node_modules-link'), { recursive: true })
+  fs.writeFileSync(path.join(shell, 'node_modules-link', 'a.png'), 'x', 'utf8')
+
+  // A CHILD PROCESS THAT LIVES IN THE DIRECTORY: on Windows that directory
+  // cannot be removed while the process is in it, and `fs.rmSync` throws
+  // EPERM. This is the real machine's shape — a delete that stops half way
+  // through — and it is the only way to make the failure deterministic.
+  const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 10000)'], {
+    cwd: shell,
+    stdio: 'ignore',
+  })
+  t.after(() => { try { child.kill() } catch {} })
+  await new Promise((resolve) => { setTimeout(resolve, 500) })
+
+  const answer = removeIncompleteBackups(root)
+
+  assert.deepEqual(answer.removed, [], 'nothing was removed')
+  assert.equal(answer.failures.length, 1, 'and the failure is REPORTED: ' + JSON.stringify(answer.failures))
+  assert.equal(answer.failures[0].name, '2026-11-06T11-00-00-000Z', 'the directory is named')
+  assert.ok(
+    String(answer.failures[0].error).length > 0,
+    'and the reason is said out loud: ' + JSON.stringify(answer.failures[0]),
+  )
+  assert.deepEqual(answer.skipped, ['2026-11-06T11-00-00-000Z'], 'the directory is reported as still there')
+  assert.equal(fs.existsSync(shell), true, 'and it really is still on disk')
+
+  child.kill()
+  await new Promise((resolve) => { setTimeout(resolve, 300) })
 })

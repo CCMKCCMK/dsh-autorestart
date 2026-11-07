@@ -49,6 +49,7 @@ import {
   pruneBackups,
   readBackupMeta,
   readManifest,
+  writeBackupMeta,
 } from '../lib/backup.js'
 import { writeRestartVerdict } from '../lib/restart-verdict.js'
 import { requestRestart } from '../lib/checkpoint.js'
@@ -335,6 +336,68 @@ test('③ the restart verdict marks a vanished snapshot as taken:false + missing
   assert.equal(after.snapshot.missing, true, 'instead of silently looking like a usable copy')
   assert.equal(after.snapshot.dir, dir, 'the history is not rewritten')
   assert.equal(after.result, 'ok', 'and the restart itself is still reported as it was')
+})
+
+/* ------------------------------------------------------------------ *
+ * ⑤ THE FIRST-INSTALL SEED MAY NOT HOLD THE "NEWEST COPY" SLOT.
+ * ------------------------------------------------------------------ */
+
+/**
+ * One copy on disk, with the FACTS this build writes: a manifest and a
+ * `meta.json` that says what put the copy there.
+ */
+function seedFactsCopy(backups, name, { trigger, at }) {
+  const dir = path.join(backups, name)
+  fs.mkdirSync(path.join(dir, 'config'), { recursive: true })
+  fs.writeFileSync(path.join(dir, 'config', 'cordis.patch.yml'), 'rows:\n  - id: ' + name + '\n', 'utf8')
+  fs.writeFileSync(path.join(dir, MANIFEST_NAME), JSON.stringify({
+    at,
+    atLocal: name,
+    bytes: 1_000_000,
+    files: ['cordis.patch.yml'],
+    includePlugins: false,
+  }), 'utf8')
+  writeBackupMeta(dir, { trigger, at })
+  return dir
+}
+
+test('⑤ the first-install SEED does not hold the newest slot: the copy the restart took survives', (t) => {
+  const setup = fixture(t, 'seed-slot')
+  const OLDEST = '2026-11-01T10-00-00-000Z'
+  const OLDER = '2026-11-01T12-00-00-000Z'
+  const RESTART = '2026-11-02T10-00-00-000Z'
+  // THE SEED WAS WRITTEN LAST — that is the whole point: the seed is taken
+  // when the plugin first runs, the snapshot when the restart is scheduled.
+  const SEED = '2026-11-03T10-00-00-000Z'
+
+  seedFactsCopy(setup.backups, OLDEST, { trigger: BACKUP_TRIGGERS.PRE_RESTART, at: 1 })
+  seedFactsCopy(setup.backups, OLDER, { trigger: BACKUP_TRIGGERS.PRE_RESTART, at: 2 })
+  seedFactsCopy(setup.backups, RESTART, { trigger: BACKUP_TRIGGERS.PRE_RESTART, at: 3 })
+  seedFactsCopy(setup.backups, SEED, { trigger: BACKUP_TRIGGERS.FIRST_INSTALL, at: 4 })
+
+  const result = pruneBackups(setup.backups, 2)
+
+  // BEFORE THE FIX this exact call returned `removed: [OLDER, RESTART]` — the
+  // restart's own snapshot — because the seed sorted last and took the "the
+  // newest copy is never a victim" slot.
+  assert.equal(
+    result.removed.includes(RESTART),
+    false,
+    'the copy the restart took is not a victim: ' + JSON.stringify(result.removed),
+  )
+  assert.deepEqual(result.removed, [OLDEST, OLDER], 'the two oldest copies went instead')
+  assert.equal(
+    fs.existsSync(path.join(setup.backups, RESTART)),
+    true,
+    'the restart snapshot is still on disk',
+  )
+  assert.equal(
+    fs.existsSync(path.join(setup.backups, SEED)),
+    true,
+    'and the seed is spared too — it is preferred, and there was room',
+  )
+  assert.deepEqual(result.failures, [], 'and nothing failed')
+  assert.equal(result.shellCount, 0, 'every directory here is a real copy')
 })
 
 /* ------------------------------------------------------------------ *

@@ -2283,3 +2283,202 @@ test('the English mirror says the same thing, also without internal words', asyn
     assert.equal(said.includes(secret), false, '"' + secret + '" must never reach a user: ' + said)
   }
 })
+
+/* ------------------------------------------------------------------ *
+ * ⑮ THE PROFILE DIRECTORY IS ASKED, REMEMBERED — AND ONLY THEN LOOKED FOR
+ *    (2026-11-07, the real machine that skipped its backup)
+ *
+ * The bug: the host did not carry `DSH_PROFILE_DIR`, another session had
+ * copied the profile to `profiles/_backup-before-fetch-fallback-…` (which also
+ * lists this plugin), the scan found TWO candidates, and the pre-restart
+ * backup was skipped in silence.
+ *
+ * WHAT IS PINNED HERE:
+ *   1. THE HOST IS ASKED: a directory it names is used without touching the
+ *      profiles directory at all.
+ *   2. IT IS REMEMBERED: the answering path is written to the state dir, and
+ *      the next boot uses it — no scan.
+ *   3. A COPY IS NOT A CANDIDATE: `_backup-…` / `.broken-…` / `.partial-…`
+ *      never take part in the scan, so the real profile is still found.
+ *   4. TWO REAL CANDIDATES ARE AMBIGUOUS: nothing is guessed and the count is
+ *      on the record — and a skipped backup carries that reason so the page
+ *      can say «这次没有备份：没找到你的配置目录（发现 N 个候选）».
+ * ------------------------------------------------------------------ */
+
+// Aliased imports: the bindings above belong to this file's own imports.
+import nodePath from 'node:path'
+import nodeOs from 'node:os'
+import nodeTest from 'node:test'
+
+/** The package name the scan looks for in `dsh.profile.bundles`. */
+const PLUGIN_BUNDLE_NAME = JSON.parse(
+  fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+).name
+
+/** A file system that records which directories were listed. */
+function trackingFs() {
+  const calls = { readdir: [] }
+  return {
+    calls,
+    existsSync: (target) => fs.existsSync(target),
+    readFileSync: (target, encoding) => fs.readFileSync(target, encoding),
+    writeFileSync: (target, text, encoding) => fs.writeFileSync(target, text, encoding),
+    mkdirSync: (target, options) => fs.mkdirSync(target, options),
+    readdirSync: (target, options) => {
+      calls.readdir.push(target)
+      return fs.readdirSync(target, options)
+    },
+  }
+}
+
+/**
+ * A DSH home with a profiles directory and a state directory.
+ *
+ * @param {object} t the test context
+ * @param {string[]} profiles the directory names under `profiles/`
+ */
+function profileWorld(t, profiles) {
+  const home = fs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'dsh-ar-profile-'))
+  t.after(() => { try { fs.rmSync(home, { recursive: true, force: true }) } catch {} })
+  for (const entry of profiles) {
+    const dir = nodePath.join(home, 'profiles', entry)
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(nodePath.join(dir, 'package.json'), JSON.stringify({
+      name: entry,
+      dsh: { profile: { bundles: [PLUGIN_BUNDLE_NAME] } },
+    }), 'utf8')
+  }
+  const stateDir = nodePath.join(home, 'state')
+  fs.mkdirSync(stateDir, { recursive: true })
+  return { home, stateDir, profilesDir: nodePath.join(home, 'profiles') }
+}
+
+nodeTest('⑮ the host is ASKED — the profiles directory is never scanned', async (t) => {
+  const { resolveProfileDirDetailed } = await import('../index.js')
+  const world = profileWorld(t, ['desktop', '_backup-before-fetch-fallback-20261107-020940'])
+  const desktop = nodePath.join(world.profilesDir, 'desktop')
+  const fsLike = trackingFs()
+
+  const answer = resolveProfileDirDetailed({
+    env: { DSH_PROFILE_DIR: desktop },
+    argv: [],
+    fsLike,
+    stateDir: world.stateDir,
+    homeDir: world.home,
+  })
+
+  assert.equal(answer.dir, desktop, 'the host said where it is')
+  assert.equal(answer.source, 'DSH_PROFILE_DIR')
+  assert.equal(answer.candidates, 1)
+  assert.equal(fsLike.calls.readdir.length, 0, 'the profiles directory must NOT be scanned')
+})
+
+nodeTest('⑮ once it is known it is REMEMBERED — the next boot does not scan', async (t) => {
+  const { resolveProfileDirDetailed } = await import('../index.js')
+  const world = profileWorld(t, ['desktop', 'web'])
+  const desktop = nodePath.join(world.profilesDir, 'desktop')
+  const first = trackingFs()
+
+  const one = resolveProfileDirDetailed({
+    env: { DSH_HOME: world.home, DSH_PROFILE: 'desktop' },
+    argv: [],
+    fsLike: first,
+    stateDir: world.stateDir,
+    homeDir: world.home,
+  })
+  assert.equal(one.dir, desktop, 'the host answered')
+  assert.equal(first.calls.readdir.length, 0, 'so nothing had to be scanned')
+
+  const memo = JSON.parse(fs.readFileSync(nodePath.join(world.stateDir, 'profile-dir.json'), 'utf8'))
+  assert.equal(memo.dir, desktop, 'the path was written down')
+
+  // THE NEXT BOOT: no environment at all — and still no scan.
+  const second = trackingFs()
+  const two = resolveProfileDirDetailed({
+    env: {},
+    argv: [],
+    fsLike: second,
+    stateDir: world.stateDir,
+    homeDir: world.home,
+  })
+  assert.equal(two.dir, desktop, 'the remembered path is used')
+  assert.equal(two.source, 'remembered')
+  assert.equal(second.calls.readdir.length, 0, 'the second boot must not scan either')
+})
+
+nodeTest('⑮ a COPY of the profile is not a candidate — the real one is found', async (t) => {
+  const { resolveProfileDirDetailed, profileDirInfo } = await import('../index.js')
+  const world = profileWorld(t, [
+    'desktop',
+    '_backup-before-fetch-fallback-20261107-020940',
+    'desktop.broken-2026-11-07',
+    'desktop.partial-2026-11-07',
+  ])
+  const answer = resolveProfileDirDetailed({
+    env: { DSH_HOME: world.home },
+    argv: [],
+    fsLike: trackingFs(),
+    stateDir: world.stateDir,
+    homeDir: world.home,
+  })
+
+  assert.equal(answer.dir, nodePath.join(world.profilesDir, 'desktop'), 'the real profile, not the copy')
+  assert.equal(answer.source, 'profile bundles scan')
+  assert.equal(answer.candidates, 1, 'only the real one counts')
+
+  const info = profileDirInfo({
+    env: { DSH_HOME: world.home },
+    argv: [],
+    fsLike: trackingFs(),
+    stateDir: nodePath.join(world.home, 'state2'),
+    homeDir: world.home,
+  })
+  assert.equal(info.profileDirReason, '', 'a directory that was found needs no excuse')
+  assert.equal(info.profileCandidates, 1)
+})
+
+nodeTest('⑮ two REAL candidates are ambiguous — and the count is on the record', async (t) => {
+  const { resolveProfileDirDetailed, profileDirInfo } = await import('../index.js')
+  const world = profileWorld(t, ['desktop', 'web'])
+
+  const answer = resolveProfileDirDetailed({
+    env: { DSH_HOME: world.home },
+    argv: [],
+    fsLike: trackingFs(),
+    stateDir: world.stateDir,
+    homeDir: world.home,
+  })
+  assert.equal(answer.dir, null, 'nothing is guessed')
+  assert.equal(answer.source, 'ambiguous')
+  assert.equal(answer.candidates, 2, 'both candidates are counted')
+
+  const info = profileDirInfo({
+    env: { DSH_HOME: world.home },
+    argv: [],
+    fsLike: trackingFs(),
+    stateDir: nodePath.join(world.home, 'state2'),
+    homeDir: world.home,
+  })
+  assert.equal(info.profile, null)
+  assert.equal(info.profileDirReason, 'ambiguous', 'the page can say WHY')
+  assert.equal(info.profileCandidates, 2, 'and HOW MANY were seen')
+})
+
+nodeTest('⑮ a skipped backup carries the reason the page shows', async (t) => {
+  const { takePreRestartSnapshot } = await import('../index.js')
+  const stateDir = fs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'dsh-ar-skip-'))
+  t.after(() => { try { fs.rmSync(stateDir, { recursive: true, force: true }) } catch {} })
+
+  const result = await takePreRestartSnapshot({
+    config: { backupOnRestart: true },
+    stateDir,
+    log: { info: () => {}, warn: () => {}, error: () => {} },
+    profile: { dir: null, source: 'ambiguous', candidates: 2 },
+  })
+
+  assert.equal(result.requested, true, 'the user asked for a backup')
+  assert.equal(result.backup, null, 'and none was taken')
+  assert.equal(result.skipReason, 'ambiguous', 'the verdict carries WHY')
+  assert.equal(result.candidates, 2, 'and HOW MANY candidates were seen')
+  assert.equal(result.profile.candidates, 2, 'the profile verdict says it too')
+})

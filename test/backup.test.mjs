@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { spawn } from 'node:child_process';
 
 import {
   backupsRoot,
@@ -142,6 +143,46 @@ test('pruneBackups removes only what exceeds the limit', (t) => {
     '2026-01-03T00-00-00-000Z',
     '2026-01-01T00-00-00-000Z',
   ]);
+});
+
+test('a copy that will NOT delete is REPORTED, not silently swallowed', async (t) => {
+  if (process.platform !== 'win32') {
+    t.skip('the lock this test uses is a Windows behaviour');
+    return;
+  }
+  const { backups } = fixture(t);
+  const OLD = '2026-01-01T00-00-00-000Z';
+  const NEW = '2026-01-02T00-00-00-000Z';
+  for (const [index, name] of [OLD, NEW].entries()) {
+    const dir = path.join(backups, name);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({ at: 1_000 + index, atLocal: name, bytes: 0, files: [], includePlugins: false }), 'utf8');
+  }
+  // A CHILD PROCESS THAT LIVES IN THE COPY: on Windows that directory cannot
+  // be removed while the process is in it, and `fs.rmSync` throws EPERM. This
+  // is the real machine's shape — a delete that stops half way through — and
+  // the only way to make the failure deterministic.
+  const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 10000)'], {
+    cwd: path.join(backups, OLD),
+    stdio: 'ignore',
+  });
+  t.after(() => { try { child.kill(); } catch {} });
+  await new Promise((resolve) => { setTimeout(resolve, 500); });
+
+  const result = pruneBackups(backups, 1);
+
+  // THE POINT: a delete that failed is an ENTRY, not an empty list that looks
+  // like a prune that had nothing to do.
+  assert.deepEqual(result.removed, [], 'nothing was removed');
+  assert.equal(result.failures.length, 1, 'the failure is reported: ' + JSON.stringify(result.failures));
+  assert.equal(result.failures[0].name, OLD, 'the directory is named');
+  assert.ok(String(result.failures[0].error).length > 0, 'and the reason is said out loud');
+  assert.match(String(result.reason), /could not be deleted/, 'and the reason carries it too');
+  assert.equal(fs.existsSync(path.join(backups, OLD)), true, 'the copy is really still on disk');
+  assert.equal(fs.existsSync(path.join(backups, NEW)), true, 'and the other one is untouched');
+
+  child.kill();
+  await new Promise((resolve) => { setTimeout(resolve, 300); });
 });
 
 test('restoreBackup puts the snapshot back over the live profile', async (t) => {

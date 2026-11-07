@@ -30,6 +30,8 @@ import { apply } from '../index.js'
 import {
   backupsRoot,
   markKnownGood,
+  pruneBackups,
+  removeIncompleteBackups,
   writeBackupMeta,
 } from '../lib/backup.js'
 
@@ -276,6 +278,50 @@ test('③ a certified copy is never deleted and the answer admits the kept count
     )
     assert.equal(fs.existsSync(safe), true, 'the certified copy is still on disk')
     assert.equal(fs.existsSync(path.join(safe, 'meta.json')), true)
+  } finally {
+    setup.cleanup()
+  }
+})
+
+/* ------------------------------------------------------------------ *
+ * ⑤ THE LIMIT COUNTS REAL COPIES — NOT THE LEFTOVERS.
+ * ------------------------------------------------------------------ */
+
+test('⑤ ten leftovers and two copies means a budget of 0, and the leftovers are still reclaimed', () => {
+  const setup = tempStateDir('shells')
+  try {
+    // TEN LEFTOVERS: no manifest, only the link tree — the shape the real
+    // machine had (105 of them, 23 966 MB).
+    const shells = []
+    for (let day = 1; day <= 10; day += 1) {
+      const stamp = `2026-05-${String(day).padStart(2, '0')}T00-00-00-000Z`
+      shells.push(stamp)
+      const dir = path.join(setup.backups, stamp, 'node_modules-link', 'some-plugin')
+      fs.mkdirSync(dir, { recursive: true })
+      fs.writeFileSync(path.join(dir, 'index.js'), 'x'.repeat(256), 'utf8')
+    }
+    // TWO REAL COPIES — and one of them is a certified one, so the prune takes
+    // the branch that really protects a copy.
+    seedCopy(setup.backups, '2026-06-01T00-00-00-000Z')
+    const safe = seedCopy(setup.backups, '2026-06-02T00-00-00-000Z')
+    markKnownGood(safe, { reason: 'boot-ok', certifiedBy: 'seed' })
+
+    const prune = pruneBackups(setup.backups, 2)
+
+    assert.equal(prune.budget, 0, 'the leftovers do not count against the limit')
+    assert.deepEqual(prune.removed, [], 'and nothing had to go')
+    assert.equal(prune.shellCount, 10, 'the leftovers are counted as leftovers')
+    assert.equal(fs.existsSync(safe), true, 'the certified copy is untouched')
+
+    // THE LEFTOVERS ARE STILL RECLAIMED — by the sweep that owns them.
+    const hygiene = removeIncompleteBackups(setup.backups)
+    assert.equal(hygiene.removed.length, 10, 'every leftover is gone: ' + JSON.stringify(hygiene.removed))
+    assert.deepEqual(hygiene.failures, [], 'and none of them failed')
+    assert.deepEqual(
+      fs.readdirSync(setup.backups).sort(),
+      ['2026-06-01T00-00-00-000Z', '2026-06-02T00-00-00-000Z'],
+      'the two real copies are all that is left',
+    )
   } finally {
     setup.cleanup()
   }

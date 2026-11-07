@@ -97,6 +97,7 @@ import {
   contentScopeOf,
   countIncompleteBackups,
   createBackup,
+  cleanupShellBackups,
   DEFAULT_MAX_BACKUPS,
   enabledBundlesOf,
   isRestoreEligible,
@@ -105,6 +106,7 @@ import {
   KIND_SNAPSHOT,
   latestKnownGood,
   LEGACY_RESTORE_REFUSAL,
+  markShellBackupsHandled,
   normalizeRestoreRefusal,
   RESTORE_REFUSAL,
   LINKS_DIR,
@@ -121,6 +123,9 @@ import {
   removeIncompleteBackups,
   restoreBackup,
   ROLLBACK_LOCK_NAME,
+  scanShellBackups,
+  shellBackupsHandled,
+  shellBackupsMayBeSwept,
   sweepIncompleteBackups,
   ROLLBACK_REPORT_NAME,
   validateBackupLimit,
@@ -1275,6 +1280,24 @@ function resolveAnnouncementsPath(config) {
 }
 
 /**
+ * Resolve the path of the ONE-TIME LEFTOVER ROUTE: a sibling of the health
+ * route, under the same prefix.
+ *
+ * `GET /shell-backups` reports how many leftovers there are (and whether the
+ * user has to be asked at all), `POST /shell-backups` carries out one of the
+ * two answers: clean them up, or "I will handle them myself".
+ *
+ * @param {object} config
+ * @returns {string}
+ */
+function resolveShellBackupsPath(config) {
+  const healthPath = resolveHealthPath(config)
+  const index = healthPath.lastIndexOf('/')
+  const prefix = index > 0 ? healthPath.slice(0, index) : '/__dsh_autorestart'
+  return `${prefix}/shell-backups`
+}
+
+/**
  * The blocking sessions with the reason each one blocks: a session that is
  * held by an armed goal reports `goal-active` (that goal can be disarmed), a
  * goal whose round budget is spent reports `goal-exhausted`, and the original
@@ -1670,66 +1693,214 @@ export function resolveShowSleepButton(rawConfig, stateDir) {
  *
  * @returns {{ dir: string|null, source: string, candidates: number }}
  */
-function resolveProfileDirDetailed() {
-  const explicit = process.env.DSH_PROFILE_DIR
+/** The file that remembers the profile directory inside the state dir. */
+const PROFILE_DIR_MEMO_FILE = 'profile-dir.json'
+
+/**
+ * IS THIS DIRECTORY NAME A LEFTOVER OR A COPY — never "the profile"?
+ *
+ * A copy of the profile keeps the SAME package.json, so it lists this plugin
+ * exactly like the real one does. The scan must ignore it by shape:
+ * `_backup-…` (what that other session made), `.broken-…` / `.partial-…` (what
+ * the rescue keeps), and anything starting with `_` or `.`.
+ *
+ * @param {string} value the directory name
+ * @returns {boolean}
+ */
+function isResidualProfileName(value) {
+  const raw = typeof value === 'string' ? value.trim() : ''
+  if (raw === '') return true
+  if (raw.startsWith('_')) return true
+  if (raw.startsWith('.')) return true
+  if (raw.includes('.broken-')) return true
+  if (raw.includes('.partial-')) return true
+  return false
+}
+
+/**
+ * THE PATH WE REMEMBER (2026-11-07): `<state>/profile-dir.json`.
+ *
+ * @param {string} stateDir
+ * @param {object} fsLike
+ * @returns {string|null}
+ */
+function readProfileDirMemo(stateDir, fsLike) {
+  if (typeof stateDir !== 'string' || stateDir.trim() === '') return null
+  try {
+    const parsed = JSON.parse(fsLike.readFileSync(path.join(stateDir.trim(), PROFILE_DIR_MEMO_FILE), 'utf8'))
+    const dir = parsed !== null && typeof parsed === 'object' && typeof parsed.dir === 'string'
+      ? parsed.dir.trim()
+      : ''
+    return dir !== '' ? dir : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * @param {string} stateDir
+ * @param {string} dir the directory that answered
+ * @param {string} source which question answered it
+ * @param {object} fsLike
+ * @returns {boolean} whether it was written
+ */
+function writeProfileDirMemo(stateDir, dir, source, fsLike) {
+  if (typeof stateDir !== 'string' || stateDir.trim() === '') return false
+  if (typeof dir !== 'string' || dir === '') return false
+  try {
+    fsLike.mkdirSync(stateDir.trim(), { recursive: true })
+    fsLike.writeFileSync(
+      path.join(stateDir.trim(), PROFILE_DIR_MEMO_FILE),
+      JSON.stringify({ dir, source, at: Date.now() }, null, 2) + '\n',
+      'utf8',
+    )
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * THE SCAN — the last resort, and it only counts REAL candidates.
+ *
+ * @param {string} profilesDir
+ * @param {object} fsLike
+ * @param {string} pluginName
+ * @returns {{ matches: string[], scanned: number }}
+ */
+function scanProfilesForPlugin(profilesDir, fsLike, pluginName) {
+  const matches = []
+  let scanned = 0
+  let entries = []
+  try {
+    entries = fsLike.readdirSync(profilesDir, { withFileTypes: true })
+  } catch {
+    return { matches, scanned }
+  }
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    if (entry === null || typeof entry !== 'object') continue
+    const entryName = typeof entry.name === 'string' ? entry.name : ''
+    if (isResidualProfileName(entryName) === true) continue
+    if (typeof entry.isDirectory === 'function' && entry.isDirectory() !== true) continue
+    scanned += 1
+    const candidate = path.join(profilesDir, entryName)
+    try {
+      const manifest = JSON.parse(fsLike.readFileSync(path.join(candidate, 'package.json'), 'utf8'))
+      const bundles = manifest && manifest.dsh && manifest.dsh.profile
+        && Array.isArray(manifest.dsh.profile.bundles)
+        ? manifest.dsh.profile.bundles
+        : []
+      if (bundles.includes(pluginName)) matches.push(candidate)
+    } catch {}
+  }
+  return { matches, scanned }
+}
+
+/**
+ * WHERE THE MEMO LIVES: the state dir the caller named, else the one this
+ * plugin uses by itself.
+ *
+ * @param {object} settings
+ * @returns {string}
+ */
+function profileDirStateDir(settings) {
+  if (typeof settings.stateDir === 'string' && settings.stateDir.trim() !== '') return settings.stateDir.trim()
+  try {
+    const dir = resolveStateDir({})
+    return typeof dir === 'string' ? dir : ''
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * THE PROFILE DIRECTORY, ASKED — NOT GUESSED (2026-11-07).
+ *
+ * A REAL BUG THIS FIXES: the pre-restart backup was skipped in silence. The
+ * host did not carry `DSH_PROFILE_DIR`, and ANOTHER SESSION had copied the
+ * whole profile to `profiles/_backup-before-fetch-fallback-…` (which also lists
+ * this plugin). The scan then found TWO candidates, said `ambiguous`, and the
+ * backup was not taken — the page said nothing at all.
+ *
+ * SO THE ORDER IS: ASK, REMEMBER, AND ONLY THEN LOOK.
+ *
+ *   0. the directory we remembered in the state dir (`profile-dir.json`) —
+ *      used directly while it still exists;
+ *   1. `DSH_PROFILE_DIR`; 2. `DSH_HOME` + `DSH_PROFILE`; 3. `--profile`;
+ *   4. the scan — the LAST resort, and it only accepts ONE candidate. Two
+ *      candidates is `ambiguous` (with the count), never a guess.
+ *
+ * The scan ignores leftovers and copies by NAME SHAPE (`_backup-…`,
+ * `.broken-…`, `.partial-…`, anything starting with `_` or `.`), so the same
+ * accident cannot turn "which profile am I" into "I cannot tell" again.
+ *
+ * @param {{
+ *   stateDir?: string, env?: object, argv?: string[], fsLike?: object,
+ *   pluginName?: string, homeDir?: string
+ * }} [options] everything a test may replace; production passes nothing
+ * @returns {{ dir: string|null, source: string, candidates: number, scanned: boolean }}
+ */
+export function resolveProfileDirDetailed(options = {}) {
+  const settings = options !== null && typeof options === 'object' ? options : {}
+  const env = settings.env !== null && typeof settings.env === 'object' ? settings.env : process.env
+  const argv = Array.isArray(settings.argv)
+    ? settings.argv
+    : (Array.isArray(process.argv) ? process.argv : [])
+  const fsLike = settings.fsLike !== null && typeof settings.fsLike === 'object' ? settings.fsLike : fs
+  const pluginName = typeof settings.pluginName === 'string' && settings.pluginName !== ''
+    ? settings.pluginName
+    : name
+  const homeDir = typeof settings.homeDir === 'string' && settings.homeDir !== ''
+    ? settings.homeDir
+    : os.homedir()
+  const stateDir = profileDirStateDir(settings)
+  /** Remember a directory that ANSWERED, so the next boot does not have to ask again. */
+  const finish = (result) => {
+    if (result.dir !== null && stateDir !== '') writeProfileDirMemo(stateDir, result.dir, result.source, fsLike)
+    return result
+  }
+
+  // STEP 0 — THE PATH WE REMEMBERED LAST TIME. One stat, no scan.
+  const remembered = readProfileDirMemo(stateDir, fsLike)
+  if (remembered !== null && fsLike.existsSync(remembered) === true) {
+    return { dir: remembered, source: 'remembered', candidates: 1, scanned: false }
+  }
+
+  // STEP 1..3 — ASK. None of these touches the profiles directory.
+  const explicit = env.DSH_PROFILE_DIR
   if (typeof explicit === 'string' && explicit.trim() !== '') {
     const dir = path.resolve(explicit.trim())
-    if (fs.existsSync(dir)) return { dir, source: 'DSH_PROFILE_DIR', candidates: 1 }
+    if (fsLike.existsSync(dir)) return finish({ dir, source: 'DSH_PROFILE_DIR', candidates: 1, scanned: false })
   }
-  const home = process.env.DSH_HOME && process.env.DSH_HOME.trim() !== ''
-    ? process.env.DSH_HOME.trim()
-    : ''
-  const profile = process.env.DSH_PROFILE && process.env.DSH_PROFILE.trim() !== ''
-    ? process.env.DSH_PROFILE.trim()
-    : ''
+  const home = env.DSH_HOME && env.DSH_HOME.trim() !== '' ? env.DSH_HOME.trim() : ''
+  const profile = env.DSH_PROFILE && env.DSH_PROFILE.trim() !== '' ? env.DSH_PROFILE.trim() : ''
   if (home !== '' && profile !== '') {
     const dir = path.join(home, 'profiles', profile)
-    if (fs.existsSync(dir)) return { dir, source: 'DSH_HOME/DSH_PROFILE' }
+    if (fsLike.existsSync(dir)) return finish({ dir, source: 'DSH_HOME/DSH_PROFILE', candidates: 1, scanned: false })
   }
   // The host may have been started with an explicit --profile flag instead.
-  const argv = Array.isArray(process.argv) ? process.argv : []
   let fromArgv = ''
   for (let index = 0; index < argv.length; index += 1) {
     const arg = String(argv[index] ?? '')
     if (arg === '--profile' && index + 1 < argv.length) fromArgv = String(argv[index + 1] ?? '')
     else if (arg.startsWith('--profile=')) fromArgv = arg.slice('--profile='.length)
   }
-  const root = home !== '' ? home : path.join(os.homedir(), '.dsh')
+  const root = home !== '' ? home : path.join(homeDir, '.dsh')
   if (fromArgv.trim() !== '') {
     const dir = path.join(root, 'profiles', fromArgv.trim())
-    if (fs.existsSync(dir)) return { dir, source: 'host --profile flag' }
+    if (fsLike.existsSync(dir)) return finish({ dir, source: 'host --profile flag', candidates: 1, scanned: false })
   }
-  // Last resort: the only profile that lists this plugin as a bundle.
-  try {
-    const profilesDir = path.join(root, 'profiles')
-    const matches = []
-    for (const entry of fs.readdirSync(profilesDir, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue
-      // THE RESCUE'S OWN LEFTOVERS ARE NOT CANDIDATES (measured on the real
-      // desktop profile, 2026-11-03): `restore-profile` and the rollback path
-      // keep the profile they replaced as `<name>.broken-<stamp>` by design, and
-      // every one of those still carries a package.json that lists this plugin.
-      // Counting them turned "which profile am I" into `ambiguous` for anyone who
-      // had ever been rescued - and an ambiguous answer means the watchdog cannot
-      // arm at all (`armOutcome: failed`, "there is no profile directory to
-      // restore into"). With the two leftovers moved out of `profiles/`, the same
-      // build armed immediately (tier scheduled-task, arbiter v2).
-      if (entry.name.includes('.broken-') || entry.name.includes('.partial-')) continue
-      const candidate = path.join(profilesDir, entry.name)
-      try {
-        const manifest = JSON.parse(fs.readFileSync(path.join(candidate, 'package.json'), 'utf8'))
-        const bundles = manifest && manifest.dsh && manifest.dsh.profile
-          && Array.isArray(manifest.dsh.profile.bundles)
-          ? manifest.dsh.profile.bundles
-          : []
-        if (bundles.includes(name)) matches.push(candidate)
-      } catch {}
-    }
-    if (matches.length === 1) return { dir: matches[0], source: 'profile bundles scan', candidates: 1 }
-    // MORE THAN ONE: the "must not guess" case, and it SAYS so.
-    if (matches.length > 1) return { dir: null, source: 'ambiguous', candidates: matches.length }
-  } catch {}
-  return { dir: null, source: 'unknown', candidates: 0 }
+
+  // STEP 4 — THE SCAN, THE LAST RESORT. One candidate or nothing.
+  const scan = scanProfilesForPlugin(path.join(root, 'profiles'), fsLike, pluginName)
+  if (scan.matches.length === 1) {
+    return finish({ dir: scan.matches[0], source: 'profile bundles scan', candidates: 1, scanned: true })
+  }
+  // MORE THAN ONE: the "must not guess" case, and it SAYS so — with the count.
+  if (scan.matches.length > 1) {
+    return { dir: null, source: 'ambiguous', candidates: scan.matches.length, scanned: true }
+  }
+  return { dir: null, source: 'unknown', candidates: 0, scanned: true }
 }
 
 /** The profile directory, or null when it cannot be resolved. */
@@ -1747,16 +1918,18 @@ function resolveProfileDir() {
  *
  * @returns {{ profile: string|null, profileDirSource: string, profileCandidates: number }}
  */
-export function profileDirInfo() {
+export function profileDirInfo(options = {}) {
   try {
-    const info = resolveProfileDirDetailed()
+    const info = resolveProfileDirDetailed(options)
     return {
       profile: info.dir,
       profileDirSource: info.source,
       profileCandidates: info.candidates,
+      // WHY THERE IS NO DIRECTORY — the page must be able to say it.
+      profileDirReason: info.dir === null ? (info.source === 'ambiguous' ? 'ambiguous' : 'unknown') : '',
     }
   } catch {
-    return { profile: null, profileDirSource: 'unknown', profileCandidates: 0 }
+    return { profile: null, profileDirSource: 'unknown', profileCandidates: 0, profileDirReason: 'unknown' }
   }
 }
 
@@ -2110,7 +2283,15 @@ export async function seedFirstInstallBackup(runtime, config = {}, overrides = {
   // on deleting stale directories.
   let bootHygiene = null
   try {
-    bootHygiene = removeIncompleteBackups(backupsDir)
+    // THE LEFTOVERS BELONG TO THE CARD (2026-11-06). This sweep must NOT
+    // delete them before the user was asked: on most machines the leftovers
+    // are fewer than 32 and smaller than 2 GB — so this ONE call would have
+    // deleted all of them on the first boot after the upgrade, the card would
+    // have had nothing left to count, and the user would never have been
+    // asked. Only after the user said "清理掉" may the plugin take them.
+    bootHygiene = removeIncompleteBackups(backupsDir, {
+      skipShells: shellBackupsMayBeSwept(stateDir) !== true,
+    })
   } catch (error) {
     bootHygiene = {
       removed: [],
@@ -2245,15 +2426,25 @@ export async function takePreRestartSnapshot({
 } = {}) {
   const startedAt = Date.now()
   const info = profile && typeof profile === 'object'
-    ? { dir: profile.dir ?? null, source: profile.source ?? 'unknown' }
-    : { dir: null, source: 'unknown' }
+    ? {
+      dir: profile.dir ?? null,
+      source: profile.source ?? 'unknown',
+      candidates: Number.isFinite(Number(profile.candidates)) ? Number(profile.candidates) : (profile.dir ?? null ? 1 : 0),
+    }
+    : { dir: null, source: 'unknown', candidates: 0 }
   const profileDir = typeof info.dir === 'string' && info.dir.trim() !== '' ? info.dir : null
   // The snapshot is optional: the operator can turn it off entirely.
   if (config.backupOnRestart !== true) {
     return { backup: null, profileDir, profile: info, requested: false, durationMs: 0, error: null }
   }
   if (profileDir === null) {
-    log.warn('no profile directory is known; skipping the pre-restart backup', { source: info.source })
+    // THE USER MUST SEE THIS (2026-11-07): a skipped backup that only reaches
+    // the log is a backup the user believes was taken. The verdict carries
+    // WHY and HOW MANY candidates were seen; the page says it in words.
+    log.warn('no profile directory is known; skipping the pre-restart backup', {
+      source: info.source,
+      candidates: info.candidates,
+    })
     return {
       backup: null,
       profileDir: null,
@@ -2261,6 +2452,9 @@ export async function takePreRestartSnapshot({
       requested: true,
       durationMs: Math.max(0, Date.now() - startedAt),
       error: 'no profile directory is known',
+      // THE REASON ON THE RECORD, so the page can say it instead of the log.
+      skipReason: info.source === 'ambiguous' ? 'ambiguous' : 'profile-dir-unknown',
+      candidates: info.candidates,
     }
   }
   let backup = null
@@ -8575,6 +8769,11 @@ export function buildLifecycleTools(runtime, config) {
           handoffs: { type: 'array', items: { type: 'object' } },
           profileDir: { type: 'string' },
           profileDirSource: { type: 'string' },
+          // THE COUNT OF CANDIDATES THE SCAN SAW (2026-11-07): it is part of
+          // the answer, so the strict schema declares it — a key the answer
+          // carries but the schema does not would make the whole tool answer
+          // "invalid output".
+          profileCandidates: { type: 'number' },
           backupIncludePlugins: { type: 'boolean' },
           lastRollback: { type: 'object' },
           // THE REPORTED KIND OF PLUGIN FAILURE (user decision, 2026-11-01): what
@@ -8650,6 +8849,12 @@ export function buildLifecycleTools(runtime, config) {
         handoffs: diagnosticSessions(state),
         // Where the pre-restart backup comes from (null dir = it would be skipped).
         profileDirSource: runtime.profileDir.source,
+        // HOW MANY CANDIDATES THE SCAN SAW, AND WHY THERE IS NO DIRECTORY
+        // (2026-11-07): a skipped backup must be visible on the page, not only
+        // in the log — the page says «这次没有备份：没找到你的配置目录（发现 N 个候选）».
+        profileCandidates: Number.isFinite(Number(runtime.profileDir.candidates))
+          ? Number(runtime.profileDir.candidates)
+          : 0,
         ...(runtime.profileDir.dir ? { profileDir: runtime.profileDir.dir } : {}),
         // Whether the pre-restart backup also snapshots the installed plugins.
         backupIncludePlugins: config.backupIncludePlugins !== false,
@@ -10164,7 +10369,8 @@ function buildPluginRestoreRoute(ctx, runtime, config) {
 /**
  * THE INVENTORY ROUTE — the settings page's data source (user decision, 2026-11-01).
  *
- * GET, read-only, loopback-only like every other route of this plugin. Without a
+ * GET, read-only, with the same authentication rule as every other route of
+ * this plugin (loopback OR a request the connection service admits). Without a
  * query it answers the whole list; with `?plugin=<name>` it answers that one
  * plugin's file-level differences.
  *
@@ -10412,6 +10618,259 @@ function buildAnnouncementsRoute(ctx, runtime, config) {
  * for are echoed back, plus the effective `countdownSeconds` so the settings
  * page can read them back at once.
  */
+/**
+ * THE ONE-TIME LEFTOVER ROUTE (2026-11-06).
+ *
+ * The leftovers of an older build are the directories under the backups root
+ * that carry no `manifest.json`: a copy that never finished. On the real
+ * machine there were 105 of them (23 966 MB), and every restart tried to delete
+ * them again.
+ *
+ * THE USER IS ASKED ONCE, AND THE ANSWER IS FINAL:
+ *   - `GET /shell-backups` answers `{ ok, pending, count, bytes, handled }`.
+ *     `pending` is true only when there is something to say AND the user has
+ *     not dealt with it yet — so a machine without leftovers never sees a card,
+ *     and a machine that was answered never sees one again;
+ *   - `POST /shell-backups` with `{ "action": "clean" }` deletes the leftovers
+ *     (the same code the CLI script runs) and answers with what really
+ *     happened, including the reason for every directory that would not go;
+ *   - `POST /shell-backups` with `{ "action": "self" }` writes the durable
+ *     marker and answers `{ ok: true, handled: true }` — the user takes over
+ *     and the question is never asked again, not even after a restart.
+ *
+ * THERE IS NO SETTINGS ENTRY AND NO PERMANENT BANNER FOR THIS: the problem
+ * is a leftover of an old build, and once it is dealt with it must not be a
+ * permanent feature of the interface.
+ *
+ * The route sits next to the health route and uses the same authentication
+ * rule (loopback OR a request the connection service admits). A route that
+ * changes state only accepts JSON, so a cross-site simple request cannot
+ * reach it.
+ */
+function buildShellBackupsRoute(ctx, runtime, config) {
+  const routePath = resolveShellBackupsPath(config)
+  const stateDir = resolveStateDir(config)
+  const backupsDir = backupsDirFor(stateDir)
+  /**
+   * THE CLEANUP JOB (2026-11-06).
+   *
+   * The delete of 105 directories (23 GB on the real machine) takes minutes,
+   * and it must NOT happen inside the request: the interface would wait for
+   * it, the fetch would time out, and the user would be told "it did not
+   * work" about a cleanup that is still running. So the request is ANSWERED
+   * FIRST ("accepted"), the delete runs in batches outside the request, and
+   * the receipt comes with the next GET.
+   */
+  const cleanup = {
+    state: 'idle', // idle | running | done
+    total: 0,
+    done: 0,
+    removed: [],
+    failures: [],
+    freedBytes: 0,
+    startedAt: null,
+    finishedAt: null,
+  }
+  /** How many directories one batch deletes before the event loop is given back. */
+  const CLEANUP_BATCH = 8
+  /**
+   * Start the cleanup — in batches, outside the request.
+   *
+   * @returns {boolean} whether a job was started
+   */
+  const startCleanup = () => {
+    if (cleanup.state === 'running') return false
+    let names = []
+    try {
+      names = scanShellBackups(backupsDir, { measure: false }).names
+    } catch {
+      names = []
+    }
+    cleanup.state = 'running'
+    cleanup.total = names.length
+    cleanup.done = 0
+    cleanup.removed = []
+    cleanup.failures = []
+    cleanup.freedBytes = 0
+    cleanup.startedAt = Date.now()
+    cleanup.finishedAt = null
+    let index = 0
+    const step = () => {
+      const batch = names.slice(index, index + CLEANUP_BATCH)
+      index += batch.length
+      let part = { removed: [], failures: [], skipped: [], freedBytes: 0 }
+      try {
+        part = cleanupShellBackups(backupsDir, { names: batch })
+      } catch (error) {
+        cleanup.failures.push({ name: '', path: '', error: describeError(error) })
+      }
+      cleanup.removed.push(...part.removed)
+      cleanup.failures.push(...part.failures)
+      cleanup.freedBytes += part.freedBytes
+      cleanup.done = index
+      if (index < names.length) {
+        // A YIELD BETWEEN THE BATCHES: the host keeps answering while the
+        // disk is cleaned.
+        setTimeout(step, 0)
+        return
+      }
+      cleanup.state = 'done'
+      cleanup.finishedAt = Date.now()
+    }
+    setTimeout(step, 0)
+    return true
+  }
+  /**
+   * THE NUMBERS, READ FRESH.
+   *
+   * A cached count would go stale the moment a backup was written or a cleanup
+   * ran, and a stale count is how a card says "there is nothing to do" while
+   * 23 GB of leftovers are still on the disk. The client asks once, so the scan
+   * happens once.
+   *
+   * `measure` says whether the SIZE is worth measuring: the count is cheap
+   * (one readdir of the root), the size walks every file of every leftover.
+   */
+  const scanNow = (measure) => {
+    try {
+      const scan = scanShellBackups(backupsDir, { measure: measure !== false })
+      runtime.shellBackupsScan = scan
+      return scan
+    } catch {
+      return { count: 0, bytes: null, names: [], truncated: false }
+    }
+  }
+  return {
+    kind: 'exact',
+    path: routePath,
+    handler: (req, res) => {
+      const remote = req && req.socket ? req.socket.remoteAddress : undefined
+      const loopback = remote === undefined
+        || remote === '127.0.0.1'
+        || remote === '::1'
+        || remote === '::ffff:127.0.0.1'
+      // THE AUTHENTICATION RULE OF THIS PLUGIN (not "loopback only"): a request
+      // from the loopback interface, or a request the connection service
+      // admits. The health route and the backup-limit route next door use the
+      // same rule, and this route — which deletes directories — uses it too.
+      // So the answer says what actually happened: the request was NOT
+      // allowed — by the loopback check and by the connection service both.
+      if (!loopback && !admittedByConnection(ctx, req)) {
+        res.statusCode = 403
+        res.setHeader('content-type', 'application/json; charset=utf-8')
+        res.end('{"ok":false,"error":"not-allowed"}')
+        return
+      }
+      const answer = (payload, status = 200) => {
+        res.statusCode = status
+        res.setHeader('content-type', 'application/json; charset=utf-8')
+        res.setHeader('cache-control', 'no-store')
+        res.end(JSON.stringify(payload))
+      }
+      const method = req && typeof req.method === 'string' ? req.method.toUpperCase() : 'GET'
+      if (method === 'GET') {
+        // THE MARKER FIRST (2026-11-06): a machine that already answered must
+        // not pay for a walk of 23 GB every time the card is mounted. The COUNT
+        // is cheap; the SIZE is only measured while the question is open, and
+        // even then only inside the scan budget.
+        const handled = shellBackupsHandled(stateDir)
+        const scan = scanNow(handled !== true)
+        answer({
+          ok: true,
+          // THE CARD IS ONLY FOR A MACHINE THAT HAS SOMETHING TO DECIDE.
+          pending: handled !== true && scan.count > 0,
+          count: scan.count,
+          bytes: scan.bytes,
+          truncated: scan.truncated === true,
+          handled,
+          cleanup: {
+            state: cleanup.state,
+            total: cleanup.total,
+            done: cleanup.done,
+            removed: cleanup.removed.length,
+            failures: cleanup.failures,
+            freedBytes: cleanup.freedBytes,
+          },
+        })
+        return
+      }
+      if (method !== 'POST') {
+        res.statusCode = 405
+        res.setHeader('content-type', 'application/json; charset=utf-8')
+        res.setHeader('allow', 'GET, POST')
+        res.end('{"ok":false,"error":"method-not-allowed"}')
+        return
+      }
+      if (!requireJsonContentType(req, res)) return
+      void readJsonBody(req).then((payload) => {
+        const body = payload && typeof payload === 'object' ? payload : {}
+        const action = typeof body.action === 'string' ? body.action.trim() : ''
+        if (action === 'clean') {
+          // THE USER'S CLICK: the leftovers go — in the background, and the
+          // answer says so at once.
+          //
+          // THE ANSWER IS FINAL (2026-11-06): the marker is written NOW, so
+          // the card never comes back — not even while the cleanup is still
+          // running, and not even if some directory would not go.
+          //
+          // AND THE MARKER COMES FIRST (2026-11-06): without it the question
+          // would come back on the next boot (the card would ask again about
+          // directories that are already gone). So when the marker cannot be
+          // written, the cleanup does NOT start: nothing is deleted behind the
+          // user's back, and the answer says that nothing was recorded.
+          const written = markShellBackupsHandled(stateDir, 'clean')
+          if (written !== true) {
+            answer({
+              ok: false,
+              action: 'clean',
+              error: 'marker-not-written',
+              recorded: false,
+              started: false,
+              running: false,
+              pending: true,
+            }, 500)
+            return
+          }
+          const started = startCleanup()
+          answer({
+            ok: true,
+            action: 'clean',
+            recorded: true,
+            started,
+            running: started,
+            pending: false,
+            cleanup: {
+              state: cleanup.state,
+              total: cleanup.total,
+              done: cleanup.done,
+              removed: cleanup.removed.length,
+              failures: cleanup.failures,
+              freedBytes: cleanup.freedBytes,
+            },
+          })
+          return
+        }
+        if (action === 'self') {
+          // THE USER TAKES OVER: the marker is written, and the question is
+          // never asked again — not with the next boot, not with the next
+          // release of the plugin. The plugin also stops touching those
+          // directories from now on.
+          const written = markShellBackupsHandled(stateDir, 'self')
+          answer({ ok: written, action: 'self', handled: written, pending: false })
+          return
+        }
+        answer({
+          ok: false,
+          error: 'unknown-action',
+          instruction: 'Send { "action": "clean" } or { "action": "self" }.',
+        }, 400)
+      }).catch((error) => {
+        answer({ ok: false, error: describeError(error) }, 400)
+      })
+    },
+  }
+}
+
 /**
  * POST /backup-limit — HOW MANY COPIES TO KEEP, AND THE CLEANUP THAT FOLLOWS.
  *
@@ -11754,6 +12213,10 @@ function registerHealthRoute(ctx, runtime, config, sleep) {
     // immediately after it is written (2026-11-02). APPENDED for the same reason
     // as the two routes above: the order of the earlier ones is pinned by tests.
     routes.push({ name: 'backup-limit', route: buildBackupLimitRoute(ctx, runtime, config) });
+    // ...and the ONE-TIME question about the leftovers of an older build
+    // (2026-11-06). APPENDED for the same reason: the order of the earlier
+    // routes is pinned by tests.
+    routes.push({ name: 'shell-backups', route: buildShellBackupsRoute(ctx, runtime, config) });
     // One late reading per boot; the timer is unref'ed so it never holds the
     // process open.
     // Kept LOCAL on purpose: the timer belongs to this boot and nothing else
@@ -12037,7 +12500,14 @@ export function apply(ctx, rawConfig, options = {}) {
   // the page said two copies. This one runs on EVERY boot.
   let backupHygiene = null
   try {
-    backupHygiene = sweepIncompleteBackups(backupsDirFor(resolveStateDir(config)))
+    // THE LEFTOVERS BELONG TO THE CARD (2026-11-06). The boot sweep must NOT
+    // delete them before the user was asked: on the real machine it did
+    // exactly that (105 leftovers, 23 GB, gone before the card was ever
+    // drawn), and the question became unaskable. Only after the user said
+    // "清理掉" may the plugin touch them by itself.
+    backupHygiene = sweepIncompleteBackups(backupsDirFor(resolveStateDir(config)), {
+      skipShells: shellBackupsMayBeSwept(resolveStateDir(config)) !== true,
+    })
   } catch (error) {
     backupHygiene = {
       skipped: false,
@@ -12050,6 +12520,31 @@ export function apply(ctx, rawConfig, options = {}) {
     }
   }
   runtime.backupHygiene = backupHygiene
+  // THE LEFTOVERS OF AN OLDER BUILD, COUNTED (2026-11-06).
+  //
+  // The boot sweep above leaves them alone now (the user has not answered
+  // yet), so this count IS what the card will offer to clean. The scan is
+  // read-only and CHEAP: the count is one readdir of the root, the size would
+  // be a walk over 23 GB — and the card measures the size itself, once, when
+  // it is drawn.
+  let shellBackups = { count: 0, bytes: null, names: [], truncated: false }
+  try {
+    shellBackups = scanShellBackups(backupsDirFor(resolveStateDir(config)), { measure: false })
+  } catch (error) {
+    shellBackups = {
+      count: 0,
+      bytes: null,
+      names: [],
+      truncated: false,
+      error: error && error.message ? String(error.message) : String(error),
+    }
+  }
+  runtime.shellBackupsScan = shellBackups
+  if (shellBackups.count > 0 && shellBackupsHandled(resolveStateDir(config)) !== true) {
+    log.warn('there are backup directories left over from an older build', {
+      count: shellBackups.count,
+    })
+  }
   if (Array.isArray(backupHygiene.removed) && backupHygiene.removed.length > 0) {
     log.warn('removed backup directories that never finished', {
       count: backupHygiene.removed.length,
