@@ -145,7 +145,12 @@ test('③ an unchanged answer carries no differences, and a config-only seed is 
 
   const same = findUnchangedBackup(setup.profile, setup.backups, { includePlugins: true })
   assert.equal(same.state, 'unchanged', 'nothing was touched')
-  assert.equal(same.reason, 'content-equal', 'and the content is what says so')
+  // Either reason is honest: `metadata-equal` when the quick check answered,
+  // `content-equal` when a file had to be read (task t36 added the first).
+  assert.ok(
+    same.reason === 'metadata-equal' || same.reason === 'content-equal',
+    'and the answer says how it knew: ' + JSON.stringify(same.reason),
+  )
   assert.deepEqual(same.differences, [], 'and no differences')
 
   // A machine whose only copy is the configuration-only seed: the plugin half has
