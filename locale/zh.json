@@ -426,6 +426,7 @@
       "snapshotting": "DSH 重启前备份中",
       "size": "{done} / {total}",
       "sizeDone": "{done}",
+      "backedUp": "已备份 {size}",
       "restarting": "正在重启…",
       "deferred": "有新会话在跑，重启已暂缓",
       "deferredNote": "等它结束会自动继续 · 已等 {count} 个会话",

@@ -426,6 +426,7 @@
       "snapshotting": "Backing up before DSH restart",
       "size": "{done} / {total}",
       "sizeDone": "{done}",
+      "backedUp": "Backed up {size}",
       "restarting": "Restarting…",
       "deferred": "A conversation just started — restart postponed",
       "deferredNote": "It will retry automatically when idle · {count} waiting",

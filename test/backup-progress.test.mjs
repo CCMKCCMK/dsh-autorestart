@@ -27,6 +27,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import vm from 'node:vm'
 
 import { createBackup } from '../lib/backup.js'
 
@@ -162,4 +163,177 @@ test('the linked plugin really is in the copy, and the third-party one is not', 
     false,
     'the third-party plugin is NOT copied — it is reinstallable from the lock file',
   )
+})
+
+/* ------------------------------------------------------------------ *
+ * A FAST BACKUP GETS A RECEIPT, NOT A BAR (2026-11-07, t20)
+ *
+ * THE REAL MACHINE: the pre-restart copy took 997 ms. The card drew the bar
+ * for one frame and switched to 「正在重启…」, so the user never learned that a
+ * backup had been taken. The user decided: under two seconds, NO BAR — one
+ * line 「已备份 274.5 MB」 instead, and the restart line takes over after half
+ * a second. Two seconds and over keeps the bar exactly as it was.
+ *
+ * The decision is one pure function of the stage the Host already writes
+ * (`startedAt`, `at`, `snapshotBytes`, `reason`), so nothing is guessed and no
+ * request is added.
+ * ------------------------------------------------------------------ */
+
+/** The client script, evaluated the way the browser evaluates it. */
+function loadClient() {
+  const source = fs.readFileSync(new URL('../client.js', import.meta.url), 'utf8')
+  const sandbox = {
+    window: {
+      __ModuleLoader__: { load: () => {} },
+      localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {}, clear: () => {} },
+      sessionStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {}, clear: () => {} },
+      matchMedia: () => ({ matches: false }),
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      location: { reload: () => {} },
+    },
+    document: {
+      getElementById: () => null,
+      createElement: (tag) => ({
+        tag, id: '', textContent: '', parentNode: null,
+        setAttribute: () => {}, appendChild: () => {},
+      }),
+      head: { appendChild: (node) => node, removeChild: () => {} },
+      querySelector: () => null,
+    },
+    fetch: () => Promise.resolve({ ok: true, status: 200, json: async () => ({}) }),
+    console,
+    setTimeout,
+    clearTimeout,
+    setInterval: () => 0,
+    clearInterval: () => {},
+    AbortController,
+  }
+  vm.createContext(sandbox)
+  vm.runInContext(source, sandbox, { filename: 'client.js' })
+  return sandbox.__dshAutorestartClient
+}
+
+/** The two thresholds the user decided on. */
+const FAST_BACKUP_MS = 2000
+const RECEIPT_MS = 500
+
+/** The real machine's numbers: 997 ms for 287 860 164 bytes. */
+const REAL_STARTED_AT = 1_791_000_000_000
+const REAL_BYTES = 287_860_164
+
+test('⑯ under two seconds: no bar, one line with the REAL size', () => {
+  const api = loadClient()
+  assert.equal(api.RESTART_FAST_BACKUP_MS, FAST_BACKUP_MS, 'the threshold is two seconds')
+  assert.equal(api.RESTART_BACKUP_RECEIPT_MS, RECEIPT_MS, 'and the receipt stays half a second')
+
+  // WHILE THE COPY RUNS: a bar is never drawn before the two-second mark.
+  const copying = api.restartBackupCard({
+    phase: 'snapshotting',
+    startedAt: REAL_STARTED_AT,
+    at: REAL_STARTED_AT + 500,
+    progress: { bytes: 1024, total: REAL_BYTES, percent: 1 },
+    snapshotBytes: 1024,
+  }, { slow: false })
+  assert.equal(copying.showBar, false, 'no progressbar under two seconds')
+
+  // THE COPY IS OVER IN 997 ms: the card says what was backed up.
+  const done = api.restartBackupCard({
+    phase: 'restarting',
+    reason: 'snapshot done',
+    startedAt: REAL_STARTED_AT,
+    at: REAL_STARTED_AT + 997,
+    snapshotBytes: REAL_BYTES,
+  })
+  assert.equal(done.showBar, false, 'and no bar afterwards either')
+  assert.equal(done.ms, 997, 'the duration is the stage’s own clock')
+  assert.equal(done.receiptBytes, REAL_BYTES, 'the receipt carries the measured size')
+  assert.equal(api.formatOverlaySize(done.receiptBytes), '274.5 MB', '287 860 164 bytes is 274.5 MB')
+
+  // THE SENTENCE, in both dictionaries, with that size.
+  const size = api.formatOverlaySize(done.receiptBytes)
+  assert.equal(
+    api.dictionaries.zh['restart.overlay.backedUp'].replace('{size}', size),
+    '已备份 274.5 MB',
+    'the Chinese line',
+  )
+  assert.equal(
+    api.dictionaries.en['restart.overlay.backedUp'].replace('{size}', size),
+    'Backed up 274.5 MB',
+    'and the English one',
+  )
+
+  // HALF A SECOND LATER the receipt is gone and only 「正在重启…」 is left.
+  const held = api.restartBackupCard({
+    phase: 'restarting',
+    reason: 'snapshot done',
+    startedAt: REAL_STARTED_AT,
+    at: REAL_STARTED_AT + 997,
+    snapshotBytes: REAL_BYTES,
+  }, { receiptHeld: true })
+  assert.equal(held.receiptBytes, null, 'the receipt had its half second')
+  assert.equal(held.showBar, false, 'and no bar is left behind')
+})
+
+test('⑯ two seconds and over: the bar is drawn exactly as before', () => {
+  const api = loadClient()
+
+  // STILL COPYING AFTER TWO SECONDS: the bar appears.
+  const slow = api.restartBackupCard({
+    phase: 'snapshotting',
+    startedAt: REAL_STARTED_AT,
+    at: REAL_STARTED_AT + 2400,
+    progress: { bytes: 100_000_000, total: REAL_BYTES, percent: 35 },
+    snapshotBytes: 100_000_000,
+  }, { slow: true })
+  assert.equal(slow.showBar, true, 'a slow copy gets its progressbar')
+  assert.equal(slow.receiptBytes, null, 'and no receipt')
+
+  // AND IT FINISHED SLOWLY: no receipt either (the bar already told the story).
+  const slowDone = api.restartBackupCard({
+    phase: 'restarting',
+    reason: 'snapshot done',
+    startedAt: REAL_STARTED_AT,
+    at: REAL_STARTED_AT + 5000,
+    snapshotBytes: REAL_BYTES,
+  })
+  assert.equal(slowDone.ms, 5000, 'the duration is read from the stage')
+  assert.equal(slowDone.receiptBytes, null, 'a slow backup gets no receipt')
+  assert.equal(slowDone.showBar, false, 'and the bar does not follow it into the restart')
+})
+
+test('⑯ a backup that FAILED or was skipped never claims 已备份', () => {
+  const api = loadClient()
+
+  // SKIPPED ON PURPOSE (a manual rollback carries its own undo copy).
+  const skipped = api.restartBackupCard({
+    phase: 'restarting',
+    reason: 'no snapshot for this restart (manual rollback)',
+    startedAt: REAL_STARTED_AT,
+    at: REAL_STARTED_AT + 300,
+    snapshotBytes: null,
+  })
+  assert.equal(skipped.done, false, 'the Host did not say the copy finished')
+  assert.equal(skipped.receiptBytes, null, 'so no receipt')
+
+  // CANCELLED WHILE THE FILES WERE BEING COPIED.
+  const cancelled = api.restartBackupCard({
+    phase: 'waiting',
+    reason: 'the restart was cancelled while the snapshot was being written',
+    startedAt: REAL_STARTED_AT,
+    at: REAL_STARTED_AT + 400,
+    snapshotBytes: 4096,
+  })
+  assert.equal(cancelled.receiptBytes, null, 'a cancelled copy is not a receipt')
+
+  // FINISHED BUT NOTHING WAS MEASURED: the card may not invent a size.
+  const unmeasured = api.restartBackupCard({
+    phase: 'restarting',
+    reason: 'snapshot done',
+    startedAt: REAL_STARTED_AT,
+    at: REAL_STARTED_AT + 900,
+    snapshotBytes: null,
+  })
+  assert.equal(unmeasured.receiptBytes, null, 'no measurement, no number')
+  assert.equal(unmeasured.showBar, false, 'and still no bar')
 })
