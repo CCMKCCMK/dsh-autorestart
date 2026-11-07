@@ -678,3 +678,30 @@ health 路由里那段"写 marker + 撤看门狗"的代码读的是 `stateDirOf(
 ## 0.7.0 — 2026-10-29
 
 这一版的主题是**认得出自己在什么环境里、并且永远不双开**，外加一个用户真能点到的问题反馈入口。
+### 八、重启记录不再撒谎（2026-11-07）
+
+**问题**：备份真做了，记录却说没做。gen 539 那一次，快照 319,549,069 字节、7.9 秒、`snapshot.taken=true`，
+而同一份 verdict 里写着 `executionEntered: false`、`branch` 为空、`compareDifferences` 为空 ——
+读这份记录的人只会得出一个结论：这次没备份。
+
+**四处一起改**：
+
+- **诊断可查**：每次重启的每个分支都写下 `branch` / `branchReason` / `branchTrail`（比对中、跳过、已备份、
+  备份失败、被门延后、取消……），并把 `executionEntered` 与 `settledBy`（`main-flow` / `boot-recovery`）
+  写进记录 —— 谁做的事、谁收的口，都写在纸上，不用再从 `attempts` 反推。
+- **内容差异不再被丢**：`compareDifferences` 的白名单漏了 `kind: 'content'`（t34/t36 早就开始产出它），
+  于是每一处**真实内容差异都被静默丢弃**，原因只剩一句泛泛的 `plugin-tree-differs`。已补上。
+- **收尾不擦记录**：新实例起来收口时，不再重写主流程已经写下的事实，只补齐缺失字段并标记 `settledBy`；
+  `branchGeneration` 也不再把这个空值伪造成 `0`。
+- **轮询不停死 + 早退补快照**：`executeRestart` 的早退路径（无重启方式、异常）都会把轮询装回去，再也不会
+  「门放行后没有人再执行」；而在任何一次尝试结束之前，若请求还没有快照，就先比对、按需备份，再结束
+  ——「被门延后一次」不再等于「这次没备份」。
+
+**真机读数（gen 540，修复后）**：`snapshot.taken=true`、**319,556,747 字节**、`executionEntered=true`、
+`branch=changed-backed-up`、`branchGeneration=540`（不再是 0）、`settledBy=boot-recovery`、`result=ok`，
+`compareDifferences` 首条点名到文件：
+`{ path: "node_modules-link/dsh-autorestart/test/boot-verdict.test.mjs", kind: "added", live: { size: 5586 }, copy: null }`
+—— 这正是这次重启真正多出来的那个文件。
+
+**上一代反例（gen 539）**：同一台机器、同样做成了备份，记录却显示「没进入执行」。两代之间的差别就是上面四处。
+
