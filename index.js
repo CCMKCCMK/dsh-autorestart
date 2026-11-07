@@ -123,6 +123,7 @@ import {
   releaseRollbackLock,
   removeIncompleteBackups,
   restoreBackup,
+  restoreLinkedPlugin,
   ROLLBACK_LOCK_NAME,
   scanShellBackups,
   shellBackupsHandled,
@@ -2411,6 +2412,80 @@ export async function seedFirstInstallBackup(runtime, config = {}, overrides = {
     bytes: Number.isFinite(result.bytes) ? result.bytes : null,
     error: null,
   })
+}
+
+/**
+ * RETRY THE PLUGINS A ROLLBACK COULD NOT WRITE (real machine, 2026-11-07).
+ *
+ * WHAT HAPPENED: the rollback to `2026-11-07T08-49…` restored three configuration
+ * files and six plugins, and silently skipped the seventh — `dsh-autorestart`
+ * itself. The write really failed, and the reason is a hard Windows fact:
+ *
+ *   fs.cpSync(B4/node_modules-link/dsh-autorestart, <workspace>/plugins/dsh-autorestart,
+ *             { recursive: true, force: true })
+ *   → EIO, Access is denied. …\plugins\dsh-autorestart\assets
+ *
+ * — the running host holds its own plugin files. That cannot be forced, but it is
+ * exactly the case that healing can wait for: the same write succeeds once the
+ * process that held the files is gone.
+ *
+ * SO: a rollback records what it deferred (`deferredRestore` in the state file),
+ * and the NEXT boot retries those entries ONE PLUGIN AT A TIME. Success clears the
+ * record; a failure keeps it with the error it really got (and the health route
+ * shows it), so "one plugin did not come back" is a fact somebody can read
+ * instead of an absence.
+ *
+ * A reload is not a boot: nothing is retried in the same process, because the
+ * files are held by that very process.
+ *
+ * @param {object} runtime
+ * @param {object} [config]
+ * @param {{ profileDir?: string }} [overrides]
+ * @returns {Promise<{ restored: string[], remaining: Array<object> }|null>}
+ */
+export async function resumeDeferredRestore(runtime, config = {}, overrides = {}) {
+  const state = runtime && runtime.state && typeof runtime.state === 'object' ? runtime.state : null;
+  if (state === null) return null;
+  if (runtime.isNewBoot !== true) return null;
+  const pending = Array.isArray(state.deferredRestore) ? state.deferredRestore : [];
+  if (pending.length === 0) return null;
+  const profileDir = typeof overrides.profileDir === 'string' && overrides.profileDir !== ''
+    ? overrides.profileDir
+    : resolveProfileDir();
+  if (profileDir === null) return null;
+  const restored = [];
+  const remaining = [];
+  for (const entry of pending) {
+    const name = entry && typeof entry.name === 'string' ? entry.name : '';
+    const backupDir = entry && typeof entry.backupDir === 'string' ? entry.backupDir : '';
+    if (name === '' || backupDir === '') continue;
+    let attempt = { ok: false, error: null };
+    try {
+      attempt = restoreLinkedPlugin({ backupDir, profileDir, name });
+    } catch (error) {
+      attempt = { ok: false, error: error && error.message ? String(error.message) : String(error) };
+    }
+    if (attempt.ok === true) {
+      restored.push(name);
+      continue;
+    }
+    remaining.push({
+      ...entry,
+      error: attempt.error || 'the copy failed again',
+      retriedAt: Date.now(),
+      attempts: (Number.isFinite(Number(entry.attempts)) ? Math.trunc(Number(entry.attempts)) : 0) + 1,
+    });
+  }
+  state.deferredRestore = remaining;
+  runtime.deferredRestoreInfo = { restored, remaining, at: Date.now() };
+  persistSafely(runtime);
+  try {
+    runtime.log.info('the plugins a rollback could not write were retried at boot', {
+      restored,
+      remaining: remaining.map((entry) => entry.name),
+    });
+  } catch {}
+  return { restored, remaining };
 }
 
 /**
@@ -5131,12 +5206,41 @@ const titleOfSummary = (item) => {
       kind: target.kind,
       version: target.version ?? null,
       restored: restored && Array.isArray(restored.restored) ? restored.restored : [],
+      // WHAT COULD NOT BE WRITTEN (2026-11-07). The rollback of the real machine
+      // restored six plugins and silently lost the seventh — its own — because
+      // Windows refuses to overwrite files the running process holds
+      // (`EIO, Access is denied. …\plugins\dsh-autorestart\assets`). The rest of
+      // the rollback is still a success (`ok` stays true), but the remainder is
+      // named here, and the next boot retries it.
+      deferred: restored && Array.isArray(restored.deferred) ? restored.deferred : [],
       ok,
       error: ok ? null : ((restored && restored.error) || 'the restore failed'),
       // The copy taken right before the restore: the manual rollback can be
       // undone with it, even if the picked one was older than the hardware.
       safetySnapshot: typeof safety.dir === 'string' ? safety.dir : null,
       restartRequested: false,
+    }
+    // THE REMAINDER GOES INTO THE STATE FILE, so a boot can finish the job the
+    // running process could not. Only the plugin that failed — the rest is done.
+    try {
+      const pending = Array.isArray(receipt.deferred) ? receipt.deferred : []
+      if (pending.length > 0) {
+        runtime.state.deferredRestore = pending.map((entry) => ({
+          name: String(entry.name),
+          error: String(entry.error ?? 'the copy failed'),
+          backupDir: target.dir,
+          at: Date.now(),
+          attempts: 0,
+        }))
+        log.warn('the rollback could not write every plugin; the rest is retried at the next boot:', {
+          deferred: pending.map((entry) => entry.name),
+        })
+      } else {
+        runtime.state.deferredRestore = []
+      }
+      persistSafely(runtime)
+    } catch (error) {
+      log.warn('could not record the deferred plugins of the rollback:', String(error))
     }
     const writeReceipt = () => {
       try {
@@ -5668,19 +5772,38 @@ const titleOfSummary = (item) => {
     } finally {
       releaseRollbackLock(stateDirOf())
     }
+    // WHAT THIS ROLLBACK COULD NOT WRITE (2026-11-07): the running plugin's own
+    // files are held by this process, so at least that one is expected here. It
+    // is recorded for the next boot instead of being lost.
+    const deferred = result && Array.isArray(result.deferred) ? result.deferred : []
+    try {
+      runtime.state.deferredRestore = deferred.length > 0
+        ? deferred.map((entry) => ({
+          name: String(entry.name),
+          error: String(entry.error ?? 'the copy failed'),
+          backupDir: targetDir,
+          at: Date.now(),
+          attempts: 0,
+        }))
+        : []
+      persistSafely(runtime)
+    } catch (error) {
+      log.warn('could not record the deferred plugins of the rollback:', String(error))
+    }
     if (result && result.ok === true) {
       log.warn('the backup whose restart record says it came up with matching content was restored:', {
         reason,
         restored: result.restored,
+        deferred: deferred.map((entry) => entry.name),
         backupDir: targetDir,
       })
       writeRestartReport({ rolledBack: true, reason, backupDir: targetDir, restored: result.restored })
-      return { rolledBack: true, restored: result.restored, error: null }
+      return { rolledBack: true, restored: result.restored, deferred, error: null }
     }
     const error = (result && result.error) || 'the restore failed'
     log.error('the backup whose restart record says it came up could not be restored:', reason, error)
     writeRestartReport({ rolledBack: false, reason, backupDir: targetDir, restored })
-    return { rolledBack: false, restored, error }
+    return { rolledBack: false, restored, deferred, error }
   }
 
   /**
@@ -12095,6 +12218,12 @@ function registerHealthRoute(ctx, runtime, config, sleep) {
             // known-good backup and found none (user decision, 2026-10-30).
             // Absent when nothing was ever tried, so an old client sees no change.
             ...(live.firstInstallBackup ? { firstInstallBackup: live.firstInstallBackup } : {}),
+            // THE PLUGINS A ROLLBACK COULD NOT WRITE (2026-11-07): the honest
+            // remainder of the last rollback, with the error the filesystem gave.
+            // Present only while something is still waiting for its retry.
+            ...(Array.isArray(live.deferredRestore) && live.deferredRestore.length > 0
+              ? { deferredRestore: live.deferredRestore }
+              : {}),
             updatedAt: live.updatedAt,
             // The park route, so the client never has to guess the prefix, and
             // the goals this plugin already disarmed (they are re-armed after
@@ -12271,6 +12400,12 @@ function registerHealthRoute(ctx, runtime, config, sleep) {
         // known-good backup and found none (user decision, 2026-10-30). Absent
         // when nothing was ever tried.
         ...(state.firstInstallBackup ? { firstInstallBackup: state.firstInstallBackup } : {}),
+        // THE PLUGINS A ROLLBACK COULD NOT WRITE (2026-11-07): still waiting for
+        // their retry at the next boot. The health route shows them so "one
+        // plugin did not come back" is readable instead of absent.
+        ...(Array.isArray(state.deferredRestore) && state.deferredRestore.length > 0
+          ? { deferredRestore: state.deferredRestore }
+          : {}),
         // THE RESTART STAGE, read from the health route as well: a script (or a
         // user watching the console) can tell "waiting" from "backing up 120 MB
         // of 156 MB" without opening the interface.
@@ -12608,6 +12743,14 @@ export function apply(ctx, rawConfig, options = {}) {
   // fire-and-forget: the boot path never waits for a 117 MB copy.
   void seedFirstInstallBackup(runtime, config).catch((error) => {
     log.warn('the first-install backup failed:', String(error))
+  })
+
+  // FINISH THE ROLLBACK THE RUNNING PROCESS COULD NOT FINISH (2026-11-07): a
+  // plugin whose files were held during the rollback is retried here, once, in a
+  // process that no longer holds them. Fire-and-forget: the boot path never waits
+  // on a restore.
+  void resumeDeferredRestore(runtime, config).catch((error) => {
+    log.warn('the deferred plugins of the last rollback could not be retried:', String(error))
   })
 
   // THE FILES THE OLD BUILDS LEFT BEHIND (2026-11-02). Every build before this
