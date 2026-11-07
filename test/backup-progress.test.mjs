@@ -818,3 +818,65 @@ test('⑥ a config-only seed cannot make a plugin-carrying profile look "unchang
   assert.equal(secondAnswer.state, 'unchanged', 'with a same-scope copy the answer is honest again')
   assert.equal(typeof secondAnswer.dir, 'string', 'and it names that copy')
 })
+
+/* ------------------------------------------------------------------ *
+ * ⑤ WHICH WAY DID THIS RESTART GO? (task t39)
+ *
+ * gen 537 on the real machine left nothing: no new backup directory and a verdict
+ * file still naming the previous generation — so "did it skip, copy, fail to copy
+ * or get postponed" could only be guessed. Every branch now names itself in the
+ * record, written as the branch is entered (before anything can return early).
+ * ------------------------------------------------------------------ */
+
+test('⑤ every restart names the branch it took', async (t) => {
+  // ① THE SWITCH IS OFF: no comparison, no copy — and the record says so.
+  const offSetup = fixture(t, 'branch-off')
+  const off = makeRuntime(offSetup, { backupOnRestart: false })
+  requestRestart(off.runtime.state, { reason: 'the user asked for a restart', bySessionId: 'sess-1' })
+  await off.runtime.executeRestart()
+  const offVerdict = off.runtime.lastRestartVerdict()
+  assert.equal(offVerdict.branch, 'backup-off', 'the branch is named: ' + JSON.stringify(offVerdict.branch))
+  assert.equal(typeof offVerdict.branchReason, 'string', 'and why: ' + JSON.stringify(offVerdict.branchReason))
+  assert.equal(typeof offVerdict.branchGeneration, 'number', 'and for which generation')
+  assert.ok(
+    offVerdict.branchTrail.some((entry) => entry.branch === 'backup-off'),
+    'the trail carries it too: ' + JSON.stringify(offVerdict.branchTrail),
+  )
+
+  // ② NOTHING TO COMPARE AGAINST YET, SO IT COPIES — named as such.
+  const setup = fixture(t, 'branch-steps')
+  const first = makeRuntime(setup)
+  requestRestart(first.runtime.state, { reason: 'the first restart', bySessionId: 'sess-1' })
+  await first.runtime.executeRestart()
+  const firstVerdict = first.runtime.lastRestartVerdict()
+  assert.equal(firstVerdict.branch, 'changed-backed-up', 'a real copy: ' + JSON.stringify(firstVerdict.branch))
+  assert.ok(
+    firstVerdict.branchTrail.some((entry) => entry.branch === 'comparing'),
+    'the trail shows it looked first: ' + JSON.stringify(firstVerdict.branchTrail.map((entry) => entry.branch)),
+  )
+
+  // ③ THE SAME PROFILE AGAIN: unchanged, and the record says which way.
+  const second = makeRuntime(setup)
+  requestRestart(second.runtime.state, { reason: 'the second restart', bySessionId: 'sess-2' })
+  await second.runtime.executeRestart()
+  const secondVerdict = second.runtime.lastRestartVerdict()
+  assert.equal(typeof secondVerdict.branch, 'string', 'a branch is always named: ' + JSON.stringify(secondVerdict.branch))
+  // THE HARD RULE (t40's high finding, closed by t42): one attempt writes its
+  // record ONCE, so the branch and the skip flag can never disagree.
+  assert.equal(
+    secondVerdict.branch === 'unchanged',
+    secondVerdict.skipped === 'unchanged',
+    'branch and skipped agree: ' + JSON.stringify({ branch: secondVerdict.branch, skipped: secondVerdict.skipped }),
+  )
+  assert.equal(secondVerdict.executionEntered, true, 'and the record says the main flow ran')
+
+  // ④ A REAL EDIT: changed, copied, and the copy count really went up — so no
+  //    `changed-without-new-backup` warning is attached to this one.
+  fs.writeFileSync(path.join(setup.source, 'index.js'), 'export default 3\n', 'utf8')
+  const third = makeRuntime(setup)
+  requestRestart(third.runtime.state, { reason: 'the third restart', bySessionId: 'sess-3' })
+  await third.runtime.executeRestart()
+  const thirdVerdict = third.runtime.lastRestartVerdict()
+  assert.equal(thirdVerdict.branch, 'changed-backed-up', 'the edit is copied: ' + JSON.stringify(thirdVerdict.branch))
+  assert.equal(thirdVerdict.branchWarning, null, 'and there is no contradiction to warn about')
+})

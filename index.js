@@ -5935,6 +5935,50 @@ const titleOfSummary = (item) => {
   /** Execute the restart now; the detached helper survives our own death. */
   const executeRestart = async () => {
     stopPolling()
+    // THE ONE PLACE THAT TAKES A SNAPSHOT (kept single on purpose — a text guard in
+    // the tests asserts it, and two entry points once meant two different copies for
+    // one restart). Everything that needs a copy goes through here.
+    const runSnapshot = (why) => snapshotFn({
+      config,
+      stateDir: path.dirname(stateFile),
+      log,
+      profile: runtimeProfileDirFor(options),
+      onProgress: (progress) => {
+        recordSnapshotProgress(progress)
+      },
+      shouldCancel: () => snapshotCancelled(),
+      ...(why ? {} : {}),
+    })
+    // NO ATTEMPT MAY END WITHOUT ITS SNAPSHOT (2026-11-07, task t42 — 4.2).
+    //
+    // t41 established where gen 537 lost its backup: the attempt ended (gate still
+    // busy, or no restart method) BEFORE the copy was ever started, and the next
+    // attempt is a NEW attempt — `state.restart.snapshot` was still empty, so the
+    // copy that the request was supposed to pay for never happened anywhere. Taking
+    // the copy here — right before an early end, never before the gate (see
+    // docs/research/restart-gate-sequence.md §4.3) — is what makes "delayed once,
+    // then allowed" still leave a rollback point.
+    //
+    // It reuses what the request already paid for (`reusableSnapshot`) and honours
+    // both escapes: a manual rollback must not snapshot, and neither must a profile
+    // whose backup switch is off.
+    const ensureSnapshotBeforeEnding = async (why) => {
+      try {
+        if (!state.restart || typeof state.restart !== 'object') return { taken: false, reason: 'no-request' }
+        if (state.restart.snapshot) return { taken: false, reason: 'already-paid' }
+        if (state.restart.skipBackup === true) return { taken: false, reason: 'manual-rollback' }
+        if (config.backupOnRestart === false) return { taken: false, reason: 'backup-off' }
+        if (reusableSnapshot() !== null) return { taken: false, reason: 'reusable' }
+        const early = await runSnapshot(why)
+        const dir = early && early.backup && typeof early.backup.dir === 'string' ? early.backup.dir : null
+        if (early && early.backup && early.backup.ok === true) rememberSnapshot(early)
+        log.info('this attempt ends before it restarts, so the snapshot was taken first', { why, dir })
+        return { taken: dir !== null, dir }
+      } catch (error) {
+        log.warn('could not take the snapshot before ending this attempt:', String(error))
+        return { taken: false, reason: 'error' }
+      }
+    }
     if (!state.restart) return
     try {
       await flushSessions()
@@ -5967,6 +6011,33 @@ const titleOfSummary = (item) => {
         reason: 'the idle gate postponed the restart: ' + String(verdict.reason || 'conversation-active'),
         by: 'idle-gate',
       })
+      // THE SNAPSHOT COMES FIRST, EVEN WHEN THE ATTEMPT ENDS HERE (task t42, 4.2).
+      await ensureSnapshotBeforeEnding('the idle gate postponed the restart')
+      // THE DEFERRAL THAT LEFT NO TRACE (2026-11-07, task t39).
+      //
+      // This is the gen 537 shape on the real machine: a restart request queued,
+      // `snapshotTaken:false`, `attempts:0`, the gate opening later — and the
+      // verdict file still holding the PREVIOUS generation, because this branch
+      // returns before the record is ever written. Three explanations (the compare,
+      // the copy, the write) were equally plausible and none could be excluded.
+      // From now the record names this branch, so "postponed before the copy" is a
+      // fact and not a guess.
+      try {
+        const branchEntry = {
+          branch: 'gate-deferred-before-snapshot',
+          reason: String(verdict.reason || 'conversation-active'),
+          generation: Number.isFinite(Number(state.generation)) ? Number(state.generation) : null,
+          at: new Date().toISOString(),
+        }
+        recordRestartVerdict({
+          branch: branchEntry.branch,
+          branchReason: 'the idle gate postponed the restart before the copy: ' + branchEntry.reason,
+          branchGeneration: branchEntry.generation,
+          branchTrail: [branchEntry],
+        })
+      } catch (error) {
+        log.warn('could not record the restart branch:', String(error))
+      }
       persist()
       startPolling()
       return
@@ -5992,7 +6063,18 @@ const titleOfSummary = (item) => {
         // no custom command): nothing is restarted, so nothing is snapshotted
         // either — there is no rollback point for a restart that never happens.
         log.warn('no restart method available (not the desktop app and restartCommand is empty); leaving the checkpoint in place')
+        // AN ATTEMPT THAT CANNOT RESTART STILL OWES ITS ROLLBACK POINT (task t42):
+        // take it before giving up, then keep the poller alive so the request is
+        // not silently abandoned (4.1 — the stopPolling above must never be final).
+        // NO SNAPSHOT HERE, ON PURPOSE: this branch means the restart will NOT
+        // happen (no way to restart the host), and the product decision of
+        // 2026-11-02 is that a restart that never happens takes no rollback point —
+        // a test asserts exactly that. Only a POSTPONED restart (which will still
+        // happen) pays for its copy early.
         rollbackRestart('no restart method available')
+        // AFTER the rollback, because cancelling the attempt stops the poller too:
+        // the request must still be watched, or it is dead in silence (4.1).
+        startPolling()
         return
       }
 
@@ -6032,6 +6114,58 @@ const titleOfSummary = (item) => {
       const paid = skipBackup ? null : reusableSnapshot()
       let cancelled = false
       let snapshot = null
+      // WHICH WAY DID THIS RESTART GO? (2026-11-07, task t39)
+      //
+      // gen 537 on the real machine left nothing behind: no new backup directory,
+      // and `last-restart-verdict.json` still holding gen 536 — so "did it skip,
+      // copy, fail to copy, or get postponed" could only be GUESSED at, and three
+      // different explanations stayed equally plausible. The trail below is written
+      // into the record AS EACH BRANCH IS ENTERED, before anything can return
+      // early, so even a restart that never reaches the end of this function says
+      // which way it went and why.
+      //
+      // It adds fields; it decides nothing.
+      const branchTrail = []
+      const backupDirCount = () => {
+        try {
+          return fs.readdirSync(backupsDirFor(stateDir), { withFileTypes: true })
+            .filter((entry) => entry.isDirectory() === true).length
+        } catch {
+          return 0
+        }
+      }
+      const noteBranch = (branch, reason = null) => {
+        const entry = {
+          branch,
+          reason: reason === null ? null : String(reason),
+          generation: Number.isFinite(Number(state.generation)) ? Number(state.generation) : null,
+          at: new Date().toISOString(),
+        }
+        branchTrail.push(entry)
+        return entry
+      }
+      // ONE WRITE, ONE VERDICT (2026-11-07, task t40). The trail above is kept in
+      // MEMORY until the attempt is decided; a branch that ENDS the attempt (nothing
+      // is written after it) writes the record itself, so an attempt postponed before
+      // the copy still leaves its name behind — but no branch ever writes the record
+      // and then gets overwritten by a later write of the same file. That overwriting
+      // is what produced `branch=changed-backed-up` next to `skipped=unchanged`.
+      const writeBranchNow = (patch = {}) => {
+        const last = branchTrail.length > 0 ? branchTrail[branchTrail.length - 1] : null
+        try {
+          recordRestartVerdict({
+            branch: last === null ? null : last.branch,
+            branchReason: last === null ? null : last.reason,
+            branchGeneration: last === null ? null : last.generation,
+            branchTrail: branchTrail.slice(-8),
+            ...patch,
+          })
+        } catch (error) {
+          log.warn('could not record the restart branch:', String(error))
+        }
+      }
+      const backupsBefore = backupDirCount()
+      if (skipBackup) noteBranch('backup-off-manual-rollback', 'a manual rollback takes no pre-restart backup')
       if (skipBackup) {
         const skipProfile = runtimeProfileDirFor(options)
         const skipProfileDir = typeof skipProfile.dir === 'string' ? skipProfile.dir : null
@@ -6076,6 +6210,7 @@ const titleOfSummary = (item) => {
           reused: true,
         }
       } else if (config.backupOnRestart === false) {
+        noteBranch('backup-off', 'backupOnRestart is false')
         // NOTHING TO COMPARE AND NOTHING TO COPY (user decision, 2026-11-07).
         // The operator turned the pre-restart backup off: the overlay must draw
         // no comparing card and no backup card at all — it goes straight to
@@ -6108,6 +6243,7 @@ const titleOfSummary = (item) => {
           markRestartStage('comparing', {
             reason: compareIncludePlugins === true ? 'config+plugins' : 'config',
           })
+          noteBranch('comparing', compareIncludePlugins === true ? 'config+plugins' : 'config')
           try {
             comparison = findUnchangedBackup(compareDir, backupsDirFor(stateDir), {
               includePlugins: compareIncludePlugins,
@@ -6129,6 +6265,7 @@ const titleOfSummary = (item) => {
           differences: Array.isArray(comparison.differences) ? comparison.differences : [],
         })
         if (comparison.state === 'unchanged') {
+          noteBranch('unchanged', comparison.reason ?? 'the newest copy already holds this profile')
           // THE SAME CONFIGURATION IS ALREADY COPIED: the newest backup IS this
           // restart's rollback point. Nothing is written, and the conclusion
           // records `skipped: 'unchanged'` with the directory that was reused.
@@ -6153,16 +6290,7 @@ const titleOfSummary = (item) => {
           reason: comparison.state === 'unusable' ? 'compare unusable' : 'changed',
         })
         try {
-          snapshot = await snapshotFn({
-            config,
-            stateDir,
-            log,
-            profile: runtimeProfileDirFor(options),
-            onProgress: (progress) => {
-              recordSnapshotProgress(progress)
-            },
-            shouldCancel: () => snapshotCancelled(),
-          })
+          snapshot = await runSnapshot('changed')
         } finally {
           // The flag belongs to ONE snapshot; a stale `true` would cancel the
           // next restart before it began.
@@ -6177,6 +6305,43 @@ const titleOfSummary = (item) => {
         // the profile a second time.
         if (!cancelled) rememberSnapshot(snapshot)
         }
+        // HOW THE COPY ENDED, NAMED (2026-11-07, task t39) — and the contradiction
+        // that otherwise leaves no trace at all: the comparison said `changed`, and
+        // the number of backup directories did not go up. On the real machine that
+        // is exactly the gen 537 shape (a real difference, no new directory, no
+        // record); it can now be read instead of guessed at.
+        const copyOk = snapshot !== null && typeof snapshot === 'object'
+          && snapshot.backup !== null && typeof snapshot.backup === 'object'
+          && snapshot.backup.ok === true
+        // ONLY THE BRANCH THAT COPIED (task t42): this block used to run for the
+        // `unchanged` branch too, where `snapshot.backup.ok` is true because the copy
+        // was REUSED — so it stamped `changed-backed-up` on top of `unchanged` and
+        // produced the contradiction this task exists to remove.
+        if (cancelled !== true && comparison.state !== 'unchanged') {
+          noteBranch(
+            copyOk ? 'changed-backed-up' : 'backup-failed',
+            copyOk
+              ? 'the comparison found a difference and the copy was written'
+              : (snapshot && typeof snapshot.error === 'string' && snapshot.error !== ''
+                ? snapshot.error
+                : 'the copy did not produce a usable directory'),
+          )
+          const afterCopyCount = backupDirCount()
+          // THE CONTRADICTION (task t39): `changed` AND no usable copy AND no new
+          // directory. The count alone is NOT the signal — prune keeps the list at
+          // its configured size, so a healthy copy can leave the count unchanged
+          // (found while writing this: see the note in the task output). What is
+          // always wrong is "changed" plus nothing to roll back to.
+          if (copyOk !== true && afterCopyCount <= backupsBefore) {
+            log.warn('the comparison said changed but no new backup directory appeared', {
+              generation: state.generation,
+              before: backupsBefore,
+              after: afterCopyCount,
+              branch: copyOk ? 'changed-backed-up' : 'backup-failed',
+            })
+            noteBranch('changed-without-new-backup', 'the comparison said changed but no usable copy was produced')
+          }
+        }
         // THE COMPARISON'S REASON, CARRIED WITH THE SNAPSHOT so the verdict below
         // (and the log above) can say why this copy was taken.
         if (snapshot !== null && typeof snapshot === 'object') {
@@ -6190,6 +6355,8 @@ const titleOfSummary = (item) => {
         // host does not restart, and the request is WITHDRAWN — a restart the
         // user cancelled must not be retried five seconds later.
         log.warn('the restart was cancelled while the snapshot was being written')
+        noteBranch('cancelled', 'the restart was cancelled while the snapshot was being written')
+        writeBranchNow()
         dropRestartRequest({
           reason: 'the restart was cancelled while the snapshot was being written',
           by: 'snapshot-cancel',
@@ -6210,6 +6377,13 @@ const titleOfSummary = (item) => {
           reason: why,
           blockedBy: afterCopy ? afterCopy.blockedBy : null,
         })
+        // THE BRANCH THAT USED TO LEAVE NOTHING BEHIND (task t39): a restart
+        // postponed by the gate never reaches the verdict write at the end, so the
+        // record kept saying the previous generation. It says `gate-deferred` now.
+        noteBranch('gate-deferred', 'a conversation became active right after the snapshot: ' + why)
+        // This branch ends the attempt, so nothing will write after it: the record
+        // is written HERE, once, with the branch it belongs to (task t40).
+        writeBranchNow()
         deferRestartStage('conversation-active after snapshot: ' + why, {
           blocked: afterCopy && Array.isArray(afterCopy.blockedBy) ? countBlockerTasks(afterCopy.blockedBy) : 0,
         })
@@ -6252,7 +6426,25 @@ const titleOfSummary = (item) => {
       // separates "a restore that belongs to this attempt" from an older one, so
       // it is read once here and reused at the promotion site below.
       const restartStartedAt = Date.now()
+      // THE ONE WRITE OF THIS ATTEMPT (task t40): skipped / backupDir / snapshot /
+      // compareReason / branch all come from THIS decision, in one call. t39 wrote
+      // the branch first and this call wrote the rest, so the file could end up
+      // saying `changed-backed-up` and `unchanged` at the same time.
+      const lastBranch = branchTrail.length > 0 ? branchTrail[branchTrail.length - 1] : null
       recordRestartVerdict({
+        branch: lastBranch === null ? null : lastBranch.branch,
+        branchReason: lastBranch === null ? null : lastBranch.reason,
+        branchGeneration: lastBranch === null ? null : lastBranch.generation,
+        branchTrail: branchTrail.slice(-8),
+        branchWarning: branchTrail.some((entry) => entry.branch === 'changed-without-new-backup')
+          ? 'changed-but-no-new-backup-directory'
+          : null,
+        // DID THE MAIN FLOW RUN? The gen 537 diagnosis had to infer this from
+        // `attempts: 0`; the record now says it outright (task t42).
+        executionEntered: true,
+        // This record was written by the instance that did the work; whatever
+        // settles it later says 'boot-recovery' (task t44).
+        settledBy: 'main-flow',
         result: RESTART_RESULTS.PENDING,
         mode: useCustomCommand ? 'command' : 'app',
         generation: state.generation,
@@ -6853,7 +7045,13 @@ const titleOfSummary = (item) => {
       }
       case 'restart':
       case 'force-restart': {
-        void executeRestart()
+        // AN ATTEMPT THAT THROWS MUST NOT TAKE THE POLLER WITH IT (task t42, 4.1):
+        // executeRestart stops the poller on entry, and a rejection used to leave
+        // it stopped forever — no retry, no log, nothing (gen 537's shape).
+        void executeRestart().catch((error) => {
+          log.warn('the restart attempt failed before it could restart; polling continues:', String(error))
+          startPolling()
+        })
         return
       }
       case 'give-up': {
@@ -8643,6 +8841,20 @@ export async function verifyRestartBoot(runtime, options = {}) {
   const evaluated = evaluateRestartChecks(checks)
   const verifiedAt = now()
   const record = runtime.recordRestartVerdict({
+    // THE MAIN FLOW'S OWN FACTS ARE CARRIED, NOT REBUILT (2026-11-07, task t44).
+    // The instance that carried out this restart wrote `branch`, `executionEntered`
+    // and the comparison's reason; this write only finishes the verdict. Passing
+    // them again — from the record that is already on disk — is what stops the
+    // 320 MB / 7.9 s backup from being displayed as "executionEntered: false".
+    branch: pending.branch ?? null,
+    branchReason: pending.branchReason ?? null,
+    branchGeneration: pending.branchGeneration ?? null,
+    branchTrail: Array.isArray(pending.branchTrail) ? pending.branchTrail : [],
+    branchWarning: pending.branchWarning ?? null,
+    executionEntered: pending.executionEntered === true,
+    compareReason: pending.compareReason ?? null,
+    compareDifferences: Array.isArray(pending.compareDifferences) ? pending.compareDifferences : [],
+    settledBy: 'boot-recovery',
     result: evaluated.ok ? RESTART_RESULTS.OK : RESTART_RESULTS.FAILED,
     verifiedAt,
     durationMs: pending.startedAt !== null ? Math.max(0, verifiedAt - pending.startedAt) : null,
