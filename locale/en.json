@@ -189,6 +189,19 @@
       "value": "{n} seconds",
       "immediate": "Do not wait (restart right away)"
     },
+    "window": {
+      "label": "How the restart helper runs",
+      "foreground": "Foreground (a window appears briefly; the default)",
+      "background": "Background (no window at all, and it never takes the focus)",
+      "hint": "It only decides how the restart helper is started; a change applies to the NEXT restart. Background mode starts it through a VBScript shim: no window is created and a full-screen game is not switched away from. If a machine policy forbids Windows Script Host, it falls back to a hidden PowerShell and the reason is written into the restart report.",
+      "lastLabel": "Last restart",
+      "lastWscript": "Background (wscript, no window)",
+      "lastHidden": "Background, fell back to a hidden PowerShell",
+      "lastForeground": "Foreground (with a window)",
+      "lastUnknown": "Unknown",
+      "lastFallback": "Fallback reason: {reason}",
+      "shimLeft": "The temporary shim could not delete itself; the next restart removes it (the restart report records it too)"
+    },
     "backup": {
       "label": "Backup before a restart",
       "details": "Details",
@@ -430,8 +443,6 @@
       "snapshotting": "Backing up before DSH restart",
       "size": "{done} / {total}",
       "sizeDone": "{done}",
-      "comparing": "Comparing configuration and plugins for changes…",
-      "comparingConfig": "Comparing configuration for changes…",
       "changed": "Configuration and plugins changed, backing up {size}",
       "changedConfig": "Configuration changed, backing up {size}",
       "changedUnknown": "Configuration and plugins changed, backing up",

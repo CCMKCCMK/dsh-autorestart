@@ -12,16 +12,29 @@ import {
   DEFAULT_ROLLBACK_COPY_TIMEOUT_MS,
   DEFAULT_ROLLBACK_TIMEOUT_MS,
   DEFAULT_TASK_NAME,
+  HELPER_SCRIPT_PATTERN,
+  RESTART_WINDOW_BACKGROUND,
+  RESTART_WINDOW_CHOICES,
+  RESTART_WINDOW_FOREGROUND,
+  WINDOW_SHIM_PATTERN,
   buildCustomCommand,
   buildGateScript,
+  buildHiddenPowerShellCommand,
   buildRestartCommand,
   buildWatchScript,
+  buildWindowShimScript,
   buildWmiRestartCommand,
   detectEnvironment,
+  looksLikeGateHelper,
   looksLikeWatchScript,
+  looksLikeWindowShim,
+  normalizeRestartWindow,
+  relaunchCommandLine,
   runCommandNow,
   scheduleDetachedRestart,
   sweepLegacyWatcherScripts,
+  sweepRestartHelpers,
+  sweepWindowShims,
 } from '../lib/restart.js';
 
 const APP_EXE = 'C:\\Program Files\\DeepSeek Harness\\DeepSeek Harness.exe';
@@ -594,4 +607,310 @@ test('a missing state directory is not an error, and looksLikeWatchScript is str
   assert.equal(looksLikeWatchScript(WATCH_SCRIPT_BODY), true);
   assert.equal(looksLikeWatchScript('Write-Host "hi"'), false, 'no param()/Start-Sleep/marker: not ours');
   assert.equal(looksLikeWatchScript(''), false);
+});
+
+/* ------------------------------------------------------------------ *
+ * THERE IS NO WINDOW-STYLE OPTION (measured, 2026-11-09).
+ *
+ * `-WindowStyle Minimized` was tried and removed: it really lands on the command
+ * line (the `.cmd` proves it) but the host ignores it — DSH is an Electron app
+ * and decides for itself how its window shows up, and the launcher has no window
+ * flag of its own. These tests pin that the option is GONE, so nobody re-adds a
+ * switch that cannot work.
+ * ------------------------------------------------------------------ */
+
+test('the relaunch command carries no window style and every restart step is intact', () => {
+  const legacy =
+    `cmd.exe /c ping -n ${DEFAULT_RELAUNCH_DELAY_SECONDS + 1} 127.0.0.1 >nul` +
+    ` & taskkill /IM "DeepSeek Harness.exe" /T /F & start "" powershell.exe -WindowStyle Hidden -NoProfile -Command Start-Process -FilePath '${APP_EXE}'`;
+
+  const byDefault = scheduleDetachedRestart({ appExePath: APP_EXE, dryRun: true });
+  assert.equal(byDefault.command, legacy, 'the restart command is byte for byte the command of 0.9.4');
+  assert.equal(byDefault.launchCommand, legacy);
+  // The removed option must not come back through the properties either.
+  assert.equal(Object.prototype.hasOwnProperty.call(byDefault, 'launch'), false, 'there is no launch mode any more');
+  assert.equal(/Minimized/.test(byDefault.command), false, 'the command never asks for a minimized window');
+
+  // A stale key in somebody's profile is NOT an option: the planner ignores it.
+  const staleKey = scheduleDetachedRestart({ appExePath: APP_EXE, dryRun: true, restartLaunch: 'minimized' });
+  assert.equal(staleKey.command, legacy, 'an unknown restartLaunch key must change nothing at all');
+  assert.equal(staleKey.ok !== false, true, 'and it must never fail the plan');
+
+  assert.equal(
+    relaunchCommandLine(APP_EXE),
+    `start "" powershell.exe -WindowStyle Hidden -NoProfile -Command Start-Process -FilePath '${APP_EXE}'`,
+  );
+  // The helper keeps working with the window mode; only the host window style is gone.
+  const shim = 'C:/state/restart-42-window.vbs';
+  const background = scheduleDetachedRestart({
+    appExePath: APP_EXE,
+    dryRun: true,
+    restartWindow: 'background',
+    restartLaunch: 'minimized',
+    shimPath: shim,
+  });
+  assert.equal(background.launchCommand, `wscript.exe //B "${shim}"`);
+  assert.equal(background.window, 'background');
+  assert.equal(/Minimized/.test(background.shimScript), false, 'the shim must not carry a dead flag either');
+});
+
+/* ------------------------------------------------------------------ *
+ * THE RESTART WINDOW (user decision, 2026-11-09).
+ *
+ * `foreground` is the behaviour this plugin always had: the helper `.cmd` runs
+ * in a visible console window. `background` starts the SAME helper through a
+ * VBScript shim — `wscript.exe //B <shim>`, `Run <cmd>, 0, False` — so no
+ * window is created at all and a full-screen app is never switched away from.
+ * The foreground command line must stay byte for byte what it was.
+ * ------------------------------------------------------------------ */
+
+test('the window mode falls back to foreground for anything that is not "background"', () => {
+  assert.deepEqual(RESTART_WINDOW_CHOICES, ['foreground', 'background']);
+  assert.equal(normalizeRestartWindow('background'), RESTART_WINDOW_BACKGROUND);
+  assert.equal(normalizeRestartWindow('foreground'), RESTART_WINDOW_FOREGROUND);
+  for (const value of [undefined, null, '', 'Background', 'BACKGROUND', ' window ', 1, true, {}]) {
+    assert.equal(
+      normalizeRestartWindow(value),
+      RESTART_WINDOW_FOREGROUND,
+      `an illegal value (${String(value)}) must fall back instead of throwing`,
+    );
+  }
+});
+
+test('the foreground launch command is byte for byte the command of 0.9.5', () => {
+  const legacy =
+    `cmd.exe /c ping -n ${DEFAULT_RELAUNCH_DELAY_SECONDS + 1} 127.0.0.1 >nul` +
+    ` & taskkill /IM "DeepSeek Harness.exe" /T /F & start "" powershell.exe -WindowStyle Hidden -NoProfile -Command Start-Process -FilePath '${APP_EXE}'`;
+
+  const byDefault = scheduleDetachedRestart({ appExePath: APP_EXE, dryRun: true });
+  const explicit = scheduleDetachedRestart({
+    appExePath: APP_EXE,
+    dryRun: true,
+    restartWindow: 'foreground',
+  });
+  const illegal = scheduleDetachedRestart({ appExePath: APP_EXE, dryRun: true, restartWindow: 'nonsense' });
+
+  for (const result of [byDefault, explicit, illegal]) {
+    assert.equal(result.command, legacy, 'the logical restart command never changes');
+    assert.equal(result.launchCommand, legacy, 'foreground hands exactly that command to the scheduler');
+    assert.equal(result.launcher, 'foreground');
+    assert.equal(result.window, 'foreground');
+    assert.equal(result.shimPath, null);
+    assert.equal(result.shimScript, null);
+    assert.equal(result.fallbackReason, null);
+    // The schedulers receive the SAME string they always received.
+    assert.equal(result.schtasksCreate[result.schtasksCreate.indexOf('/TR') + 1], legacy);
+  }
+  // The two modes agree on the command they start; only the launcher differs.
+  assert.equal(byDefault.command, explicit.command);
+});
+
+test('buildWindowShimScript runs the helper hidden, without waiting, and deletes itself', () => {
+  const command = `cmd.exe /c ping -n 3 127.0.0.1 >nul & taskkill /IM "DeepSeek Harness.exe" /T /F`;
+  const script = buildWindowShimScript(command);
+
+  assert.equal(script.includes('\r\n'), true, 'a .vbs shim uses CRLF lines');
+  assert.match(script, /Option Explicit/);
+  assert.match(script, /Set shell = CreateObject\("WScript\.Shell"\)/);
+  // THE TWO PROMISES: hidden window (0) and no waiting (False).
+  assert.match(script, /shell\.Run commandLine, 0, False/);
+  // The command line is carried as doubled-quote VBScript chunks, so a quote or
+  // an `&` in the helper needs no second escaping layer.
+  assert.ok(script.includes('cmd.exe /c ping -n 3 127.0.0.1 >nul & taskkill /IM ""DeepSeek Harness.exe"" /T /F'));
+  // VBScript lines are limited to 1023 characters: the command is chunked.
+  const longest = Math.max(...script.split('\r\n').map((line) => line.length));
+  assert.ok(longest < 900, `no VBScript line may get near the 1023 limit, longest was ${longest}`);
+  // THE SHIM CLEANS UP AFTER ITSELF.
+  assert.match(script, /fso\.DeleteFile WScript\.ScriptFullName, True/);
+  assert.equal(looksLikeWindowShim(script), true);
+  assert.equal(looksLikeWindowShim('MsgBox "hello"'), false);
+});
+
+test('background mode plans a flash-free launcher and writes the shim', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-window-shim-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const shimPath = path.join(dir, 'restart-7-window.vbs');
+
+  const planned = scheduleDetachedRestart({
+    appExePath: APP_EXE,
+    dryRun: true,
+    restartWindow: 'background',
+    shimPath,
+  });
+  assert.equal(planned.ok, true);
+  assert.equal(planned.window, 'background');
+  // THE FLASH IS GONE (user report, 2026-11-09): the host is started by the shim
+  // through Shell.Application.ShellExecute — `wscript.exe` is a GUI process, so no
+  // console exists at all. `powershell -WindowStyle Hidden` created one first.
+  assert.equal(planned.launcher, 'wscript', 'the shim is still the launcher (and the settings page reads this)');
+  assert.equal(planned.relaunch, 'shell-execute', 'and the HOST is started without any console');
+  assert.equal(planned.relaunchFallback, 'powershell-hidden', 'the fallback is NAMED, not merely implemented');
+  assert.equal(planned.launchCommand, 'wscript.exe //B "' + shimPath + '"');
+  assert.equal(planned.shimPath, shimPath);
+  assert.ok(String(planned.shimScript).includes(', 0, False'));
+  assert.equal(fs.existsSync(shimPath), false, 'a dry run writes no shim');
+  // The scheduled task runs the shim, never the visible helper command.
+  assert.equal(planned.schtasksCreate[planned.schtasksCreate.indexOf('/TR') + 1], planned.launchCommand);
+  assert.notEqual(planned.launchCommand, planned.command);
+
+  // THE RELAUNCH STEP INSIDE THE HELPER asks the shim, in `launch` mode.
+  assert.match(planned.command, new RegExp('wscript\\.exe //B "' + shimPath.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&') + '" launch'));
+  // …and the flashy shape is NOT in it any more: no PowerShell starts the host.
+  assert.equal(/powershell\.exe -WindowStyle Hidden -NoProfile -Command Start-Process/.test(planned.command), false,
+    'background mode must not start the host through powershell: ' + planned.command);
+
+  // Background mode without a place to write the shim falls back LOUDLY.
+  const noShim = scheduleDetachedRestart({ appExePath: APP_EXE, dryRun: true, restartWindow: 'background' });
+  assert.equal(noShim.launcher, 'powershell-hidden');
+  assert.equal(noShim.relaunch, 'powershell-hidden', 'no shim = the flashy path, and the report says so');
+  assert.match(String(noShim.fallbackReason), /shim/i);
+  assert.match(noShim.launchCommand, /powershell\.exe .* -WindowStyle Hidden -EncodedCommand /);
+});
+
+test('the shim carries the ShellExecute launch and its PowerShell fallback', () => {
+  const shim = buildWindowShimScript('cmd.exe /c echo hi', {
+    appExePath: APP_EXE,
+    watchScriptPath: 'C:/state/restart-7-watch.ps1',
+  });
+
+  // THE FLASH-FREE LAUNCH: Shell.Application.ShellExecute(File, Arguments, Directory, Verb, Show).
+  assert.match(shim, /Set app = CreateObject\("Shell\.Application"\)/);
+  assert.match(shim, /app\.ShellExecute launchTarget, "", "", "open", 1/);
+  assert.ok(shim.includes(APP_EXE), 'the shim knows which exe to start');
+  // THE REAL FALLBACK: when ShellExecute is refused the hidden PowerShell line runs.
+  assert.match(shim, /shell\.Run launchFallback, 0, False/);
+  assert.ok(shim.includes(`powershell.exe -WindowStyle Hidden -NoProfile -Command Start-Process -FilePath '${APP_EXE}'`));
+  // THE WATCHER IS STARTED THE SAME WAY: `start "" powershell …` flashed too.
+  assert.match(shim, /shell\.Run watchCommand, 0, False/);
+  assert.ok(
+    shim.includes('powershell.exe -WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -File ""C:/state/restart-7-watch.ps1""'),
+    'the watcher command is carried as a doubled-quote VBScript literal',
+  );
+  // Mode dispatch: no argument = run the helper; `launch` / `watch` = the two steps.
+  assert.match(shim, /If WScript\.Arguments\.length = 0 Then/);
+  assert.match(shim, /mode = LCase\(WScript\.Arguments\(0\)\)/);
+  assert.equal(looksLikeWindowShim(shim), true, 'the sweep must still recognise its own file');
+  // A shim built without an exe (unit call) must not pretend it can launch: the
+  // launch branch is GUARDED on a non-empty target, so the dead line is harmless.
+  const bare = buildWindowShimScript('cmd.exe /c echo hi');
+  assert.match(bare, /launchTarget = ""/, 'no exe means no launch target');
+  assert.match(bare, /If mode = "launch" And launchTarget <> "" Then/, 'and the launch branch is guarded');
+});
+
+test('the PowerShell fallback starts the SAME command line with no console window', () => {
+  const command = `cmd.exe /c ping -n 3 127.0.0.1 >nul & taskkill /IM "DeepSeek Harness.exe" /T /F`;
+  const line = buildHiddenPowerShellCommand(command);
+  assert.match(line, /^powershell\.exe -NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand /);
+  const encoded = line.slice(line.indexOf('-EncodedCommand ') + '-EncodedCommand '.length);
+  const decoded = Buffer.from(encoded, 'base64').toString('utf16le');
+  assert.ok(decoded.includes("$cmd = 'cmd.exe /c ping -n 3"), 'the command line is carried verbatim');
+  assert.match(decoded, /\$psi\.FileName = 'cmd\.exe'/);
+  assert.match(decoded, /\$psi\.Arguments = '\/c ' \+ \$cmd/);
+  assert.match(decoded, /\$psi\.CreateNoWindow = \$true/);
+  assert.match(decoded, /\$psi\.UseShellExecute = \$false/);
+  // ASCII only: the command line travels through WMI/schtasks unquoted.
+  assert.equal(/^[\x20-\x7e]+$/.test(line), true);
+});
+
+test('the helper sweep removes OLD .cmd and .vbs of ours, keeps foreign and fresh files, and counts them', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-helper-sweep-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const shim = buildWindowShimScript('cmd.exe /c echo hi');
+  // The real gate helper text (what a restart actually leaves behind).
+  const helper = buildGateScript({
+    appExePath: APP_EXE,
+    gateUrl: 'http://127.0.0.1:51004/__dsh_autorestart/health?gate=1',
+  });
+  const files = {
+    // OURS, old: the 351-file pile the real machine had.
+    'restart-546.cmd': helper,
+    'restart-545.cmd': helper,
+    'restart-3-window.vbs': shim,
+    // A .cmd with our name but NOT our content: a user's file — kept.
+    'restart-9.cmd': 'echo this is my own script\r\n',
+    // A .vbs that is not ours: kept.
+    'restart-9-window.vbs': 'MsgBox "my own script"',
+    // Neither name matches: never looked at.
+    'restart-4-watch.ps1': WATCH_SCRIPT_BODY,
+    'restart.cmd': helper,
+    'restart-x.cmd': helper,
+    'restart-5.cmd.bak': helper,
+    'notes.txt': 'hello',
+  };
+  for (const [name, body] of Object.entries(files)) fs.writeFileSync(path.join(dir, name), body, 'utf8');
+  const old = new Date(Date.now() - 10 * 60 * 1000);
+  for (const name of Object.keys(files)) fs.utimesSync(path.join(dir, name), old, old);
+
+  const result = sweepRestartHelpers(dir);
+  assert.deepEqual(result.removed.sort(), ['restart-3-window.vbs', 'restart-545.cmd', 'restart-546.cmd']);
+  assert.deepEqual(result.removedCmd.sort(), ['restart-545.cmd', 'restart-546.cmd'], 'the gate helpers go');
+  assert.deepEqual(result.removedVbs, ['restart-3-window.vbs'], 'the shim goes too');
+  assert.deepEqual(result.kept.sort(), ['restart-9-window.vbs', 'restart-9.cmd'], 'foreign content is never touched');
+  assert.equal(result.scanned, 5, 'only the five matching names were even looked at');
+  assert.equal(result.failed, 0);
+  assert.equal(result.error, null);
+  // The files are really gone; nothing else was touched.
+  assert.equal(fs.existsSync(path.join(dir, 'restart-546.cmd')), false);
+  assert.equal(fs.existsSync(path.join(dir, 'restart-545.cmd')), false);
+  assert.equal(fs.existsSync(path.join(dir, 'restart-3-window.vbs')), false);
+  for (const name of ['restart-9.cmd', 'restart-9-window.vbs', 'restart-4-watch.ps1', 'restart.cmd', 'restart-x.cmd', 'restart-5.cmd.bak', 'notes.txt']) {
+    assert.equal(fs.existsSync(path.join(dir, name)), true, name + ' must survive the sweep');
+  }
+
+  // A file written a moment ago is protected: cmd.exe may still be reading it.
+  fs.writeFileSync(path.join(dir, 'restart-547.cmd'), helper, 'utf8');
+  fs.writeFileSync(path.join(dir, 'restart-5-window.vbs'), shim, 'utf8');
+  const fresh = sweepRestartHelpers(dir);
+  assert.deepEqual(fresh.removed, [], 'nothing is removed inside the 60 s window');
+  assert.deepEqual(fresh.kept.sort(), ['restart-5-window.vbs', 'restart-547.cmd', 'restart-9-window.vbs', 'restart-9.cmd']);
+  assert.equal(fresh.scanned, 4);
+
+  // The name patterns are strict, and the old export sweeps BOTH kinds too
+  // (it used to sweep only the .vbs).
+  assert.equal(HELPER_SCRIPT_PATTERN.test('restart-546.cmd'), true);
+  assert.equal(HELPER_SCRIPT_PATTERN.test('restart-546-window.vbs'), false);
+  assert.equal(HELPER_SCRIPT_PATTERN.test('restart-546.cmd.bak'), false);
+  assert.equal(WINDOW_SHIM_PATTERN.test('restart-546-window.vbs'), true);
+  assert.equal(looksLikeGateHelper(helper), true);
+  assert.equal(looksLikeGateHelper('echo hi'), false);
+  fs.utimesSync(path.join(dir, 'restart-547.cmd'), old, old);
+  fs.utimesSync(path.join(dir, 'restart-5-window.vbs'), old, old);
+  const viaOldName = sweepWindowShims(dir);
+  assert.deepEqual(
+    viaOldName.removed.sort(),
+    ['restart-5-window.vbs', 'restart-547.cmd'],
+    'the old name must not silently go back to sweeping only the .vbs',
+  );
+});
+
+test('a missing state directory is not an error for the helper sweep', () => {
+  const missing = sweepRestartHelpers(path.join(os.tmpdir(), 'dsh-no-such-dir-' + Date.now()));
+  assert.deepEqual(missing.removed, []);
+  assert.equal(missing.scanned, 0);
+  assert.equal(missing.error, null, 'a directory that does not exist yet is not a failure');
+  assert.deepEqual(sweepRestartHelpers('').removed, []);
+});
+
+test('the background mode is recorded in the watcher report, foreground keeps its bytes', () => {
+  const base = {
+    healthUrl: 'http://127.0.0.1:51004/__dsh_autorestart/health',
+    portFile: 'C:/state/access.json',
+    outcomeFile: 'C:/state/restart-outcome.json',
+    backupDir: 'C:/state/backups/old',
+    profileDir: 'C:/Users/x/.dsh/profiles/desktop',
+    reportPath: 'C:/state/last-rollback.json',
+    lockFile: 'C:/state/rollback.lock',
+  };
+  const foreground = buildWatchScript(base);
+  const background = buildWatchScript({
+    ...base,
+    windowMode: 'background',
+    launcher: 'wscript',
+    launchFallback: '',
+    shimPath: 'C:/state/restart-7-window.vbs',
+  });
+  assert.equal(foreground.includes('$launchLauncher'), false, 'foreground keeps the old script verbatim');
+  assert.equal(background.includes("$launchLauncher = 'wscript'"), true);
+  assert.match(background, /; window = \$launchWindow; launcher = \$launchLauncher/);
+  assert.ok(background.includes("$launchShim = 'C:/state/restart-7-window.vbs'"));
 });

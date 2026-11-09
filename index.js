@@ -212,6 +212,7 @@ import {
   runCommandNow,
   scheduleDetachedRestart,
   sweepLegacyWatcherScripts,
+  sweepRestartHelpers,
   writeTextFileAtomic,
 } from './lib/restart.js'
 import { compareSemver } from './lib/semver.js'
@@ -430,7 +431,7 @@ function snapGraceChoice(value, fallback = DEFAULT_RESTART_GRACE_MS) {
  * `pluginVersion()`), but a bundled installation may not ship that file — so
  * the constant below is the last resort. A test keeps the two in sync.
  */
-const PLUGIN_VERSION_FALLBACK = '0.9.4'
+const PLUGIN_VERSION_FALLBACK = '0.9.5'
 
 /**
  * The version of the graceful-shutdown FEATURE, not the version of the package.
@@ -683,6 +684,19 @@ function buildConfigSchema() {
         .description('How the host is restarted: app relaunches the desktop app, command runs restartCommand.'),
       restartCommand: schemastery.string().default('')
         .description('Shell command used when restartMode is "command"; empty means there is no custom command.'),
+      // HOW THE RESTART HELPER IS STARTED (user decision, 2026-11-09): the
+      // helper `.cmd` is a console program, so its window is visible while the
+      // grace delay runs. `background` starts the SAME helper through a
+      // VBScript shim (`wscript.exe //B`, `Run …, 0, False`): no window at all
+      // and no focus steal, which matters when a full-screen app is running.
+      // The default is the foreground behaviour this plugin always had.
+      restartWindow: schemastery.union(['foreground', 'background']).default('foreground')
+        .description('How the restart helper is started: foreground = the visible console window of the helper (the default, unchanged), background = a hidden window that never takes the focus (VBScript shim; falls back to a hidden PowerShell and says so in the report).'),
+      // NO WINDOW-STYLE OPTION FOR THE RELAUNCHED HOST (measured, 2026-11-09):
+      // `-WindowStyle Minimized` really is on the command line, but DSH is an
+      // Electron app and decides for itself how its window shows up — on the
+      // real machine it came up in front anyway, and the host has no window flag
+      // of its own. A switch that does nothing is not shipped.
       relaunchDelaySeconds: schemastery.number().min(0).default(2)
         .description('Seconds between the kill of the old host and the relaunch of the new one.'),
       // quiet window that must pass after the last conversation activity
@@ -805,6 +819,8 @@ const DEFAULTS = {
   forceRestartWhenBusy: false,
   restartMode: 'app',
   restartCommand: '',
+  // The restart helper is started the way it always was: a visible window.
+  restartWindow: 'foreground',
   relaunchDelaySeconds: 2,
   settleMs: 2000,
   restartGraceMs: DEFAULT_RESTART_GRACE_MS,
@@ -868,6 +884,10 @@ function normalizeConfig(raw) {
   }
   if (config.deferPolicy !== 'auto' && config.deferPolicy !== 'wait') config.deferPolicy = 'auto'
   if (config.restartMode !== 'app' && config.restartMode !== 'command') config.restartMode = 'app'
+  // THE WINDOW MODE FALLS BACK, IT NEVER THROWS (user decision, 2026-11-09):
+  // anything that is not exactly `background` is the foreground behaviour, so
+  // a hand-edited row cannot change how a restart is launched by accident.
+  config.restartWindow = config.restartWindow === 'background' ? 'background' : 'foreground'
   const watchDelay = Number(config.watchDelayMs)
   config.watchDelayMs = Number.isFinite(watchDelay) && watchDelay >= 0 ? Math.trunc(watchDelay) : 8000
   const maxBackups = Number(config.maxBackups)
@@ -1541,6 +1561,7 @@ function readInstallChoice(stateDir) {
         ? parsed.sleepCountdownSeconds
         : null,
       restartGraceMs: typeof parsed.restartGraceMs === 'number' ? parsed.restartGraceMs : null,
+      restartWindow: typeof parsed.restartWindow === 'string' ? parsed.restartWindow : null,
       askedForPluginVersion: typeof parsed.askedForPluginVersion === 'string'
         ? parsed.askedForPluginVersion
         : null,
@@ -1568,6 +1589,7 @@ function writeInstallChoice(stateDir, values) {
     showSleepButton: null,
     sleepCountdownSeconds: null,
     restartGraceMs: null,
+    restartWindow: null,
     askedForPluginVersion: null,
   }
   const payload = {
@@ -1580,6 +1602,9 @@ function writeInstallChoice(stateDir, values) {
     restartGraceMs: typeof values.restartGraceMs === 'number'
       ? values.restartGraceMs
       : current.restartGraceMs,
+    restartWindow: typeof values.restartWindow === 'string'
+      ? values.restartWindow
+      : current.restartWindow,
     askedForPluginVersion: typeof values.askedForPluginVersion === 'string'
       ? values.askedForPluginVersion
       : current.askedForPluginVersion,
@@ -4433,9 +4458,28 @@ const titleOfSummary = (item) => {
     return restartBusyTimer
   }
 
-  const markRestartStage = (phase, { blocked = 0, now = Date.now(), reason = null, snapshotBytes } = {}) => {
+  /**
+   * Record the stage AND, for the backup stages, WHAT THIS BACKUP COVERS.
+   *
+   * THE BUG THIS FIXES (user report, 2026-11-09): the overlay decided the scope
+   * from the `+plugins` suffix inside `reason` — and no stage of a real restart
+   * ever carried it, so «备份中…» and «没有变化，跳过备份» fell back to the
+   * configuration-only wording even with `backupIncludePlugins: true`. The scope
+   * travels as its OWN boolean now; the suffix is only left for a reader of a state
+   * written by 0.9.4 and older.
+   *
+   * `includePlugins` is only written when the caller states it: no stage invents
+   * a scope it does not know (undefined = "carry whatever the record has").
+   *
+   * @param {string} phase
+   * @param {{ blocked?: number, now?: number, reason?: string|null, snapshotBytes?: number|null, includePlugins?: boolean }} [options]
+   */
+  const markRestartStage = (phase, { blocked = 0, now = Date.now(), reason = null, snapshotBytes, includePlugins } = {}) => {
     if (!RESTART_PHASES.includes(phase)) return null
-    const record = setRestartPhase(state, { phase, blocked, now, reason, snapshotBytes })
+    // The scope goes INTO the checkpoint layer (2026-11-09): that record is what
+    // every surface reads, and a field written next to it instead of inside it
+    // was dropped the moment the record was rebuilt.
+    const record = setRestartPhase(state, { phase, blocked, now, reason, snapshotBytes, includePlugins })
     persist()
     return record
   }
@@ -4546,6 +4590,8 @@ const titleOfSummary = (item) => {
   let lastProgressPersist = 0
   const recordSnapshotProgress = (progress) => {
     const now = Date.now()
+    // `setRestartProgress` carries `includePlugins` itself now (2026-11-09), so
+    // the copy stage keeps the scope without a second, easy-to-forget copy here.
     const record = setRestartProgress(state, { ...progress, now })
     if (now - lastProgressPersist >= 250) {
       lastProgressPersist = now
@@ -4799,7 +4845,7 @@ const titleOfSummary = (item) => {
         return 0
       }
     })()
-    return describeRestartPhase({
+    const info = describeRestartPhase({
       phase: record && typeof record === 'object' ? record.phase : 'idle',
       startedAt: record && typeof record === 'object' ? record.startedAt : null,
       at: record && typeof record === 'object' ? record.at : null,
@@ -4813,6 +4859,16 @@ const titleOfSummary = (item) => {
       reason: record && typeof record === 'object' ? record.reason : null,
       now: Date.now(),
     })
+    // WHAT THIS BACKUP COVERS, as its own field (2026-11-09): the overlay must
+    // not have to read the scope out of a `+plugins` string suffix — no stage of a
+    // real restart writes one any more. `null` means "the record does not know", and
+    // it travels as null rather than as a missing key so a reader can tell it from
+    // "this Host is too old to have the field at all".
+    if (record !== null && typeof record === 'object'
+      && (typeof record.includePlugins === 'boolean' || record.includePlugins === null)) {
+      info.includePlugins = record.includePlugins
+    }
+    return info
   }
 
   /**
@@ -5708,24 +5764,81 @@ const titleOfSummary = (item) => {
   }
   const writeRestartReport = (details) => {
     const file = path.join(stateDirOf(), RESTART_REPORT_NAME)
+    // A LAUNCH RECORD IS NOT A FAILURE (user decision, 2026-11-09): the
+    // background mode is silent by design, so which launcher ran (and whether
+    // the shim cleaned up after itself) is written into the SAME report file —
+    // WITHOUT an `ok` key, so `lastRollback` (which only speaks for
+    // `ok === false`) never mistakes it for a failed restart. An existing
+    // failure report is kept: only `launch` is attached to it.
+    const launch = details && typeof details.launch === 'object' && details.launch !== null
+      ? details.launch
+      : null
     try {
-      fs.writeFileSync(file, JSON.stringify({
-        ok: false,
-        at: new Date().toISOString(),
-        waitedMs: 0,
-        rolledBack: details.rolledBack === true,
-        rollbackError: details.rolledBack === true ? null : details.reason,
-        reason: details.reason,
-        backupDir: details.backupDir ?? null,
-        restored: Array.isArray(details.restored) ? details.restored : [],
-        // The plugin restores the files; it never starts a second host.
-        appStarted: false,
-      }, null, 2), 'utf8')
+      let payload
+      if (launch === null) {
+        payload = {
+          ok: false,
+          at: new Date().toISOString(),
+          waitedMs: 0,
+          rolledBack: details.rolledBack === true,
+          rollbackError: details.rolledBack === true ? null : details.reason,
+          reason: details.reason,
+          backupDir: details.backupDir ?? null,
+          restored: Array.isArray(details.restored) ? details.restored : [],
+          // The plugin restores the files; it never starts a second host.
+          appStarted: false,
+        }
+      } else {
+        let existing = {}
+        try {
+          let text = fs.readFileSync(file, 'utf8')
+          if (text.charCodeAt(0) === 0xfeff) text = text.slice(1)
+          const parsed = JSON.parse(text)
+          if (parsed && typeof parsed === 'object') existing = parsed
+        } catch {
+          existing = {}
+        }
+        payload = { ...existing, at: new Date().toISOString(), launch }
+      }
+      fs.writeFileSync(file, JSON.stringify(payload, null, 2), 'utf8')
       return true
     } catch (error) {
       log.warn('could not write the rollback report:', String(error))
       return false
     }
+  }
+
+  /**
+   * Record HOW the last restart was launched (background mode only).
+   *
+   * The background mode creates no window, so the user cannot see the helper at
+   * all. This record is the only way to answer "did it use wscript, or did it
+   * have to fall back to the hidden PowerShell?" afterwards — it is written into
+   * the report file the interface already reads.
+   *
+   * @param {object|null} result the `scheduleDetachedRestart` answer
+   * @returns {boolean} whether a record was written
+   */
+  const recordLaunchOutcome = (result) => {
+    if (!result || typeof result !== 'object') return false
+    const text = (value) => (typeof value === 'string' && value !== '' ? value : null)
+    return writeRestartReport({
+      launch: {
+        window: text(result.window) || 'background',
+        launcher: text(result.launcher) || 'unknown',
+        // THE FLASH QUESTION, ANSWERED IN THE REPORT (2026-11-09): `relaunch` says
+        // whether the host itself was started by ShellExecute (no console at all)
+        // or by the hidden PowerShell line that flashes one; `relaunchFallback` is
+        // what the shim falls back to when ShellExecute is refused.
+        relaunch: text(result.relaunch),
+        relaunchFallback: text(result.relaunchFallback),
+        method: text(result.method),
+        fallbackReason: text(result.fallbackReason),
+        launcherError: text(result.error),
+        shim: text(result.shimPath),
+        ok: result.ok === true,
+      },
+    })
   }
 
   /**
@@ -6240,9 +6353,11 @@ const titleOfSummary = (item) => {
         const compareIncludePlugins = config.backupIncludePlugins !== false
         let comparison = { state: 'unusable', dir: null, reason: 'no-profile' }
         if (compareDir !== null) {
-          markRestartStage('comparing', {
-            reason: compareIncludePlugins === true ? 'config+plugins' : 'config',
-          })
+          // NO STAGE FOR THE COMPARISON (user decision, 2026-11-09): 比对瞬时完成
+          // （读目录树指纹，毫秒级），它不单独占一个阶段——这里原本调
+          // markRestartStage('comparing', …)，而 'comparing' 从来不在 RESTART_PHASES
+          // 里，于是那次调用一直被 setRestartPhase 拒绝（返回 null、什么都不写），
+          // 前端那张「正在比对…」卡片永远不可能出现。整条死链路已删除。
           noteBranch('comparing', compareIncludePlugins === true ? 'config+plugins' : 'config')
           try {
             comparison = findUnchangedBackup(compareDir, backupsDirFor(stateDir), {
@@ -6288,6 +6403,8 @@ const titleOfSummary = (item) => {
         } else {
         markRestartStage('snapshotting', {
           reason: comparison.state === 'unusable' ? 'compare unusable' : 'changed',
+          // The copy keeps the scope the comparison just measured.
+          includePlugins: compareIncludePlugins,
         })
         try {
           snapshot = await runSnapshot('changed')
@@ -6793,6 +6910,9 @@ const titleOfSummary = (item) => {
             // The watcher removes the helper scripts when it ends.
             selfCleanPaths: [watchScriptPath, gateScriptPath].filter(Boolean),
           })
+        const shimPath = config.restartWindow === 'background'
+          ? path.join(stateDir, 'restart-' + state.generation + '-window.vbs')
+          : null
         const result = scheduleDetachedFn({
           appExePath: env.appExePath,
           relaunchDelaySeconds: config.relaunchDelaySeconds,
@@ -6801,8 +6921,17 @@ const titleOfSummary = (item) => {
           watchScriptPath,
           watchScript,
           cookieClearCommand: buildCookieClearCommand(),
+          restartWindow: config.restartWindow,
+          shimPath,
         })
         log.warn('scheduled detached restart:', result)
+        // A BACKGROUND RESTART IS INVISIBLE BY DESIGN, SO IT STILL LEAVES A
+        // TRACE (user decision, 2026-11-09): which launcher really ran, whether
+        // the shim had to be replaced by the PowerShell fallback, and what
+        // happened to the shim. It goes into the report file the interface reads.
+        if (config.restartWindow === 'background') {
+          recordLaunchOutcome(result)
+        }
         if (!result || result.ok !== true) {
           deferRestartStage((result && result.error) || 'detached restart refused')
           rollbackRestart((result && result.error) || 'detached restart refused')
@@ -7109,6 +7238,12 @@ const titleOfSummary = (item) => {
       wanted.restartGraceMs = changes.restartGraceMs
       fallback.restartGraceMs = changes.restartGraceMs
     }
+    // THE WINDOW MODE: `restartWindow` is a plain string both in the profile row
+    // and in the degraded fallback file, so the same value is written twice.
+    if (typeof changes.restartWindow === 'string') {
+      wanted.restartWindow = changes.restartWindow
+      fallback.restartWindow = changes.restartWindow
+    }
     // HOW MANY COPIES TO KEEP (2026-11-02). The range is validated by the route
     // and by `validateBackupLimit`; the value that reaches here is already a
     // whole number inside the range, and an out-of-range value is refused with a
@@ -7408,6 +7543,9 @@ const titleOfSummary = (item) => {
         snapshotBytes: info.snapshotBytes,
         // Why this stage ("deferred: …" = the restart went back to waiting).
         reason: info.reason,
+        // WHAT THIS BACKUP COVERS (2026-11-09): true/false when the Host knows,
+        // null when it does not — the client then falls back to the old suffix.
+        includePlugins: typeof info.includePlugins === 'boolean' ? info.includePlugins : null,
         progress: info.progress === null
           ? null
           : { files: info.progress.files, bytes: info.progress.bytes, total: info.progress.total, percent: info.progress.percent, ageMs: info.progress.ageMs },
@@ -7464,6 +7602,51 @@ const titleOfSummary = (item) => {
         ),
         crashLog: typeof report.crashLog === 'string' ? report.crashLog : null,
         crashTail: tail.length > 4000 ? tail.slice(-4000) : tail,
+      }
+    },
+    /**
+     * HOW THE LAST RESTART WAS LAUNCHED (user decision, 2026-11-09), or null.
+     *
+     * Background mode produces no window at all, so this is the only place the
+     * user can see which launcher really ran: `wscript` (the shim: no window and
+     * no focus steal), `powershell-hidden` (the recorded fallback for a machine
+     * whose policy forbids Windows Script Host — it may flash a window) or
+     * `foreground`. `shimLeftBehind` is measured NOW, not claimed: the shim
+     * deletes itself, and a file that is still there is named here.
+     */
+    lastLaunch() {
+      const report = readRollbackReport(path.dirname(stateFile))
+      const launch = report && typeof report.launch === 'object' && report.launch !== null
+        ? report.launch
+        : null
+      if (launch === null) return null
+      const text = (value) => (typeof value === 'string' && value !== '' ? value : null)
+      const shim = text(launch.shim)
+      let shimLeftBehind = false
+      if (shim !== null) {
+        try {
+          shimLeftBehind = fs.existsSync(shim)
+        } catch {
+          shimLeftBehind = false
+        }
+      }
+      return {
+        at: text(report.at),
+        window: text(launch.window),
+        launcher: text(launch.launcher),
+        // HOW THE HOST ITSELF WAS STARTED (2026-11-09): `shell-execute` creates no
+        // console at all, `powershell-hidden` is the shape that FLASHES a small
+        // window (`powershell -WindowStyle Hidden` makes its console first and
+        // hides it afterwards). `relaunchFallback` names what the shim drops back
+        // to when ShellExecute is refused, so "did the flashy path run?" is
+        // answerable without reading any code.
+        relaunch: text(launch.relaunch),
+        relaunchFallback: text(launch.relaunchFallback),
+        method: text(launch.method),
+        fallbackReason: text(launch.fallbackReason),
+        launcherError: text(launch.launcherError),
+        shim,
+        shimLeftBehind,
       }
     },
     /**
@@ -11503,8 +11686,9 @@ function buildChoiceRoute(ctx, runtime, config) {
         const hasShow = Object.prototype.hasOwnProperty.call(body, 'showSleepButton')
         const hasSeconds = Object.prototype.hasOwnProperty.call(body, 'sleepCountdownSeconds')
         const hasGrace = Object.prototype.hasOwnProperty.call(body, 'restartGraceMs')
+        const hasWindow = Object.prototype.hasOwnProperty.call(body, 'restartWindow')
         const hasAskedVersion = Object.prototype.hasOwnProperty.call(body, 'askedForPluginVersion')
-        if (!hasInclude && !hasBackupInclude && !hasBackup && !hasShow && !hasSeconds && !hasGrace && !hasAskedVersion) {
+        if (!hasInclude && !hasBackupInclude && !hasBackup && !hasShow && !hasSeconds && !hasGrace && !hasWindow && !hasAskedVersion) {
           // No key was asked for: there is nothing to persist.
           res.statusCode = 400
           res.setHeader('content-type', 'application/json; charset=utf-8')
@@ -11512,7 +11696,7 @@ function buildChoiceRoute(ctx, runtime, config) {
           res.end(JSON.stringify({
             ok: false,
             error: 'no-choice',
-            instruction: 'Send { "includePlugins": true | false } and/or { "backupIncludePlugins": true | false } and/or { "backupOnRestart": true | false } and/or { "showSleepButton": true | false } and/or { "sleepCountdownSeconds": 0 | 10 | 20 | 30 | 60 } and/or { "restartGraceMs": 0 | 5000 | 10000 | 20000 | 30000 | 60000 } and/or { "askedForPluginVersion": "1.2.3" }.',
+            instruction: 'Send { "includePlugins": true | false } and/or { "backupIncludePlugins": true | false } and/or { "backupOnRestart": true | false } and/or { "showSleepButton": true | false } and/or { "sleepCountdownSeconds": 0 | 10 | 20 | 30 | 60 } and/or { "restartGraceMs": 0 | 5000 | 10000 | 20000 | 30000 | 60000 } and/or { "restartWindow": "foreground" | "background" } and/or { "askedForPluginVersion": "1.2.3" }.',
           }))
           return
         }
@@ -11584,6 +11768,17 @@ function buildChoiceRoute(ctx, runtime, config) {
           }))
           return
         }
+        if (hasWindow && body.restartWindow !== 'foreground' && body.restartWindow !== 'background') {
+          res.statusCode = 400
+          res.setHeader('content-type', 'application/json; charset=utf-8')
+          res.setHeader('cache-control', 'no-store')
+          res.end(JSON.stringify({
+            ok: false,
+            error: 'restartWindow-must-be-offered',
+            instruction: 'Send { "restartWindow": "foreground" | "background" }.',
+          }))
+          return
+        }
         if (hasAskedVersion && typeof body.askedForPluginVersion !== 'string') {
           res.statusCode = 400
           res.setHeader('content-type', 'application/json; charset=utf-8')
@@ -11604,6 +11799,7 @@ function buildChoiceRoute(ctx, runtime, config) {
         if (hasShow) changes.showSleepButton = body.showSleepButton === true
         if (hasSeconds) changes.sleepCountdownSeconds = body.sleepCountdownSeconds
         if (hasGrace) changes.restartGraceMs = body.restartGraceMs
+        if (hasWindow) changes.restartWindow = body.restartWindow
         const result = await runtime.applyConfigChoice(changes)
         // THE PLUGIN VERSION THE USER WAS ASKED FOR. It lives in
         // install-choice.json (where readInstallChoice() looks for it), so it is
@@ -11638,6 +11834,7 @@ function buildChoiceRoute(ctx, runtime, config) {
         if (hasShow) answer.showSleepButton = body.showSleepButton === true
         if (hasSeconds) answer.sleepCountdownSeconds = body.sleepCountdownSeconds
         if (hasGrace) answer.restartGraceMs = body.restartGraceMs
+        if (hasWindow) answer.restartWindow = body.restartWindow
         if (hasAskedVersion) answer.askedForPluginVersion = body.askedForPluginVersion
         res.statusCode = 200
         res.setHeader('content-type', 'application/json; charset=utf-8')
@@ -12168,6 +12365,17 @@ function sleepStatusPayload(sleep, config, runtime) {
     // page can show it. The shutdown itself has NO invisible reserve: the
     // visible countdown is the wait before the machine goes off.
     restartGraceMs: config.restartGraceMs,
+    // HOW THE RESTART HELPER IS STARTED (user decision, 2026-11-09): the
+    // settings page shows the dropdown from `restartWindow`, and
+    // `lastLaunch` names the launcher the LAST restart really used — a
+    // background run whose shim was refused (fallback) is visible here, which
+    // is the price the invisible mode has to pay.
+    restartWindow: config.restartWindow === 'background' ? 'background' : 'foreground',
+    // THE LAUNCH RECORD OF THE LAST RESTART (`launch` in the report): which
+    // LAUNCHER really ran, plus whether its shim was left behind.
+    lastLaunch: runtime && typeof runtime.lastLaunch === 'function'
+      ? runtime.lastLaunch()
+      : null,
     quietForMs: runtime && typeof runtime.quietForMs === 'function' ? runtime.quietForMs() : 0,
     // When the shutdown was armed: the intent has to survive a restart, so the
     // time is reported for the troubleshooting.
@@ -13006,6 +13214,59 @@ export function apply(ctx, rawConfig, options = {}) {
     }
   }
   runtime.watcherHygiene = watcherHygiene
+  // THE HELPER FILES OF EARLIER RESTARTS (2026-11-09). TWO kinds are swept:
+  // the window shim of a background restart (`restart-<n>-window.vbs`, which
+  // deletes itself but may fail) and the gate helper of EVERY restart
+  // (`restart-<n>.cmd` — MEASURED: 351 of them, 373 KB, 10-22 .. 11-09, one per
+  // restart and never removed). Both are residue: a helper of an older
+  // generation can never run again, because its watcher is gone.
+  //
+  // The numbers and any failure go into the restart report AND into the state
+  // (`runtime.shimHygiene`), because a rescue path that deletes files silently
+  // is a worse bug than a leftover.
+  let shimHygiene = null
+  try {
+    shimHygiene = sweepRestartHelpers(path.dirname(String(runtime.stateFile ?? '')))
+  } catch (error) {
+    shimHygiene = {
+      removed: [],
+      kept: [],
+      scanned: 0,
+      removedCmd: [],
+      removedVbs: [],
+      failed: 0,
+      error: error && error.message ? String(error.message) : String(error),
+    }
+  }
+  runtime.shimHygiene = shimHygiene
+  const sweptCount = Array.isArray(shimHygiene.removed) ? shimHygiene.removed.length : 0
+  if (sweptCount > 0 || shimHygiene.error) {
+    try {
+      const previous = readRollbackReport(path.dirname(String(runtime.stateFile ?? '')))
+      const previousLaunch = previous && typeof previous.launch === 'object' && previous.launch !== null
+        ? previous.launch
+        : null
+      const cmdCount = Array.isArray(shimHygiene.removedCmd) ? shimHygiene.removedCmd.length : 0
+      const vbsCount = Array.isArray(shimHygiene.removedVbs) ? shimHygiene.removedVbs.length : 0
+      const cleanupText = shimHygiene.error
+        ? 'removed ' + sweptCount + ' helper file(s) (' + cmdCount + ' .cmd, ' + vbsCount + ' .vbs), then failed: ' + String(shimHygiene.error)
+        : 'removed ' + sweptCount + ' helper file(s) left by earlier restarts (' + cmdCount + ' .cmd, ' + vbsCount + ' .vbs)'
+      if (previousLaunch !== null) {
+        writeRestartReport({ launch: { ...previousLaunch, shimCleanup: cleanupText } })
+      }
+      log.warn('the restart helper hygiene of this boot:', {
+        swept: sweptCount,
+        cmd: cmdCount,
+        vbs: vbsCount,
+        kept: shimHygiene.kept.length,
+        failed: shimHygiene.failed,
+        error: shimHygiene.error,
+        cleanupText,
+      })
+    } catch (error) {
+      log.warn('could not record the restart helper hygiene:', String(error))
+    }
+  }
   // THE BACKUP DIRECTORIES THAT NEVER FINISHED (2026-11-02). The existing
   // sweeper only ran from the first-install path (new boot + snapshots on), so
   // an ordinary restart cleaned nothing and a directory left by a backup that

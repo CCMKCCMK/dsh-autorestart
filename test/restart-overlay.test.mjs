@@ -12,10 +12,10 @@
  *
  *   1. the DETAIL moved to a CENTRED OVERLAY (320px, one short line):
  *      waiting = "等待会话空闲" + "还有 N 个会话",
- *      comparing = "正在比对配置和插件有没有变化…" (card ①, 2026-11-07),
  *      snapshotting = "配置有变化，正在备份，共 40 MB" and then
  *      "备份完成，将执行重启" — or "…没有变化，跳过备份，将执行重启"
- *      (no bar, no clock — user decision, 2026-11-07),
+ *      (no bar, no clock — user decision, 2026-11-07). There is no 「正在比对」
+ *      card: 比对瞬时完成，不单独占一个阶段 (user decision, 2026-11-09),
  *      restarting = "正在重启…", back = "已回来" for 1.5s and then gone;
  *   2. the composer row got SHORT again: one line, never a sentence, and the
  *      long text of the Host never appears there any more;
@@ -175,6 +175,9 @@ function statePayload({
   at = Date.now(),
   // WHY the stage is what it is ("deferred: …" = the restart was postponed).
   reason = null,
+  // WHAT THIS BACKUP COVERS, as the Host states it (2026-11-09). `null` = the
+  // Host does not say (an older Host), and the client falls back to `reason`.
+  includePlugins = null,
   // The number of conversations that hold the gate (the Host publishes it).
   busyCount = null,
 } = {}) {
@@ -201,6 +204,7 @@ function statePayload({
       // keeps it so a page that missed the copy can still report it).
       snapshotBytes,
       reason,
+      includePlugins,
       slow: null,
       cancellable: phase === 'waiting' || phase === 'snapshotting',
       cancelReason: null,
@@ -419,7 +423,7 @@ test('no restart at all: an idle host draws nothing, ever', async () => {
  * 2. The centred overlay: the backup, with the real numbers.
  * ------------------------------------------------------------------ */
 
-test('phase=snapshotting: the overlay says 「配置有变化，正在备份，共 40 MB」 — no bar, no percentage', async () => {
+test('phase=snapshotting with includePlugins: the overlay says 「配置和插件有变化，正在备份，共 40 MB」', async () => {
   const progress = {
     bytes: Math.round(12.3 * 1024 * 1024),
     total: 40 * 1024 * 1024,
@@ -427,17 +431,25 @@ test('phase=snapshotting: the overlay says 「配置有变化，正在备份，�
     files: 120,
     filesTotal: 400,
   }
-  const mounted = mountClient({ health: statePayload({ phase: 'snapshotting', progress }) })
+  // THE SCOPE COMES AS ITS OWN FIELD (2026-11-09, user report): the copy stage
+  // carries `includePlugins: true` and NO `+plugins` suffix in `reason` — that is
+  // exactly the real Host's shape, and it used to make this card say 「配置」.
+  const mounted = mountClient({
+    health: statePayload({ phase: 'snapshotting', progress, includePlugins: true }),
+  })
   const overlay = await mounted.settled('autorestart-restart-overlay')
 
   assert.ok(overlay, 'the overlay shows the backup')
   assert.equal(overlay.props['data-dsh-autorestart-restart-overlay-phase'], 'snapshotting')
   const copy = textOf(overlay)
   // THE TWO CARDS OF 2026-11-07: the copy card states what changed and the REAL
-  // total (formatOverlaySize keeps the unit, so 40 MB never degrades to 0). The
-  // stage carries no `+plugins` suffix here, so the configuration-only wording
-  // is the one on screen.
-  assert.match(copy, /配置有变化，正在备份，共 40 MB/, `the card states the total being copied: ${copy}`)
+  // total (formatOverlaySize keeps the unit, so 40 MB never degrades to 0).
+  assert.match(
+    copy,
+    /配置和插件有变化，正在备份，共 40 MB/,
+    `the plugins in the copy must be named: ${copy}`,
+  )
+  assert.doesNotMatch(copy, /^配置有变化/, `the plugins are in this copy: ${copy}`)
   // 「正在备份」 IS the copy card's own word now — but it must never share a line
   // with 「正在重启」: those are two different states of the restart.
   assert.match(copy, /正在备份/, `the copy card says what is running: ${copy}`)
@@ -450,6 +462,21 @@ test('phase=snapshotting: the overlay says 「配置有变化，正在备份，�
   assert.equal(findByAttribute(overlay, 'data-dsh-autorestart-restart-overlay-percent'), undefined, 'no percentage')
   assert.doesNotMatch(copy, /%/, `no percentage in the text: ${copy}`)
   assert.doesNotMatch(copy, /12\.3 MB/, `the running byte count is gone: ${copy}`)
+})
+
+test('phase=snapshotting with includePlugins=false: the copy card names the configuration only', async () => {
+  const progress = { bytes: 1024, total: 40 * 1024 * 1024, percent: 4, files: 3, filesTotal: 400 }
+  // THE OTHER HALF OF THE SAME RULE: an explicit `false` (backupIncludePlugins
+  // off) must keep the configuration-only wording — and it must not be reached
+  // by ACCIDENT any more, which is why this case states the field.
+  const mounted = mountClient({
+    health: statePayload({ phase: 'snapshotting', progress, includePlugins: false }),
+  })
+  const overlay = await mounted.settled('autorestart-restart-overlay')
+  assert.ok(overlay)
+  const copy = textOf(overlay)
+  assert.match(copy, /配置有变化，正在备份，共 40 MB/, `the configuration-only wording: ${copy}`)
+  assert.doesNotMatch(copy, /插件/, `plugins are not in this copy: ${copy}`)
 })
 
 test('phase=snapshotting: before the first measurement no number is invented', async () => {

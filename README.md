@@ -9,7 +9,7 @@ Restart DeepSeek Harness without losing the work that is currently running.
 
 Chinese version: [README.zh.md](docs/README.zh.md)
 
-Current version: **0.9.4**
+Current version: **0.9.5**
 
 ## What it does
 
@@ -112,6 +112,51 @@ It holds the **configuration files** (`package.json`, `cordis.patch.yml`, `pnpm-
 macOS, a remote SSH session without a graphical session and containers are **out of scope** — not
 tested, and not supported. The per-capability matrix is in
 [docs/platform-matrix.md](docs/platform-matrix.md).
+
+### The floating overlay in hosted `dsh web` — read this before expecting it
+
+The restart / sleep / plugin-failure surfaces are drawn in the **client** slot `shell.overlay` —
+"a frame-wide floating layer, above every column and outside their scroll containers". Both facts
+below were checked against the shipped packages and a live client, not assumed:
+
+* The slot is declared by the shared workspace UI package
+  (`dsh-client-ui-workspace/lib/types/client/contract/slots.d.ts`), which is what the hosted web UI
+  mounts — so the slot itself is **not** desktop-only.
+* On the desktop client all three of our entries are registered and `active: true`:
+  `autorestart-plugin-failure` (order 9), `autorestart-restart-overlay` (order 55),
+  `autorestart-sleep-overlay` (order 60). Verified through the live client Slot inspection.
+
+**On hosted web the restart has fewer phases, and one of them does not exist at all.** Measured on
+a real instance (0.9.5, `restartMode: command`), sampling `/health?state=1` every 300 ms across a
+full restart — 121 frames:
+
+```
+waiting      17 frames (~4 s)
+DOWN         1 frame          old process gone
+restarting    1 frame
+DOWN         4 frames         process swap
+back          1 frame
+DOWN         3 frames
+```
+
+**There is no `snapshotting` frame.** On the desktop the backup happens in the old process before it
+quits, and that is what the overlay reports. Hosted web does it the other way round: the old process
+only goes `waiting → restarting`, and the backup is written by the **new** process at boot, surfaced
+as `firstInstallBackup`. So the "backing up, plugins included" sentence has **no phase to attach
+to** on the web — it is not hidden, it does not happen there.
+
+The backup itself is still real and still includes plugins on web — verified on the same run:
+
+```
+manifest.json  stamp: 2026-11-09T09-41-41-335Z  atLocal: 2026-11-09T17:41:41+08:00
+               includePlugins: true   profileDir: /home/fg/.dsh/profiles/web
+```
+
+**Treat the restart overlay as a desktop-client feature** and do not plan around seeing it in a
+browser. This is a property of "the page is not the host", not a defect fixable from the plugin
+side. The restart stays fully visible in the HTTP surface on both platforms —
+`GET /__dsh_autorestart/health?state=1` reports the live `restartPhase` and the finished
+`firstInstallBackup` — so a scripted check observes what a browser tab cannot.
 
 ## Install
 

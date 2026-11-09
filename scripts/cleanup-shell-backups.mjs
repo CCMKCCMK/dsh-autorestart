@@ -51,15 +51,36 @@ export const USAGE = [
 ].join('\n')
 
 /**
+ * Whether this process is a DRILL (or test) run.
+ *
+ * `DSH_AUTORESTART_DRILL` is the switch that unlocks the state-directory
+ * override below. It is honoured ONLY as the exact value `1`, compared after
+ * `trim()`: `0`, `true`, `yes`, an empty string and an unset variable all mean
+ * "not a drill". Nothing else is accepted, so ` 1 ` works but `true` does not.
+ *
+ * @returns {boolean}
+ */
+export function drillEnabled() {
+  const value = typeof process.env.DSH_AUTORESTART_DRILL === 'string'
+    ? process.env.DSH_AUTORESTART_DRILL.trim()
+    : ''
+  return value === '1'
+}
+
+/**
  * The state directory this run belongs to.
  *
- * `DSH_AUTORESTART_STATE_DIR` exists so a drill (or a test) can point the
- * cleanup at its own directory instead of the real installation — the same
- * override the cookie cleanup uses.
+ * DRILL/TEST-ONLY GATE: `DSH_AUTORESTART_STATE_DIR` is NOT a general-purpose
+ * redirect of the backups root (this script DELETES directories, so a value
+ * that could be set by any same-user process would be a way to point the delete
+ * at a tree of its choosing). It is honoured only while
+ * `DSH_AUTORESTART_DRILL=1` is set in the same environment - a drill or a test.
+ * Without that switch the run always lands in the plugin's own state directory.
  *
  * @returns {string}
  */
 export function stateDirOf() {
+  if (drillEnabled() !== true) return LOG_DIR
   const override = typeof process.env.DSH_AUTORESTART_STATE_DIR === 'string'
     ? process.env.DSH_AUTORESTART_STATE_DIR.trim()
     : ''

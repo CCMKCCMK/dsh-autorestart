@@ -269,24 +269,51 @@ test('⑯ while the copy runs: no bar, the title says 「配置有变化，正�
   assert.equal(api.dictionaries.zh['restart.overlay.changedUnknown'], '配置和插件有变化，正在备份', 'the fallback title')
   assert.equal(api.dictionaries.zh['restart.overlay.changedUnknownConfig'], '配置有变化，正在备份', 'and its configuration-only form')
 
-  // ①c THE COMPARISON CARD AND THE BRANCHES IT LEADS TO, verbatim (the copy the
-  // user confirmed on 2026-11-07).
-  assert.equal(api.dictionaries.zh['restart.overlay.comparing'], '正在比对配置和插件有没有变化…', 'card ① with plugins')
-  assert.equal(api.dictionaries.zh['restart.overlay.comparingConfig'], '正在比对配置有没有变化…', 'card ① configuration only')
-  assert.equal(api.dictionaries.en['restart.overlay.comparing'], 'Comparing configuration and plugins for changes…')
-  assert.equal(api.dictionaries.en['restart.overlay.comparingConfig'], 'Comparing configuration for changes…')
+  // ①c THE COPY'S BRANCHES, verbatim (the copy the user confirmed on 2026-11-07).
   assert.equal(api.dictionaries.zh['restart.overlay.skipped'], '配置和插件没有变化，跳过备份，将执行重启')
   assert.equal(api.dictionaries.zh['restart.overlay.skippedConfig'], '配置没有变化，跳过备份，将执行重启')
   assert.equal(api.dictionaries.zh['restart.overlay.compareUnusable'], '无法比对配置和插件，仍会备份')
   assert.equal(api.dictionaries.zh['restart.overlay.compareUnusableConfig'], '无法比对配置，仍会备份')
   assert.equal(api.dictionaries.zh['restart.overlay.backupFailed'], '备份失败，重启继续进行')
   assert.equal(api.dictionaries.en['restart.overlay.backupFailed'], 'Backup failed, the restart continues')
+  // NO 「正在比对」 CARD (user decision, 2026-11-09): 比对瞬时完成，不单独占一个阶段 —
+  // the Host never stored a `comparing` phase, so the wording and the branch are gone.
+  assert.equal(api.dictionaries.zh['restart.overlay.comparing'], undefined, 'no comparison wording left')
+  assert.equal(api.dictionaries.zh['restart.overlay.comparingConfig'], undefined)
+  assert.equal(api.dictionaries.en['restart.overlay.comparing'], undefined)
+  assert.equal(api.dictionaries.en['restart.overlay.comparingConfig'], undefined)
 
-  // ①d THE CARD'S STATE MACHINE follows those keys.
-  const comparing = api.restartBackupCard({ phase: 'comparing', reason: 'config+plugins' })
-  assert.equal(comparing.comparing, true, 'the comparison is card ①')
-  assert.equal(comparing.copying, false, 'and it is not a copy yet')
-  assert.equal(comparing.includePlugins, true, 'the scope travels in the reason')
+  // ①d THE CARD'S STATE MACHINE follows those keys — and it no longer has a
+  // comparison state at all.
+  const copyCard = api.restartBackupCard({ phase: 'snapshotting', reason: 'config+plugins' })
+  assert.equal(copyCard.copying, true, 'the copy is card ①')
+  assert.equal(copyCard.comparing, undefined, 'there is no comparison state any more')
+  assert.equal(copyCard.includePlugins, true, 'an OLD Host still states the scope inside the reason (fallback)')
+
+  // THE SCOPE IS ITS OWN FIELD NOW (2026-11-09, user report): the copy stage has
+  // no `+plugins` suffix — reading the scope from the suffix alone is what made
+  // 「配置有变化，正在备份」 show up while the plugins were in the copy.
+  const copyWithPlugins = api.restartBackupCard({
+    phase: 'snapshotting',
+    progress: { bytes: 1, total: 2 },
+    includePlugins: true,
+  })
+  assert.equal(copyWithPlugins.copying, true, 'the copy is running')
+  assert.equal(copyWithPlugins.includePlugins, true, 'the explicit field names the plugins, without any suffix')
+
+  const copyConfigOnly = api.restartBackupCard({
+    phase: 'snapshotting',
+    progress: { bytes: 1, total: 2 },
+    includePlugins: false,
+  })
+  assert.equal(copyConfigOnly.includePlugins, false, 'an explicit false keeps the configuration-only wording')
+
+  // The FIELD beats the suffix; the suffix is only there for a Host that has no
+  // field at all (0.9.4 and older).
+  const fieldWins = api.restartBackupCard({ phase: 'snapshotting', reason: 'changed', includePlugins: true })
+  assert.equal(fieldWins.includePlugins, true, 'the field is read first')
+  const suffixOnly = api.restartBackupCard({ phase: 'snapshotting', reason: 'changed' })
+  assert.equal(suffixOnly.includePlugins, false, 'no field and no suffix = configuration only')
 
   const skippedCard = api.restartBackupCard({ phase: 'restarting', reason: 'snapshot skipped: unchanged' })
   assert.equal(skippedCard.skipped, true, 'nothing was written: the card says so')
@@ -576,11 +603,11 @@ test('③ with backupOnRestart off the restart neither compares nor copies', asy
   assert.deepEqual(off.commands, ['restart-the-host'], 'the restart still happens')
   assert.deepEqual(copies(setup), [], 'and nothing was copied')
 
-  // NEITHER STAGE IS DRAWN: no comparison card, no copy card. The restart goes
-  // straight to 「正在重启…」 (the phase title it already had).
+  // NEITHER STAGE IS DRAWN: no comparison state (none exists any more) and no
+  // copy card. The restart goes straight to 「正在重启…」 (the phase title it
+  // already had).
   const stage = off.runtime.restartStageInfo()
-  assert.notEqual(stage.phase, 'comparing', 'there is nothing to compare: no comparison card')
-  assert.notEqual(stage.phase, 'snapshotting', 'and nothing is being copied either')
+  assert.notEqual(stage.phase, 'snapshotting', 'nothing is being copied')
   assert.equal(stage.phase, 'restarting', 'it goes straight to the restart')
 
   const verdict = off.runtime.lastRestartVerdict()
@@ -879,4 +906,46 @@ test('⑤ every restart names the branch it took', async (t) => {
   const thirdVerdict = third.runtime.lastRestartVerdict()
   assert.equal(thirdVerdict.branch, 'changed-backed-up', 'the edit is copied: ' + JSON.stringify(thirdVerdict.branch))
   assert.equal(thirdVerdict.branchWarning, null, 'and there is no contradiction to warn about')
+})
+
+/* ------------------------------------------------------------------ *
+ * ⑰ THE BACKUP SCOPE, THROUGH THE WHOLE CHAIN (2026-11-09).
+ *
+ * The overlay reads "does this backup include the plugins" from
+ * `restartPhase.includePlugins`. It was written from outside the record twice and
+ * dropped both times: `setRestartPhase` rebuilds the record from a white list, and
+ * `setRestartProgress` replaces it on every copy tick. This test walks the real
+ * runtime: mark → state → stage info → progress tick → stage change.
+ * ------------------------------------------------------------------ */
+
+test('⑰ the backup scope survives the stage chain: mark → state → stage info → progress', async (t) => {
+  const setup = fixture(t, 'scope')
+  const { runtime } = makeRuntime(setup)
+
+  // ① THE COPY STAGE states the scope, and the RECORD keeps it — that record is
+  //    what the overlay reads.
+  runtime.markRestartStage('snapshotting', { reason: 'changed', includePlugins: true })
+  assert.equal(runtime.state.restartPhase.phase, 'snapshotting')
+  assert.equal(runtime.state.restartPhase.includePlugins, true, 'the checkpoint record must keep the scope')
+  assert.equal(runtime.restartStageInfo().includePlugins, true, 'and the stage info must report it')
+
+  // ② A PROGRESS TICK REPLACES THE RECORD — the scope has to come through it.
+  runtime.recordSnapshotProgress({ files: 2, bytes: 1024, total: 2048, filesTotal: 4 })
+  assert.equal(runtime.state.restartPhase.phase, 'snapshotting', 'the tick still describes the copy')
+  assert.equal(runtime.state.restartPhase.includePlugins, true, 'a progress tick must not drop the scope')
+  assert.equal(runtime.restartStageInfo().includePlugins, true, 'nor may the stage info lose it')
+
+  // ③ A STAGE CHANGE INSIDE THE SAME RESTART carries it (undefined = carry).
+  runtime.markRestartStage('restarting', { reason: 'snapshot done' })
+  assert.equal(runtime.state.restartPhase.includePlugins, true, 'a stage change inside the restart carries it')
+
+  // ④ AN EXPLICIT false IS HONOURED — the configuration-only wording needs it.
+  runtime.markRestartStage('snapshotting', { reason: 'changed', includePlugins: false })
+  assert.equal(runtime.state.restartPhase.includePlugins, false)
+  assert.equal(runtime.restartStageInfo().includePlugins, false, 'an explicit false is reported as false')
+
+  // ⑤ NOTHING STATEMENT: a caller that says nothing leaves `null`, never a guess.
+  runtime.markRestartStage('waiting', { reason: 'deferred: conversation-active', includePlugins: null })
+  assert.equal(runtime.state.restartPhase.includePlugins, null, 'a stage nobody scoped reports null')
+  assert.equal(runtime.restartStageInfo().includePlugins, null)
 })

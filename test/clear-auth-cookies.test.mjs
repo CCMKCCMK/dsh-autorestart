@@ -41,8 +41,14 @@ import {
 } from '../lib/cookie-clear.js';
 import {
   clearCookies,
+  drillEnabled as cookieDrillEnabled,
   run as runCleanup,
+  stateDirOf as cookieStateDirOf,
 } from '../scripts/clear-dsh-auth-cookies.mjs';
+import {
+  drillEnabled as shellDrillEnabled,
+  stateDirOf as shellStateDirOf,
+} from '../scripts/cleanup-shell-backups.mjs';
 
 const pluginDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const scriptPath = path.join(pluginDir, 'scripts', 'clear-dsh-auth-cookies.mjs');
@@ -379,4 +385,140 @@ test('the cleanup script keeps the result name the plugin reads', () => {
   const text = fs.readFileSync(scriptPath, 'utf8');
   assert.ok(text.includes('last-cookie-clear.json'), 'the script must write the file the plugin reads');
   assert.ok(text.includes('DSH_AUTORESTART_STATE_DIR'), 'a drill must be able to redirect the state directory');
+});
+
+// ---------------------------------------------------------------------------
+// THE STATE-DIRECTORY OVERRIDE IS A DRILL-ONLY GATE (both scripts).
+//
+// `DSH_AUTORESTART_STATE_DIR` used to redirect the state directory
+// UNCONDITIONALLY, so any same-user process that set the variable could move
+// this plugin's report and log somewhere else. It is honoured only while
+// `DSH_AUTORESTART_DRILL=1` is set in the same environment, and the switch is
+// the exact digit `1` after `trim()`. The two scripts carry the same function on
+// purpose (they are independent modules), so every case runs against BOTH.
+// ---------------------------------------------------------------------------
+
+/** What both scripts fall back to: the plugin's own state directory. */
+const DEFAULT_STATE_DIR = path.join(os.homedir(), '.dsh', 'storages', 'dsh-autorestart');
+
+/** A directory a drill would point the run at (never created: only compared). */
+const DRILL_STATE_DIR = path.join(os.tmpdir(), 'dsh-autorestart-drill-state');
+
+/** The two scripts under test, named so a failure says which one broke. */
+const STATE_DIR_MODULES = [
+  {
+    name: 'scripts/clear-dsh-auth-cookies.mjs',
+    stateDirOf: cookieStateDirOf,
+    drillEnabled: cookieDrillEnabled,
+  },
+  {
+    name: 'scripts/cleanup-shell-backups.mjs',
+    stateDirOf: shellStateDirOf,
+    drillEnabled: shellDrillEnabled,
+  },
+];
+
+/**
+ * Run `fn` with exactly `vars` in `process.env`, then put back what was there.
+ *
+ * @param {Record<string, string|undefined>} vars
+ * @param {() => any} fn
+ */
+function withEnv(vars, fn) {
+  const names = ['DSH_AUTORESTART_STATE_DIR', 'DSH_AUTORESTART_DRILL'];
+  const saved = names.map((name) => [name, process.env[name]]);
+  try {
+    for (const name of names) delete process.env[name];
+    for (const [name, value] of Object.entries(vars)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    return fn();
+  } finally {
+    for (const [name, value] of saved) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+}
+
+test('only the state dir set: the override is ignored (both scripts)', () => {
+  for (const { name, stateDirOf } of STATE_DIR_MODULES) {
+    const dir = withEnv({ DSH_AUTORESTART_STATE_DIR: DRILL_STATE_DIR }, stateDirOf);
+    assert.equal(
+      dir,
+      DEFAULT_STATE_DIR,
+      name + ': setting the state dir alone must not move the run (a same-user process could do it)',
+    );
+  }
+});
+
+test('DRILL=1 and a state dir: the override is honoured (both scripts)', () => {
+  for (const { name, stateDirOf } of STATE_DIR_MODULES) {
+    const dir = withEnv(
+      { DSH_AUTORESTART_STATE_DIR: DRILL_STATE_DIR, DSH_AUTORESTART_DRILL: '1' },
+      stateDirOf,
+    );
+    assert.equal(dir, DRILL_STATE_DIR, name + ': a drill must be able to point the run at its own directory');
+  }
+});
+
+test('DRILL=0 and a state dir: the default directory wins (both scripts)', () => {
+  for (const { name, stateDirOf } of STATE_DIR_MODULES) {
+    const dir = withEnv(
+      { DSH_AUTORESTART_STATE_DIR: DRILL_STATE_DIR, DSH_AUTORESTART_DRILL: '0' },
+      stateDirOf,
+    );
+    assert.equal(dir, DEFAULT_STATE_DIR, name + ': only the exact value 1 turns the override on');
+  }
+});
+
+test('the drill switch is exact: true, yes, empty and padded values (both scripts)', () => {
+  for (const { name, stateDirOf, drillEnabled } of STATE_DIR_MODULES) {
+    for (const value of ['true', 'TRUE', 'yes', '', '   ', '01', '1.0']) {
+      const seen = withEnv(
+        { DSH_AUTORESTART_STATE_DIR: DRILL_STATE_DIR, DSH_AUTORESTART_DRILL: value },
+        () => ({ enabled: drillEnabled(), dir: stateDirOf() }),
+      );
+      assert.equal(seen.enabled, false, name + ': "' + value + '" must not count as a drill');
+      assert.equal(seen.dir, DEFAULT_STATE_DIR, name + ': "' + value + '" must not unlock the override');
+    }
+    const padded = withEnv(
+      { DSH_AUTORESTART_STATE_DIR: DRILL_STATE_DIR, DSH_AUTORESTART_DRILL: ' 1 ' },
+      stateDirOf,
+    );
+    assert.equal(padded, DRILL_STATE_DIR, name + ': the switch is compared after trim()');
+  }
+});
+
+test('a drill without a state dir still lands in the default directory (both scripts)', () => {
+  for (const { name, stateDirOf } of STATE_DIR_MODULES) {
+    assert.equal(
+      withEnv({ DSH_AUTORESTART_DRILL: '1' }, stateDirOf),
+      DEFAULT_STATE_DIR,
+      name + ': the switch alone must not invent a directory',
+    );
+    assert.equal(
+      withEnv({ DSH_AUTORESTART_DRILL: '1', DSH_AUTORESTART_STATE_DIR: '   ' }, stateDirOf),
+      DEFAULT_STATE_DIR,
+      name + ': a blank override means the default',
+    );
+  }
+});
+
+test('both scripts document the override as a drill/test-only gate', () => {
+  for (const file of [
+    path.join(pluginDir, 'scripts', 'clear-dsh-auth-cookies.mjs'),
+    path.join(pluginDir, 'scripts', 'cleanup-shell-backups.mjs'),
+  ]) {
+    const text = fs.readFileSync(file, 'utf8');
+    const label = path.basename(file);
+    assert.ok(text.includes('DSH_AUTORESTART_STATE_DIR'), label + ': the override must be named');
+    assert.ok(text.includes('DSH_AUTORESTART_DRILL'), label + ': the drill switch must be named');
+    assert.match(
+      text,
+      /drill[-\/ ]?(only|test)/i,
+      label + ': the comment must say the override is a drill/test-only gate',
+    );
+  }
 });

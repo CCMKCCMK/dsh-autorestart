@@ -1,5 +1,154 @@
 # Changelog
 
+## 0.9.5
+
+这一版除了两处边角修复，还给重启加了一个可选的低打扰模式：
+两个工具脚本的 **state-dir 覆写加了一道 DRILL 闸**；文档里**引用的安检脚本路径**改成真实存在的那一份；
+设置页新增 **`restartWindow`**（重启辅助脚本可后台无窗口运行，默认仍是原来的前台）；并补上了
+**每次启动清理过期助手文件**——真机实测状态目录里堆了 **351 个** `restart-<gen>.cmd`。
+
+### 一、两个脚本的 state-dir 覆写加 DRILL 闸
+
+`scripts/clear-dsh-auth-cookies.mjs` 与 `scripts/cleanup-shell-backups.mjs` 的 `stateDirOf()` 此前只要读到
+`DSH_AUTORESTART_STATE_DIR` 就跟着走。问题不在于「读环境变量」，而在于**这两个变量能被同用户的任意进程设置**，
+而 `cleanup-shell-backups.mjs` 的职责就是**删目录**（清 `backups/` 下的旧备份与空壳）——不设闸，等于「谁设了变量，
+就能让它去删谁指的那棵树」。
+
+现在两个脚本共用同一条判据：
+
+- 只有 `DSH_AUTORESTART_DRILL` 的 `trim()` 后值**正好等于 `1`** 时，才认 `DSH_AUTORESTART_STATE_DIR`；
+- 其余一切情况（未设、`0`、`true`、`yes`、空串、纯空白）一律回落到插件自己的状态目录
+  `~/.dsh/storages/dsh-autorestart`；
+- 即使 DRILL 已开，`DSH_AUTORESTART_STATE_DIR` 为空（或只有空白）仍然回落默认，不把空路径当合法目标。
+
+四种环境组合的实测结果：
+
+| 环境 | `stateDirOf()` 的结果 |
+| --- | --- |
+| 只设 `DSH_AUTORESTART_STATE_DIR` | 回落插件默认状态目录（覆写不生效） |
+| `DSH_AUTORESTART_DRILL=1` + `DSH_AUTORESTART_STATE_DIR` | 覆写生效，落在指定目录 |
+| `DSH_AUTORESTART_DRILL=true` + `DSH_AUTORESTART_STATE_DIR` | 回落默认（只认 `1`） |
+| `DSH_AUTORESTART_DRILL=1` + 空的 `DSH_AUTORESTART_STATE_DIR` | 回落默认（空路径不算覆写） |
+
+### 二、文档里失效的安检脚本路径已修正
+
+工作区 `docs/` 下 6 份文档共 **12 处**仍指着 `plugins/dsh-codekg/security_scan.mjs`——该位置已经不存在，
+照旧路径抄的人/单子会直接 `ENV_ERROR`。已全部改为真实存在的 `plugins/dsh-security-scan/security_scan.mjs`：
+
+- `dsh-autorestart-security-handoff.md`（6 处）
+- `security-negative-cases.md`（2 处）
+- `handoff-goal-guard.md`、`security-scan-handoff.md`、`security-scan-rule-fix-handoff.md`、`spawn-sink-check-handoff.md`（各 1 处）
+
+其中 `handoff-goal-guard.md` 那处是「**旧**：…（已不存在）／**新**：…」的迁移对照，属于历史事实：
+只把「新」那一行指向真实路径，旧路径原样保留——不机械替换，免得把「当初错在哪」一起抹掉。
+
+### 三、`restartWindow`：重启辅助脚本可后台无窗口运行（设置页「重启相关设置」组最下面）
+
+重启时那个 `.cmd` 辅助脚本是个控制台程序：它被 WMI / `schtasks` / `cmd.exe /c` 拉起，`ping -n N` 的等待让窗口
+停留好几秒。现在「重启相关设置」组的最下面（备份说明与手动备份操作之后）多了一个下拉，默认是原来的行为：
+**前台运行**（默认，行为与以前完全一样）／**后台运行**（不出现窗口，也不抢焦点），改完在下次重启生效。
+
+后台模式选的不是「把 `.cmd` 包进 `powershell -WindowStyle Hidden`」，而是**方案 B：wscript + VBS 垫片**——
+写一个 `restart-<gen>-window.vbs`，用 `wscript.exe //B <垫片>` 拉起，垫片里
+`CreateObject("WScript.Shell").Run "<命令行>", 0, False`：
+
+- `0` = 隐藏窗口，`False` = 不等待。`wscript.exe` 是 GUI 子系统进程，**连控制台都不分配**，
+  所以不存在「闪一下」；`Run` 也不激活任何窗口，**全屏游戏不会被切走**——用户提的就是这两条。
+- 垫片跑完**立即自删**；万一删不掉（文件被短暂占用）或留下别的助手文件，启动时的清理会兜底（见下一节）。
+- 机器的安全策略禁用 Windows Script Host 时允许回落：垫片写失败、或 `wscript` 经 WMI + `schtasks` 都拉不起来，
+  就改用 `powershell -NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand …`（内部 `CreateNoWindow=$true`）
+  跑**同一条命令行**；`launcher` 与 `fallbackReason` 写进重启报告，设置页「上次重启」一行会显示用了哪条、为什么回落。
+
+`foreground` 仍然**逐字节等于**改动前的拉起命令（有测试用字面量固定）：两种模式只在「怎么被拉起来」上不同，
+`宽限等待 → 空闲门 → taskkill 整棵树 → 等 3 拍 → 清 cookie → 拉起 → 起看门狗` 的顺序与错误码语义一字未动。
+
+### 五、重启浮窗在「正在备份」阶段漏报插件范围
+
+用户开了「备份包含已装插件」，浮窗却只说「**配置**有变化，正在备份」，没提插件——而他当初要的就是「配置和插件」。
+这条修了两次都没见效，**真正的原因是阶段记录的白名单**：
+
+- 客户端决定文案时看的是阶段记录里的「这次备份含不含插件」；而这个字段原先**写在记录旁边**，不是记录的一部分。
+- `lib/checkpoint.js` 的 `setRestartPhase` 用白名单重建阶段记录，`setRestartProgress` 每拍进度又整条替换一次，
+  磁盘恢复时的 `normalizeRestartPhase` 也是重建——**写进去的字段当场就被丢掉**。
+- 字段一丢，客户端只能退回字符串后缀判断（`reason` 里的 `+plugins`），而那个后缀本来就只有比对阶段写过，
+  本机又走链接安装，于是稳定降级成「只有配置」。
+
+修复分两层：
+
+1. **字段进 checkpoint 层**：`setRestartPhase` 接受并写入 `includePlugins`（`boolean` 或 `null`），
+   同一轮重启内阶段切换时**原样带过**；`setRestartProgress` 每拍重建时**原样带过**；
+   `normalizeRestartPhase` 从磁盘读回时**保留**它，非法值归一为 `null`、旧状态文件缺这个键也是 `null`（不报错、不算损坏）。
+2. **客户端优先读显式字段**，只有字段确实不存在（更老的宿主）才回退到 `+plugins` 后缀；
+   「正在备份」「没有变化，跳过备份」「无法比对」三句都按真实范围选文案。
+
+测试补了链路级用例：阶段写入 → `state.restartPhase` → `restartStageInfo()` → 一次进度刷新之后，
+字段都还在；带 `includePlugins` 的状态写成 JSON 再读回来，字段仍在；旧状态文件缺这个键读成 `null`。
+一条把这个缺陷写成预期的断言改成「含插件必须出现插件字样」，另加「显式 `false` 才用配置文案」的用例。
+
+同时删掉了一条**永远不可能显示的死链路**：`'comparing'` 从来不在 `RESTART_PHASES` 里（只有
+`waiting / snapshotting / restarting / back`），所以 `markRestartStage('comparing', …)` 一直被
+`setRestartPhase` 拒绝，前端那张「正在比对配置和插件有没有变化…」的卡片永远出不来。
+现在整条已删除——宿主的调用点、`restartBackupCard` 的 `comparing` 字段、覆盖层里对应分支、
+`RESTART_OVERLAY_KEYS` 里的键、中英两份文案以及只验证这条死分支的断言。
+决策追踪里的 `noteBranch('comparing', …)` 保留：它只是日志标签，不参与阶段状态机。
+
+### 六、后台模式不再闪一个控制台小窗
+
+用户开了「后台运行」，DSH 窗口关掉之后仍会有一个小窗一闪而过。原因在**拉起宿主那一步**：
+辅助 `.cmd` 里写的是 `start "" powershell.exe -WindowStyle Hidden -NoProfile -Command Start-Process …`——
+`-WindowStyle Hidden` 是 **powershell 先创建控制台、再把它隐藏**，所以那一下必然可见。
+拉起看门狗（回滚脚本）的那一行也是同样的形状，于是会闪两次。
+
+后台模式现在把这两步都交还给 VBS 垫片，用参数区分三种角色（同一个文件，不新增临时文件）：
+
+- 无参数：把辅助 `.cmd` 隐藏着跑起来（这条不变）；
+- `launch`：用 `Shell.Application.ShellExecute(exe, "", "", "open", 1)` 直接拉起宿主。
+  `wscript.exe` 是 GUI 子系统进程，**连控制台都不分配**，因此没有任何窗口可闪；
+- `watch`：用 `shell.Run …, 0, False` 隐藏着启动回滚看门狗，同样不再创建控制台。
+
+**回落是真实可执行的、并且写进报告**：`ShellExecute` 被安全策略拒绝时，垫片立刻退回原来的
+`powershell -WindowStyle Hidden -NoProfile -Command Start-Process -FilePath '<exe>'`（去掉 `start ""`，
+垫片里没有 cmd 内建命令），那条会闪一下——所以重启报告里多两个字段：
+`relaunch` 取 `shell-execute`（无控制台）或 `powershell-hidden`（会闪、并且说明为什么），
+`relaunchFallback` 写明垫片回落时用的是什么。`launcher` 仍是 `wscript` / `powershell-hidden` / `foreground`
+（设置页「上次重启」读的就是它，取值不变）。
+
+前台模式**逐字节不变**（既有字面量测试仍过）：它照旧用 `start "" powershell.exe -WindowStyle Hidden …`。
+垫片也不再在第一次运行时自删了——`launch` 步几秒后还要重新进入同一个文件；`launch`/`watch` 结束时自删，
+被空闲门取消的那次留下的文件由启动清理兜底（报告里的 `shimLeftBehind` 会点名）。
+
+### 已知限制：没有「重启后窗口最小化」选项
+
+本打算再加一个「重启后新窗口最小化出现」的选项，**真机实测无效，已整条移除**，不把无效开关发出去：
+
+- 命令确实带上了 `-WindowStyle Minimized`（`.cmd` 原文可证），但 DSH 是 Electron 应用，**窗口怎么显示由它自己决定**，
+  实测仍然正常弹出，没有被最小化；
+- 官方 CLI 也没有可用的窗口参数：launcher 只有 `-V / --patch / --dump-config / --dump-default-config / --help`，
+  web 只有 `--host / --port / --trusted-host`，**没有任何「最小化 / 隐藏启动」的开关**。
+
+所以本版只提供经过验证有效的 `restartWindow`（辅助脚本后台无窗口），**不提供**「重启后窗口最小化」。
+若以后宿主补上窗口参数，再单独加回来。
+
+### 四、启动清理补上 `restart-<数字>.cmd`（真机 351 个残留）
+
+每次走空闲门的重启都会写一份 `restart-<数字>.cmd`，**从来没有谁删它**。真机实测：状态目录里躺着
+**351 个**（373 KB，从 10-22 攒到 11-09），这正是发版前「残留文件数 = 0」一直过不去的原因。
+
+启动清理（`sweepRestartHelpers`，旧名 `sweepWindowShims` 保留为同一套行为的别名）现在同时覆盖两类：
+
+- `restart-<数字>.cmd`（新的）与 `restart-<数字>-window.vbs`（已有的）；两者都要**文件名严格匹配 + 内容像我们的**；
+- **60 秒内刚写的文件一律不动**（调度器可能正把它交给 `cmd.exe`，垫片的 wscript 也可能还在读）；
+- 清理的数量（`.cmd` / `.vbs` 分别计数）与失败原因写进重启报告与插件状态，**不抛错、不阻断启动**。
+
+### 验证
+
+- 加闸后全量测试 `tests 1080 / pass 1080 / fail 0`；
+- `restartWindow` 与助手清理加入后全量测试 `tests 1088 / pass 1088 / fail 0`；
+- 移除「重启后窗口最小化」后全量测试 `tests 1089 / pass 1089 / fail 0`；
+- 两个脚本的 `stateDirOf()` 在四种环境组合下逐条实测，结果见上表；
+- 助手清理的用例覆盖：匹配文件被删、名字像但内容不是我们的保留、60 秒内的新文件保留、计数正确
+  （`removedCmd` / `removedVbs` / `scanned`）、旧别名仍同时清两类。
+
 ## 0.9.4
 
 这一版把「重启前备份」从「每次都拷一份」改成「**真变了才拷**」：判据从**文件时间**换成**文件内容（sha256）**，

@@ -298,6 +298,17 @@
     'settings.restartGrace.hint': '重启没有倒数环节，会话一收工就会立刻重启；如果你装了“会话结束后才写”的记忆/总结类插件，把这里调大（默认 0 秒）。',
     'settings.restartGrace.value': '{n} 秒',
     'settings.restartGrace.immediate': '不等（立即重启）',
+    'settings.window.label': '辅助脚本的运行方式',
+    'settings.window.foreground': '前台运行（会短暂出现一个窗口，默认）',
+    'settings.window.background': '后台运行（不出现窗口，也不抢焦点）',
+    'settings.window.hint': '只决定重启时那个辅助脚本怎么被拉起来，改完在下次重启生效。后台模式用 VBScript 垫片启动：不创建窗口，也不会把全屏中的游戏切走；若机器安全策略禁用脚本宿主，会自动回落到隐藏窗口的 PowerShell，并把原因记进重启报告。',
+    'settings.window.lastLabel': '上次重启',
+    'settings.window.lastWscript': '后台（wscript，无窗口）',
+    'settings.window.lastHidden': '后台，回落到 PowerShell 隐藏窗口',
+    'settings.window.lastForeground': '前台（有窗口）',
+    'settings.window.lastUnknown': '未知',
+    'settings.window.lastFallback': '回落原因：{reason}',
+    'settings.window.shimLeft': '临时垫片没能自动删除，下次重启会清掉（重启报告里也有记录）',
     'settings.backup.label': '重启前备份',
     'settings.backup.details': '详情',
     'settings.backup.when': '什么时候会备份？',
@@ -639,9 +650,8 @@
     'restart.overlay.size': '{done} / {total}',
     'restart.overlay.sizeDone': '{done}',
     // TWO STATES, NO CLOCK (2026-11-07, user decision): what is being copied,
-    // then "the copy is done, the restart is starting".
-    'restart.overlay.comparing': '正在比对配置和插件有没有变化…',
-    'restart.overlay.comparingConfig': '正在比对配置有没有变化…',
+    // then "the copy is done, the restart is starting". No 「正在比对」 line
+    // (2026-11-09): 比对瞬时完成，不单独占一个阶段.
     'restart.overlay.changed': '配置和插件有变化，正在备份，共 {size}',
     'restart.overlay.changedConfig': '配置有变化，正在备份，共 {size}',
     'restart.overlay.changedUnknown': '配置和插件有变化，正在备份',
@@ -806,6 +816,17 @@
     'settings.restartGrace.hint': 'A restart has no countdown: the host restarts as soon as the conversations are done. Raise this if you rely on a memory or summary plugin that writes its notes after the conversation ended (default 0 seconds).',
     'settings.restartGrace.value': '{n} seconds',
     'settings.restartGrace.immediate': 'Do not wait (restart right away)',
+    'settings.window.label': 'How the restart helper runs',
+    'settings.window.foreground': 'Foreground (a window appears briefly; the default)',
+    'settings.window.background': 'Background (no window at all, and it never takes the focus)',
+    'settings.window.hint': 'It only decides how the restart helper is started; a change applies to the NEXT restart. Background mode starts it through a VBScript shim: no window is created and a full-screen game is not switched away from. If a machine policy forbids Windows Script Host, it falls back to a hidden PowerShell and the reason is written into the restart report.',
+    'settings.window.lastLabel': 'Last restart',
+    'settings.window.lastWscript': 'Background (wscript, no window)',
+    'settings.window.lastHidden': 'Background, fell back to a hidden PowerShell',
+    'settings.window.lastForeground': 'Foreground (with a window)',
+    'settings.window.lastUnknown': 'Unknown',
+    'settings.window.lastFallback': 'Fallback reason: {reason}',
+    'settings.window.shimLeft': 'The temporary shim could not delete itself; the next restart removes it (the restart report records it too)',
     'settings.backup.label': 'Backup before a restart',
     'settings.backup.details': 'Details',
     'settings.backup.when': 'When is a backup taken?',
@@ -1108,9 +1129,8 @@
     'restart.overlay.size': '{done} / {total}',
     'restart.overlay.sizeDone': '{done}',
     // TWO STATES, NO CLOCK (2026-11-07, user decision): what is being copied,
-    // then "the copy is done, the restart is starting".
-    'restart.overlay.comparing': 'Comparing configuration and plugins for changes…',
-    'restart.overlay.comparingConfig': 'Comparing configuration for changes…',
+    // then "the copy is done, the restart is starting". No comparison line
+    // (2026-11-09): 比对瞬时完成，不单独占一个阶段.
     'restart.overlay.changed': 'Configuration and plugins changed, backing up {size}',
     'restart.overlay.changedConfig': 'Configuration changed, backing up {size}',
     'restart.overlay.changedUnknown': 'Configuration and plugins changed, backing up',
@@ -2568,7 +2588,6 @@
    * always was: "待重启 · 等待 N 个会话".
    */
   const RESTART_OVERLAY_KEYS = Object.freeze({
-    comparing: 'restart.overlay.comparing',
     snapshotting: 'restart.overlay.snapshotting',
     restarting: 'restart.overlay.restarting',
     back: 'restart.overlay.back',
@@ -2773,25 +2792,28 @@
     const progress = record.progress !== null && typeof record.progress === 'object' ? record.progress : null
     const total = Number(progress !== null ? progress.total : NaN)
     const totalBytes = Number.isFinite(total) === true && total > 0 ? Math.trunc(total) : null
-    // THE SCOPE OF THE COMPARISON travels in the Host's reason:
-    // 'config' / 'config+plugins' while comparing, and the same suffix on the
-    // copy reasons — the configuration-only wording is chosen from it.
-    const includePlugins = reason.indexOf('+plugins') !== -1
+    // THE SCOPE OF THIS BACKUP (2026-11-09, user report): the Host states it as
+    // its OWN field now. The old `+plugins` suffix inside `reason` is only the
+    // fallback for a Host that does not send the field (0.9.4 and older) — and
+    // reading the scope from that suffix alone is what made the copy card say
+    // 「配置」 while the plugins were in the copy.
+    const statedScope = record.includePlugins
+    const includePlugins = typeof statedScope === 'boolean'
+      ? statedScope === true
+      : reason.indexOf('+plugins') !== -1
     // THE HOST'S OWN WORD FOR "THE COPY FINISHED": a skipped or cancelled
     // snapshot says something else and must never be reported as 备份完成.
     const done = reason === 'snapshot done'
     const copying = phase === 'snapshotting'
     const unusable = copying === true && reason.indexOf('compare unusable') === 0
     return {
-      // ① THE COMPARISON IS RUNNING: the first card of a restart.
-      comparing: phase === 'comparing',
-      // ② THE COPY IS RUNNING — unless the Host could not compare: that has its
-      // own line (「无法比对…仍会备份」) instead of a size.
+      // THE COPY IS RUNNING — unless the Host could not compare: that has its own
+      // line (「无法比对…仍会备份」) instead of a size.
       copying: copying === true && unusable !== true,
       // THE COMPARISON COULD NOT BE MADE, so the copy runs anyway.
       unusable,
       // THE COPY IS OVER AND THE RESTART HAS NOT HAPPENED YET.
-      finished: copying !== true && phase !== 'comparing' && done === true,
+      finished: copying !== true && done === true,
       // THE COMPARISON FOUND NOTHING NEW: no copy was written at all.
       skipped: reason === 'snapshot skipped: unchanged',
       // THE COPY FAILED: the restart goes on without a rollback point.
@@ -4670,30 +4692,28 @@
         // the copy runs the title says what is being copied; once the Host says
         // the copy has finished it says so and the restart line follows. No bar
         // and no clock — a one-second copy and a sixty-second copy read the same.
-        // TWO CARDS FOR ONE RESTART (2026-11-07, user decision): the comparing
-        // card first (「正在比对配置和插件有没有变化…」), then either the copy card
+        // TWO CARDS FOR ONE RESTART (2026-11-07, user decision): the copy card
         // with the real total (「配置和插件有变化，正在备份，共 276.5 MB」), the
         // skip card (「…没有变化，跳过备份，将执行重启」), or the failure line. The
         // configuration-only wording is chosen when the plugins are not in the
-        // copy — the scope travels in the Host's reason (`config` vs
-        // `config+plugins`).
+        // copy — the scope is its own field now (`includePlugins`).
+        // NO 「正在比对」 CARD (user decision, 2026-11-09): 比对瞬时完成，不单独占一个
+        // 阶段 — the Host never stored such a phase, so that branch was dead code.
         const pluginsInCopy = backupCard.includePlugins === true
-        const backupTitle = backupCard.comparing === true
-          ? t(pluginsInCopy ? 'restart.overlay.comparing' : 'restart.overlay.comparingConfig')
-          : (backupCard.unusable === true
-            ? t(pluginsInCopy ? 'restart.overlay.compareUnusable' : 'restart.overlay.compareUnusableConfig')
-            : (backupCard.copying === true
-              ? (backupCard.totalBytes === null
-                ? t(pluginsInCopy ? 'restart.overlay.changedUnknown' : 'restart.overlay.changedUnknownConfig')
-                : fill(
-                  t(pluginsInCopy ? 'restart.overlay.changed' : 'restart.overlay.changedConfig'),
-                  { size: formatOverlaySize(backupCard.totalBytes) },
-                ))
-              : (backupCard.skipped === true
-                ? t(pluginsInCopy ? 'restart.overlay.skipped' : 'restart.overlay.skippedConfig')
-                : (backupCard.failed === true
-                  ? t('restart.overlay.backupFailed')
-                  : (backupCard.finished === true ? t('restart.overlay.backupDone') : '')))))
+        const backupTitle = backupCard.unusable === true
+          ? t(pluginsInCopy ? 'restart.overlay.compareUnusable' : 'restart.overlay.compareUnusableConfig')
+          : (backupCard.copying === true
+            ? (backupCard.totalBytes === null
+              ? t(pluginsInCopy ? 'restart.overlay.changedUnknown' : 'restart.overlay.changedUnknownConfig')
+              : fill(
+                t(pluginsInCopy ? 'restart.overlay.changed' : 'restart.overlay.changedConfig'),
+                { size: formatOverlaySize(backupCard.totalBytes) },
+              ))
+            : (backupCard.skipped === true
+              ? t(pluginsInCopy ? 'restart.overlay.skipped' : 'restart.overlay.skippedConfig')
+              : (backupCard.failed === true
+                ? t('restart.overlay.backupFailed')
+                : (backupCard.finished === true ? t('restart.overlay.backupDone') : ''))))
         const title = postponed
           ? t('restart.overlay.deferred')
           : (backupTitle !== '' ? backupTitle : restartOverlayTitle(stage, t))
@@ -6519,6 +6539,20 @@
         const restartGraceSeconds = GRACE_CHOICES_SECONDS.indexOf(Math.round(reportedRestartGraceMs / 1000)) === -1
           ? GRACE_DEFAULT_SECONDS
           : Math.round(reportedRestartGraceMs / 1000)
+        // HOW THE RESTART HELPER IS STARTED (user decision, 2026-11-09): the
+        // Host reports the mode and the launch record of the last restart, so a
+        // background run that had to fall back is visible on the page.
+        const restartWindow = status && typeof status === 'object' && status.restartWindow === 'background'
+          ? 'background'
+          : 'foreground'
+        // THE LAUNCH RECORD of the last restart (which LAUNCHER ran), reported
+        // under `lastLaunch`.
+        const lastLaunch = status
+          && typeof status === 'object'
+          && status.lastLaunch
+          && typeof status.lastLaunch === 'object'
+          ? status.lastLaunch
+          : null
 
         // THE SUPERVISOR: who starts this host, and can the restart work at all.
         // The Host reports it in the state payload.
@@ -7646,6 +7680,67 @@
               ),
                 )
               })(),
+            // HOW THE RESTART HELPER IS STARTED, and HOW THE NEW HOST APPEARS
+            // (user decision, 2026-11-09). Both are restart settings, so they
+            // live INSIDE this group, right after the backup section, instead of
+            // a group of their own. They are independent of each other.
+            h(
+              'label',
+              { className: 'dsh-autorestart-settings__field' },
+              h('span', { className: 'dsh-autorestart-settings__label' }, t('settings.window.label')),
+              h(
+                'select',
+                {
+                  className: 'dsh-autorestart-settings__select',
+                  value: restartWindow,
+                  disabled: busy,
+                  'data-dsh-autorestart-setting': 'restartWindow',
+                  onChange: (event) => {
+                    const value = event && event.target ? String(event.target.value) : ''
+                    if (value !== 'foreground' && value !== 'background') return
+                    if (value === restartWindow) return
+                    void save({ restartWindow: value })
+                  },
+                },
+                h('option', { key: 'foreground', value: 'foreground' }, t('settings.window.foreground')),
+                h('option', { key: 'background', value: 'background' }, t('settings.window.background')),
+              ),
+              h('span', { className: 'dsh-autorestart-settings__hint' }, t('settings.window.hint')),
+            ),
+            // THE LAST LAUNCH: background mode is invisible, so which launcher
+            // really ran (and whether the shim cleaned up) is shown here.
+            lastLaunch === null ? null : h(
+              'div',
+              { className: 'dsh-autorestart-settings__field', 'data-dsh-autorestart-window': 'last-launch' },
+              h('span', { className: 'dsh-autorestart-settings__label' }, t('settings.window.lastLabel')),
+              h(
+                'span',
+                { className: 'dsh-autorestart-settings__value', 'data-dsh-autorestart-window': 'launcher' },
+                t(
+                  lastLaunch.launcher === 'wscript'
+                    ? 'settings.window.lastWscript'
+                    : lastLaunch.launcher === 'powershell-hidden'
+                      ? 'settings.window.lastHidden'
+                      : lastLaunch.launcher === 'foreground'
+                        ? 'settings.window.lastForeground'
+                        : 'settings.window.lastUnknown',
+                ),
+              ),
+              lastLaunch.fallbackReason
+                ? h(
+                  'span',
+                  { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-window': 'fallback' },
+                  fill(t('settings.window.lastFallback'), { reason: String(lastLaunch.fallbackReason) }),
+                )
+                : null,
+              lastLaunch.shimLeftBehind === true
+                ? h(
+                  'span',
+                  { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-window': 'shim-left' },
+                  t('settings.window.shimLeft'),
+                )
+                : null,
+            ),
           ),
           h(
             'div',

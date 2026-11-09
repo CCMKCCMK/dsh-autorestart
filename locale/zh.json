@@ -189,6 +189,19 @@
       "value": "{n} 秒",
       "immediate": "不等（立即重启）"
     },
+    "window": {
+      "label": "辅助脚本的运行方式",
+      "foreground": "前台运行（会短暂出现一个窗口，默认）",
+      "background": "后台运行（不出现窗口，也不抢焦点）",
+      "hint": "只决定重启时那个辅助脚本怎么被拉起来，改完在下次重启生效。后台模式用 VBScript 垫片启动：不创建窗口，也不会把全屏中的游戏切走；若机器安全策略禁用脚本宿主，会自动回落到隐藏窗口的 PowerShell，并把原因记进重启报告。",
+      "lastLabel": "上次重启",
+      "lastWscript": "后台（wscript，无窗口）",
+      "lastHidden": "后台，回落到 PowerShell 隐藏窗口",
+      "lastForeground": "前台（有窗口）",
+      "lastUnknown": "未知",
+      "lastFallback": "回落原因：{reason}",
+      "shimLeft": "临时垫片没能自动删除，下次重启会清掉（重启报告里也有记录）"
+    },
     "backup": {
       "label": "重启前备份",
       "details": "详情",
@@ -430,8 +443,6 @@
       "snapshotting": "DSH 重启前备份中",
       "size": "{done} / {total}",
       "sizeDone": "{done}",
-      "comparing": "正在比对配置和插件有没有变化…",
-      "comparingConfig": "正在比对配置有没有变化…",
       "changed": "配置和插件有变化，正在备份，共 {size}",
       "changedConfig": "配置有变化，正在备份，共 {size}",
       "changedUnknown": "配置和插件有变化，正在备份",

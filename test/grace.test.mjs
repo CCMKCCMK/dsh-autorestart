@@ -676,12 +676,12 @@ test('the settings section offers the restart wait and the shutdown countdown', 
   assert.equal(textOf(groups[2].children[0]), '开机自启', 'the supervisor group has a visible title')
   assert.equal(textOf(groups[3].children[0]), '遇到问题', 'the report group has a visible title')
 
-  // The restart group carries three controls, the shutdown group exactly one.
+  // The restart group carries four controls plus the restart-window setting.
   const restartControls = walk(groups[0]).filter((node) => node.type === 'select' || node.type === 'input')
   assert.deepEqual(
     restartControls.map((node) => node.props['data-dsh-autorestart-setting']),
-    ['restartGraceMs', 'backupOnRestart', 'backupIncludePlugins', 'maxBackups'],
-    'the restart group carries the wait, the two backup switches and the copy limit',
+    ['restartGraceMs', 'backupOnRestart', 'backupIncludePlugins', 'maxBackups', 'restartWindow'],
+    'the restart group carries the wait, the two backup switches, the copy limit and the restart window',
   )
   const shutdownControls = walk(groups[1]).filter((node) => node.type === 'select' || node.type === 'input')
   assert.deepEqual(

@@ -41,8 +41,10 @@
  * THE RESULT IS WRITTEN DOWN: this is the only process that knows how many
  * rows it deleted, so it writes `<stateDir>/last-cookie-clear.json`
  * (`{at, ok, removed, reason}`) and the plugin's health route reports it. The
- * state directory is `DSH_AUTORESTART_STATE_DIR` when it is set (a drill or a
- * test redirects it), otherwise the plugin's own state directory.
+ * state directory is the plugin's own state directory, EXCEPT in a drill: see
+ * `stateDirOf()` - the `DSH_AUTORESTART_STATE_DIR` override only counts while
+ * `DSH_AUTORESTART_DRILL=1` is set in the same environment (drill/test only,
+ * never a general-purpose redirect).
  *
  * RULES:
  *   - Only the dsh-auth-* cookies of 127.0.0.1 are touched. The rest of the
@@ -79,14 +81,35 @@ const LOG_DIR = path.join(os.homedir(), '.dsh', 'storages', 'dsh-autorestart');
 const LOG_FILE = path.join(LOG_DIR, 'clear-cookies.log');
 
 /**
+ * Whether this process is a DRILL (or test) run.
+ *
+ * `DSH_AUTORESTART_DRILL` is the switch that unlocks the state-directory
+ * override below. It is honoured ONLY as the exact value `1`, compared after
+ * `trim()`: `0`, `true`, `yes`, an empty string and an unset variable all mean
+ * "not a drill". Nothing else is accepted, so ` 1 ` works but `true` does not.
+ *
+ * @returns {boolean}
+ */
+export function drillEnabled() {
+  const value = typeof process.env.DSH_AUTORESTART_DRILL === 'string'
+    ? process.env.DSH_AUTORESTART_DRILL.trim()
+    : '';
+  return value === '1';
+}
+
+/**
  * The state directory this run belongs to.
  *
- * `DSH_AUTORESTART_STATE_DIR` exists so a drill (or a test) can point the
- * cleanup at its own directory instead of the real installation.
+ * DRILL/TEST-ONLY GATE: `DSH_AUTORESTART_STATE_DIR` is NOT a general-purpose
+ * redirect. It is honoured only while `DSH_AUTORESTART_DRILL=1` is set in the
+ * same environment, so a process that merely sets the state-dir variable cannot
+ * move this script's report and log somewhere else. Without that switch the run
+ * always lands in the plugin's own state directory.
  *
  * @returns {string}
  */
 export function stateDirOf() {
+  if (drillEnabled() !== true) return LOG_DIR;
   const override = typeof process.env.DSH_AUTORESTART_STATE_DIR === 'string'
     ? process.env.DSH_AUTORESTART_STATE_DIR.trim()
     : '';

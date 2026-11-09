@@ -733,8 +733,15 @@ test('the sleep route answers with exactly the agreed shape', async () => {
   assert.equal(res.statusCode, 200)
   const payload = JSON.parse(res.body)
   assert.deepEqual(Object.keys(payload).sort(), [
-    'armed', 'armedAt', 'backupIncludePlugins', 'backupOnRestart', 'blockers', 'countdownSeconds', 'dryRun', 'host', 'lastRun', 'message', 'ok', 'phase', 'quietForMs', 'remainingMs', 'restartGraceMs', 'showSleepButton',
+    'armed', 'armedAt', 'backupIncludePlugins', 'backupOnRestart', 'blockers', 'countdownSeconds', 'dryRun', 'host', 'lastLaunch', 'lastRun', 'message', 'ok', 'phase', 'quietForMs', 'remainingMs', 'restartGraceMs', 'restartWindow', 'showSleepButton',
   ])
+  assert.equal(payload.restartWindow, 'foreground', 'the restart helper runs in the foreground unless asked otherwise')
+  assert.equal(payload.lastLaunch, null, 'nothing was restarted on this machine yet')
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(payload, 'restartLaunch'),
+    false,
+    'the removed window-style option must not appear in the state either',
+  )
   assert.equal(payload.ok, true)
   assert.equal(payload.phase, 'idle')
   assert.equal(payload.armed, false)
@@ -1681,17 +1688,17 @@ test('the section shows two titled groups, the restart one first', async () => {
   assert.equal(titles[2], '开机自启', 'the supervisor group must have a visible title')
   assert.equal(titles[3], '遇到问题', 'the report group must have a visible title')
 
-  // The restart group carries four controls: the wait, the two switches, and the
-  // copy limit (which decides what a restart keeps).
+  // The restart group carries four controls plus the restart-window setting that
+  // used to be a group of its own.
   const restartControls = walk(groups[0]).filter(
     (node) => node.type === 'select' || node.type === 'input',
   )
-  assert.equal(restartControls.length, 4, 'the restart group has exactly four controls')
+  assert.equal(restartControls.length, 5, 'the restart group has exactly five controls')
   const restartKeys = restartControls.map((node) => node.props['data-dsh-autorestart-setting'])
   assert.deepEqual(
     restartKeys,
-    ['restartGraceMs', 'backupOnRestart', 'backupIncludePlugins', 'maxBackups'],
-    'the restart group carries the wait, the two backup switches and the copy limit',
+    ['restartGraceMs', 'backupOnRestart', 'backupIncludePlugins', 'maxBackups', 'restartWindow'],
+    'the restart group ends with the helper window setting, and nothing else',
   )
 
   // The shutdown group carries exactly one: the countdown.
@@ -1705,13 +1712,19 @@ test('the section shows two titled groups, the restart one first', async () => {
     'the shutdown group carries the countdown',
   )
 
-  // The dropdowns show the values the Host reports. Three of them now: the two
-  // waits and the backup copy limit.
+  // The dropdowns show the values the Host reports. Four of them now: the two
+  // waits, the backup copy limit and the restart window.
   const selects = walk(panel).filter((node) => node.type === 'select')
-  assert.equal(selects.length, 3, 'the section has exactly three dropdowns')
+  assert.equal(selects.length, 4, 'the section has exactly four dropdowns')
   const byKey = new Map(selects.map((node) => [node.props['data-dsh-autorestart-setting'], node]))
   assert.equal(byKey.get('restartGraceMs').props.value, '0', 'the restart wait the Host reports is shown')
   assert.equal(byKey.get('sleepCountdownSeconds').props.value, '30', 'the countdown the Host reports is shown')
+  assert.equal(
+    byKey.get('restartWindow').props.value,
+    'foreground',
+    'the restart window defaults to the foreground behaviour',
+  )
+  assert.equal(byKey.has('restartLaunch'), false, 'the removed window-style option has no dropdown')
   const secondsOptions = walk(byKey.get('sleepCountdownSeconds'))
     .filter((node) => node.type === 'option')
     .map((node) => node.props.value)

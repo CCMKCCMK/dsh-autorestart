@@ -24,6 +24,8 @@ import {
   setDisarmedGoal,
   setGoal,
   setPhase,
+  setRestartPhase,
+  setRestartProgress,
   writeState,
 } from '../lib/checkpoint.js';
 import { PHASES } from '../lib/lifecycle.js';
@@ -546,5 +548,58 @@ test('watcherHygiene and restartGate are read back after a restart, without a re
   const broken = normalizeState({ version: STATE_VERSION, restartGate: { reason: 'quiet' } }, 1)
   assert.equal(broken.state.restartGate, undefined, 'a gate without allow is not a gate')
   assert.equal(broken.repaired, true, 'and dropping it is reported')
+})
+
+/* ------------------------------------------------------------------ *
+ * THE BACKUP SCOPE IN THE STAGE RECORD (2026-11-09, user report).
+ *
+ * `includePlugins` says whether THIS backup holds the installed plugins, and the
+ * overlay picks 「配置和插件」 or 「配置」 from it. It used to be written next to the
+ * record instead of inside it — `setRestartPhase` rebuilds the record from a
+ * white list and `setRestartProgress` replaces it on every copy tick, so the
+ * field was dropped and the overlay fell back to a string suffix. These are the
+ * three places that must keep it.
+ * ------------------------------------------------------------------ */
+
+test('the stage record keeps the backup scope through progress, a stage change and a trip to disk', (t) => {
+  const state = createEmptyState(T)
+
+  // ① WRITTEN: the caller states it, the record keeps it.
+  setRestartPhase(state, { phase: 'snapshotting', reason: 'changed', now: T, includePlugins: true })
+  assert.equal(state.restartPhase.includePlugins, true, 'the record must state the scope')
+
+  // ② SURVIVES A PROGRESS TICK — the copy stage is the one on screen for seconds.
+  setRestartProgress(state, { files: 1, bytes: 10, total: 20, filesTotal: 2, now: T + 1 })
+  assert.equal(state.restartPhase.phase, 'snapshotting')
+  assert.equal(state.restartPhase.includePlugins, true, 'a progress tick must carry the scope')
+
+  // ③ SURVIVES A STAGE CHANGE inside the same restart (undefined = carry).
+  setRestartPhase(state, { phase: 'restarting', reason: 'snapshot done', now: T + 2 })
+  assert.equal(state.restartPhase.includePlugins, true, 'a stage change inside the restart carries it')
+
+  // ④ AN EXPLICIT false is stored as false, never as "missing".
+  setRestartPhase(state, { phase: 'snapshotting', reason: 'changed', now: T + 3, includePlugins: false })
+  assert.equal(state.restartPhase.includePlugins, false, 'an explicit false is stored as false')
+
+  // ⑤ SURVIVES THE DISK: a page reload reads the file, not the memory.
+  const file = path.join(tempDir(t), 'state.json')
+  setRestartPhase(state, { phase: 'snapshotting', reason: 'changed', now: T + 4, includePlugins: true })
+  writeState(file, state, T + 4)
+  const read = readState(file, T + 5)
+  assert.equal(read.corrupt, false)
+  assert.equal(read.state.restartPhase.includePlugins, true, 'the state file must round-trip the scope')
+
+  // ⑥ A STATE FILE FROM AN OLDER RELEASE has no such key: `null`, not an error,
+  //    and it is not treated as corruption.
+  const legacy = JSON.parse(JSON.stringify(read.state))
+  delete legacy.restartPhase.includePlugins
+  const back = normalizeState(legacy, T + 6)
+  assert.equal(back.repaired, false, 'an older state file is not a broken one')
+  assert.equal(back.state.restartPhase.includePlugins, null, 'a missing scope reads as null')
+
+  // ⑦ A GARBAGE VALUE is normalised to null and reported as repaired.
+  const junk = normalizeState({ ...legacy, restartPhase: { ...legacy.restartPhase, includePlugins: 'yes' } }, T + 7)
+  assert.equal(junk.state.restartPhase.includePlugins, null, 'a non-boolean scope is not a scope')
+  assert.equal(junk.repaired, true, 'and normalising it is reported')
 })
 
