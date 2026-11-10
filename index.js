@@ -12361,7 +12361,7 @@ function sleepDryRun() {
  * @param {object} runtime
  * @returns {{ allow: boolean, reason: 'busy'|'quiet', blockedBy: any[] }}
  */
-function sleepGate(runtime) {
+export function sleepGate(runtime) {
   // A pending restart goes FIRST: the shutdown waits for it — and for the
   // sessions that resume with it. The intent survives the restart, so the
   // machine goes off after everything is done, not before.
