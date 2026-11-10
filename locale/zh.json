@@ -36,6 +36,8 @@
   "panelResume": "重启后本会话会自动继续进度",
   "longWaitPill": " · 已等 {duration} · {n} 项任务在跑",
   "longWaitTooltip": "已等 {duration}。在跑：{blockers}",
+  "marketInstallPill": " · 等插件市场装完插件后再重启",
+  "marketInstallTooltip": "插件市场正在安装/更新插件：等插件市场装完插件后再重启。",
   "blockerGeneric": "有会话",
   "blockerJoin": "、",
   "blockerGroupSubagents": "{label}（{n} 个子智能体）",

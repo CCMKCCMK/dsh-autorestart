@@ -198,6 +198,10 @@
     // where there is room for all of them.
     longWaitPill: ' · 已等 {duration} · {n} 项任务在跑',
     longWaitTooltip: '已等 {duration}。在跑：{blockers}',
+    // THE PLUGIN MARKET IS INSTALLING (2026-11-10): ONE sentence, no progress bar,
+    // no button — the restart is simply waiting for the market to finish.
+    marketInstallPill: ' · 等插件市场装完插件后再重启',
+    marketInstallTooltip: '插件市场正在安装/更新插件：等插件市场装完插件后再重启。',
     // The blockers of one list. They are grouped by the session that created
     // them (N subagents of one session are ONE item), the tooltip names them
     // ALL and the shutdown card lists them. One rule, two surfaces: the
@@ -720,6 +724,10 @@
     // where there is room for all of them.
     longWaitPill: ' · waiting for {duration} · {n} task(s) running',
     longWaitTooltip: 'Waiting for {duration}. Running: {blockers}',
+    // THE PLUGIN MARKET IS INSTALLING (2026-11-10): ONE sentence, no progress bar,
+    // no button — the restart is simply waiting for the market to finish.
+    marketInstallPill: ' · waiting for the plugin market to finish installing',
+    marketInstallTooltip: 'The plugin market is installing plugins: waiting for the plugin market to finish before restarting.',
     // The blockers of one list: they are grouped by the session that created
     // them (N subagents of one session are ONE item), the tooltip names them
     // ALL and the shutdown card lists them. One rule, two surfaces.
@@ -2876,6 +2884,35 @@
   }
 
   /**
+   * THE MARKET IS INSTALLING SOMETHING (2026-11-10).
+   *
+   * TWO SOURCES, ONE FACT: the Host publishes the dedicated block
+   * (`marketInstall`), and the gate says the same thing in its own word
+   * (`reason: 'plugin-install'`). Either one is enough, so a client that talks
+   * to an older build still gets the sentence, and a Host that sends the reason
+   * without the block still names the market.
+   *
+   * @param {any} info the state payload of the Host
+   * @param {(name: string) => string} [t] the translator
+   * @returns {{ installing: boolean, pill: string, tooltip: string }}
+   */
+  function marketInstallCopy(info, t) {
+    const translate = makeTranslate(t)
+    const payload = info && typeof info === 'object' ? info : null
+    const market = payload && payload.marketInstall && typeof payload.marketInstall === 'object'
+      ? payload.marketInstall
+      : null
+    const installing = (market !== null && market.installing === true)
+      || (payload !== null && payload.reason === 'plugin-install')
+    if (!installing) return { installing: false, pill: '', tooltip: '' }
+    return {
+      installing: true,
+      pill: translate('marketInstallPill'),
+      tooltip: translate('marketInstallTooltip'),
+    }
+  }
+
+  /**
    * The named exports of this module.
    *
    * The client module system materializes `factory(require) -> exports`, so
@@ -2890,6 +2927,7 @@
     formatRemainingMs,
     formatLongWaitNote,
     formatLongWaitNoteParts,
+    marketInstallCopy,
     formatCompactDurationMs,
     cancelFailureText,
     groupBlockers,
@@ -4096,6 +4134,10 @@
         // waiting for the quiet window — not for a conversation.
         const gateReason = info && typeof info.reason === 'string' ? info.reason : ''
 
+        // THE MARKET IS INSTALLING SOMETHING: it is the reason the gate is shut
+        // and the ONE thing the user cannot see for himself.
+        const market = marketInstallCopy(info, t)
+
         // The long wait: the Host says that the restart is still waiting while a
         // conversation runs on. The capsule shows one
         // more line about it — how long it has been waiting and how many tasks
@@ -4124,22 +4166,29 @@
         // A long wait says it ONCE: its own line carries the duration and the
         // count, so the ordinary "waiting for N tasks" sentence is left out —
         // it would say the same thing twice and take twice the width.
-        const status = longWait.hasLongWait
-          ? ''
-          : goalActive.length > 0
-            ? t('goalActive')
-            : goalExhausted.length > 0
-              ? t('goalExhausted')
-              : otherBusy > 0
-                ? `${t('busyPrefix')}${otherBusy}${t('busySuffix')}`
-                : (gateReason === 'settling' ? t('settling') : t('idle'))
+        const status = market.installing
+          ? market.pill
+          : longWait.hasLongWait
+            ? ''
+            : goalActive.length > 0
+              ? t('goalActive')
+              : goalExhausted.length > 0
+                ? t('goalExhausted')
+                : otherBusy > 0
+                  ? `${t('busyPrefix')}${otherBusy}${t('busySuffix')}`
+                  : (gateReason === 'settling' ? t('settling') : t('idle'))
 
         const tooltipText = otherBusy > 0 ? t('tooltipBusy') : t('tooltip')
         // The tooltip carries the COMPLETE list of the blockers: the capsule
         // shows numbers only, the tooltip every name.
-        const detail = longWait.hasLongWait
+        const blockersLine = longWait.hasLongWait
           ? longWait.full
           : (blockers.total === 0 ? '' : fill(t('blockersTitleLine'), { blockers: blockers.full }))
+        // THE MARKET IS INSTALLING: the sentence goes NEXT TO the blockers (the
+        // market is not a conversation, so it is never one of them).
+        const detail = market.installing
+          ? (blockersLine === '' ? market.tooltip : `${blockersLine} ${market.tooltip}`)
+          : blockersLine
         const titleText = parkError
           ? fill(t('tooltipWithError'), { message: parkError })
           : (detail === '' ? tooltipText : `${tooltipText} ${detail}`)
@@ -4533,10 +4582,14 @@
         // icon-only, so the text is the only place where it can be read.
         // The tooltip carries the COMPLETE list of the blockers.
         const longWait = formatLongWaitNoteParts(info, t)
+        // THE MARKET IS INSTALLING: the dot is icon-only, so its tooltip is the
+        // ONE place where this sentence can be read from the sidebar.
+        const market = marketInstallCopy(info, t)
+        const dotTitle = longWait.hasLongWait ? `${t('tooltip')} ${longWait.full}` : t('tooltip')
 
         return h('span', {
           style: dotStyle(SIDEBAR_DOT_STYLE, pulsing),
-          title: longWait.hasLongWait ? `${t('tooltip')} ${longWait.full}` : t('tooltip'),
+          title: market.installing ? `${dotTitle} ${market.tooltip}` : dotTitle,
           role: 'status',
           'aria-live': 'polite',
           'aria-label': t('dotAria'),

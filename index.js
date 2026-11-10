@@ -77,6 +77,16 @@ import {
   selectGoalDisarms,
 } from './lib/lifecycle.js'
 import {
+  applyMarketSample,
+  describeMarketInstall,
+  emptyMarketState,
+  INSTALL_COOLDOWN_MS,
+  marketInstallStatus,
+  marketStatusUrl,
+  PROBE_TIMEOUT_MS,
+  probeMarketStatus,
+} from './lib/market-probe.js'
+import {
   backupsRoot,
   backupPluginDirIn,
   BACKUP_LIMIT_MAX,
@@ -719,6 +729,14 @@ function buildConfigSchema() {
       // ever (the "the restart never happens" defect).
       queuedGraceMs: schemastery.number().min(0).default(DEFAULT_QUEUED_GRACE_MS)
         .description('Milliseconds an unclaimed (queued) inbox message may block the restart: a message that is still unclaimed after this window is treated as stuck and no longer blocks the restart (0 = no upper bound, the old behaviour; default 60000).'),
+      marketStatusUrl: schemastery.string().default('')
+        .description('Where the plugin market reports whether it is installing something (empty = the status route of this host, /dsh-market/status). Read only: the probe never writes anything.'),
+      marketProbeTimeoutMs: schemastery.number().min(0).default(800)
+        .description('Upper bound of one market probe in milliseconds (never more than 800).'),
+      marketProbeIntervalMs: schemastery.number().min(0).default(1500)
+        .description('How often the market is asked while a restart is waiting (milliseconds).'),
+      marketInstallCooldownMs: schemastery.number().min(0).default(15000)
+        .description('How long the restart still waits after the market reported that it finished, to bridge the gap between two operations of its queue (milliseconds).'),
       autoReloadPage: schemastery.boolean().default(true)
         .description('Reload the web page automatically when the host boot token changes.'),
       blockManualRestart: schemastery.boolean().default(true)
@@ -828,6 +846,12 @@ const DEFAULTS = {
   // is treated as stuck and stops blocking the restart. 0 switches the
   // protection off (the old behaviour: a queued message blocks for ever).
   queuedGraceMs: DEFAULT_QUEUED_GRACE_MS,
+  // THE PLUGIN MARKET (2026-11-10): while the market installs or updates a plugin
+  // the restart must wait — a half-installed plugin is worse than a late restart.
+  marketStatusUrl: '',
+  marketProbeTimeoutMs: PROBE_TIMEOUT_MS,
+  marketProbeIntervalMs: 1500,
+  marketInstallCooldownMs: INSTALL_COOLDOWN_MS,
   autoReloadPage: true,
   blockManualRestart: true,
   healthPath: '/__dsh_autorestart/health',
@@ -934,6 +958,20 @@ function normalizeConfig(raw) {
   // The upper bound of a queued message is a plain number: a wrong or negative
   // value falls back to the default, and 0 switches the protection off.
   config.queuedGraceMs = normalizeQueuedGraceMs(config.queuedGraceMs)
+  if (typeof config.marketStatusUrl !== 'string') config.marketStatusUrl = ''
+  config.marketStatusUrl = config.marketStatusUrl.trim()
+  const probeTimeout = Number(config.marketProbeTimeoutMs)
+  config.marketProbeTimeoutMs = Number.isFinite(probeTimeout) && probeTimeout > 0
+    ? Math.min(Math.trunc(probeTimeout), PROBE_TIMEOUT_MS)
+    : PROBE_TIMEOUT_MS
+  const probeInterval = Number(config.marketProbeIntervalMs)
+  config.marketProbeIntervalMs = Number.isFinite(probeInterval) && probeInterval >= 0
+    ? Math.trunc(probeInterval)
+    : 1500
+  const installCooldown = Number(config.marketInstallCooldownMs)
+  config.marketInstallCooldownMs = Number.isFinite(installCooldown) && installCooldown >= 0
+    ? Math.trunc(installCooldown)
+    : INSTALL_COOLDOWN_MS
   if (typeof config.sleepCommand !== 'string') config.sleepCommand = ''
   if (typeof config.showSleepButton !== 'boolean') config.showSleepButton = true
   return config
@@ -4085,9 +4123,113 @@ let queueDiagLog = { at: 0, requestedAt: 0 }
    */
   const effectiveSettleMs = () => Math.max(config.settleMs, config.restartGraceMs)
 
+  /* ------------------------------------------------------------------ *
+   * THE PLUGIN MARKET (2026-11-10)
+   *
+   * `dshmarket` installs and updates plugins and holds one operation lock for the
+   * whole operation (pnpm AND the retarget/validate/hot-mount after it). The gate
+   * is synchronous and pure, the probe is an HTTP GET — so the answer is CACHED
+   * and refreshed in the background, and the gate only ever reads the cache. An
+   * unknown or unreadable answer never blocks (a probe that cannot see must not
+   * hold the host hostage).
+   * ------------------------------------------------------------------ */
+  let marketProbeState = emptyMarketState()
+  let marketProbeAt = 0
+  let marketProbeInFlight = false
+  let marketProbeLast = null
+
+  /** The host's own web port, or 0 when this host has no web server. */
+  const hostWebPort = () => {
+    try {
+      const port = Number(runtime && runtime.webPort)
+      return Number.isFinite(port) && port > 0 ? Math.trunc(port) : 0
+    } catch {
+      return 0
+    }
+  }
+
+  /** Where the market's status route is, or null when there is nothing to ask. */
+  const marketProbeUrl = () => {
+    const explicit = typeof config.marketStatusUrl === 'string' ? config.marketStatusUrl.trim() : ''
+    if (explicit !== '') return explicit
+    return marketStatusUrl(hostWebPort())
+  }
+
+  /** Ask the market once, detached: the gate never waits for a socket. */
+  const refreshMarketProbe = (now = Date.now()) => {
+    if (marketProbeInFlight) return
+    const url = marketProbeUrl()
+    if (url === null || url === '') return
+    marketProbeInFlight = true
+    marketProbeAt = now
+    const settle = (sample) => {
+      marketProbeLast = sample
+      marketProbeState = applyMarketSample(marketProbeState, sample, { now: Date.now() })
+    }
+    try {
+      const pending = probeMarketStatus({ url, timeoutMs: config.marketProbeTimeoutMs })
+      void Promise.resolve(pending)
+        .then(settle)
+        .catch(() => settle(null))
+        .finally(() => { marketProbeInFlight = false })
+    } catch (error) {
+      marketProbeInFlight = false
+      log.warn('could not ask the plugin market whether it is installing a plugin:', describeError(error))
+    }
+  }
+
+  /** The market's own answer, from the cache (a stale cache is refreshed late). */
+  const marketInstallNow = (now = Date.now()) => {
+    if (now - marketProbeAt >= config.marketProbeIntervalMs) refreshMarketProbe(now)
+    try {
+      return marketInstallStatus(marketProbeState, { now, cooldownMs: config.marketInstallCooldownMs })
+    } catch {
+      return marketInstallStatus(emptyMarketState(), { now, cooldownMs: config.marketInstallCooldownMs })
+    }
+  }
+
+  /**
+   * The market as an EXTERNAL blocker: it blocks the gate, but it is not a
+   * conversation — `blockedBy` stays conversation-only, so the task count of the
+   * bubble can never count the market as a session.
+   */
+  const marketExternalBlockers = (now = Date.now()) => {
+    const status = marketInstallNow(now)
+    if (status.installing !== true) return []
+    return [{
+      sessionId: null,
+      kind: 'market-install',
+      reason: 'plugin-install',
+      label: '插件市场',
+      name: status.reason === 'cooldown' ? '插件市场刚装完，等它把队列走完' : '插件市场正在安装插件',
+      packageName: status.packageName,
+      phase: status.phase,
+      cooldown: status.reason === 'cooldown',
+    }]
+  }
+
+  /** The market block for the state payload, the tools and the diagnostics. */
+  const marketInstallInfo = (now = Date.now()) => {
+    const status = marketInstallNow(now)
+    return {
+      installing: status.installing === true,
+      reason: status.reason,
+      packageName: status.packageName,
+      phase: status.phase,
+      cooldownUntil: status.cooldownUntil,
+      cooldownRemainingMs: status.cooldownRemainingMs,
+      cooldownMs: config.marketInstallCooldownMs,
+      probedAt: status.sampledAt,
+      url: marketProbeUrl(),
+      lastError: marketProbeLast && typeof marketProbeLast.error === 'string' ? marketProbeLast.error : null,
+      summary: describeMarketInstall(status),
+    }
+  }
+
   /** The two-layer restart gate: no busy conversation AND a quiet window. */
   const gate = () => restartGate(state, {
     busyAgents: busyAgents(),
+    externalBlockers: marketExternalBlockers(),
     lastActivityAt: quietSince(),
     now: Date.now(),
     settleMs: effectiveSettleMs(),
@@ -4659,7 +4801,9 @@ const titleOfSummary = (item) => {
    *   thresholdMs    60000 - sent so the page does not hard-code it
    *   gateAction     allow | wait | none (what the gate last decided)
    *   gateReason     the gate's own reason word
-   *   waitingReason  waiting-for-conversations | waiting-for-quiet | restarting | no-restart-pending
+   *   waitingReason  waiting-for-conversations | waiting-for-quiet | plugin-install | restarting | no-restart-pending
+   *   marketInstall  { installing, reason, packageName, cooldownRemainingMs, summary } - the plugin market
+   *                  (2026-11-10): NOT a conversation, so it is never in `blockedBy`
    *   blockedBy      [{ sessionId, reason, label }]
    *   blockedByName  ["<label> (running)"] - ready for a sentence
    *   quietResetBy   what last reset the quiet window ('agent-status' = heartbeat)
@@ -4672,6 +4816,7 @@ const titleOfSummary = (item) => {
    */
   const restartQueueStatus = (now = Date.now()) => {
     const info = restartRequestInfo()
+    const market = marketInstallInfo(now)
     const pending = !!(info && info.pending === true)
     const since = info && Number.isFinite(info.requestedAt) ? info.requestedAt : null
     const waitedMs = since === null ? 0 : Math.max(0, now - since)
@@ -4687,15 +4832,18 @@ const titleOfSummary = (item) => {
     let waitingReason = 'no-restart-pending'
     if (pending) {
       if (state.phase === 'restarting') waitingReason = 'restarting'
+      else if (market.installing === true) waitingReason = 'plugin-install'
       else if (blockedBy.length > 0) waitingReason = 'waiting-for-conversations'
       else waitingReason = 'waiting-for-quiet'
     }
     const overThreshold = pending && waitedMs >= RESTART_QUEUE_SILENCE_MS
     const summary = pending
       ? 'the restart has been queued for ' + describeWait(waitedMs)
-        + (blockedByName.length > 0
-          ? ' because ' + blockedByName.join(', ') + ' has not finished'
-          : ' and is waiting for ' + Math.max(0, effectiveSettleMs() - Math.max(0, now - quietSince())) + ' ms of quiet')
+        + (market.installing === true
+          ? ' and is waiting for the plugin market to finish installing'
+          : (blockedByName.length > 0
+            ? ' because ' + blockedByName.join(', ') + ' has not finished'
+            : ' and is waiting for ' + Math.max(0, effectiveSettleMs() - Math.max(0, now - quietSince())) + ' ms of quiet'))
       : 'no restart is queued'
     return {
       pending,
@@ -4706,6 +4854,9 @@ const titleOfSummary = (item) => {
       gateAction,
       gateReason: record && typeof record.reason === 'string' ? record.reason : null,
       waitingReason,
+      // THE PLUGIN MARKET (2026-11-10): whether it is installing something, which
+      // package, and the ONE sentence a surface may show about it.
+      marketInstall: market,
       blockedBy,
       blockedByName,
       quietResetBy: quietReset.by,
@@ -7040,6 +7191,7 @@ const titleOfSummary = (item) => {
     const decision = restartDecision(state, {
       anyAgentRunning: busy.length > 0,
       busyAgents: busy,
+      externalBlockers: marketExternalBlockers(now),
       lastActivityAt: quietSince(),
       settleMs: effectiveSettleMs(),
       now,
@@ -7074,6 +7226,12 @@ const titleOfSummary = (item) => {
             ? String(entry.sessionId)
             : null,
           reason: entry && typeof entry.reason === 'string' ? entry.reason : 'busy',
+        })),
+        externalBlockers: marketExternalBlockers(now).map((entry) => ({
+          kind: entry.kind,
+          reason: entry.reason,
+          packageName: entry.packageName,
+          cooldown: entry.cooldown === true,
         })),
         quietForMs: Math.max(0, now - quietSince()),
         settleMs: effectiveSettleMs(),
@@ -7520,6 +7678,9 @@ const titleOfSummary = (item) => {
     // THE STANDING QUEUE STATE (2026-11-02): pending / waitedMs / overThreshold /
     // blockedBy / quietResetBy / summary - see `restartQueueStatus`.
     restartQueueStatus,
+    // THE PLUGIN MARKET (2026-11-10): what the probe saw and what the gate does
+    // with it. Read only - it never writes anything on the market's side.
+    marketInstallInfo: (now) => marketInstallInfo(now),
     restartRequestSummary,
     restartRequestOutcome,
     requestSnapshotCancel,
@@ -12515,8 +12676,10 @@ function registerHealthRoute(ctx, runtime, config, sleep) {
             allow: verdict.allow,
             reason: verdict.reason,
             blockedBy: verdict.blockedBy,
+            externalBlockers: Array.isArray(verdict.externalBlockers) ? verdict.externalBlockers : [],
             quietForMs: verdict.quietForMs,
           },
+          marketInstall: runtime.marketInstallInfo(),
           phase: state.phase,
           generation: state.generation,
           pendingRestart: state.restart !== null,
@@ -12643,6 +12806,9 @@ function registerHealthRoute(ctx, runtime, config, sleep) {
             // long the restart has been waiting, why, and who holds it — the
             // request itself is never dropped.
             longWait: runtime.longWaitInfo(),
+            // THE PLUGIN MARKET (2026-11-10): whether it is installing something,
+            // which package, and — for the bubbles — the ONE sentence they show.
+            marketInstall: runtime.marketInstallInfo(),
             // THE STAGE OF THE RESTART, for the pill and the settings page:
             // which of the four stages is on screen, the real copy progress of
             // the snapshot, whether it is going slower than expected, and
@@ -12778,6 +12944,9 @@ function registerHealthRoute(ctx, runtime, config, sleep) {
             quietForMs: 0,
             queuedGraceMs: config.queuedGraceMs,
             longWait: null,
+            // The degraded answer says the same thing as the healthy one: the
+            // bubble must never claim the market is installing on a guess.
+            marketInstall: null,
             parkUrl: resolveParkPath(config),
             recoverUrl: resolveRecoverPath(config),
             cancelUrl: resolveCancelPath(config),

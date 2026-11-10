@@ -36,6 +36,8 @@
   "panelResume": "This session resumes its progress automatically after the restart.",
   "longWaitPill": " · waiting for {duration} · {n} task(s) running",
   "longWaitTooltip": "Waiting for {duration}. Running: {blockers}",
+  "marketInstallPill": " · waiting for the plugin market to finish installing",
+  "marketInstallTooltip": "The plugin market is installing plugins: waiting for the plugin market to finish before restarting.",
   "blockerGeneric": "another session",
   "blockerJoin": ", ",
   "blockerGroupSubagents": "{label} ({n} subagents)",

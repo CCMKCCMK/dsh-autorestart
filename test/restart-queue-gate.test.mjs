@@ -269,3 +269,96 @@ test('③ a conversation that is really running keeps the gate at wait', async (
   assert.match(JSON.stringify(gate.gate.blockedBy), /sess-busy/, 'and names the running conversation')
   assert.notEqual(gate.gate.action, 'restart', 'it must not reach the restart action')
 })
+
+/* ------------------------------------------------------------------ *
+ * ④ THE PLUGIN MARKET IS INSTALLING: THE HOST WAITS.
+ * ------------------------------------------------------------------ */
+
+test('④ a market install keeps the gate shut and is named as plugin-install', async (t) => {
+  const clock = patchNow({ value: 1_700_000_000_000 }, t)
+  const realFetch = globalThis.fetch
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ busy: true, active: true, currentPackage: 'dsh-foo', phase: 'install' }),
+  })
+  t.after(() => { globalThis.fetch = realFetch })
+
+  const { ctx, routes, timers, tools } = createContext()
+  const runtime = apply(ctx, {
+    stateFile: tempStateFile('market-busy'),
+    recoveryDelayMs: 0,
+    enabled: true,
+    settleMs: 10000,
+    // A host without a web port (this test) has nothing to ask: the URL comes
+    // from the configuration, and the fetch above answers for it.
+    marketStatusUrl: 'http://127.0.0.1:9/dsh-market/status',
+    marketProbeIntervalMs: 1000,
+  })
+
+  await queueRestart(tools)
+  const flush = () => new Promise((resolve) => setImmediate(resolve))
+  tick(timers) // asks the market
+  await flush(); await flush()
+  clock.value += 120000 // a long wait: the gate has no deadline
+  tick(timers)
+  await flush()
+
+  const gate = gateOf(routes)
+  assert.equal(gate.allowRestart, false, 'the host must not restart while the market installs')
+  assert.equal(gate.gate.reason, 'plugin-install', 'and it says WHY')
+  assert.deepEqual(gate.gate.blockedBy, [], 'the market is not a conversation')
+  assert.equal(gate.busyCount, 0, 'the task count is unchanged')
+  assert.equal(gate.marketInstall.installing, true)
+  assert.equal(gate.marketInstall.packageName, 'dsh-foo')
+
+  const queued = runtime.restartQueueStatus()
+  assert.equal(queued.waitingReason, 'plugin-install')
+  assert.equal(queued.marketInstall.installing, true)
+})
+
+test('⑤ once the market is done and the cooldown passed, the restart happens', async (t) => {
+  const clock = patchNow({ value: 1_700_000_000_000 }, t)
+  const realFetch = globalThis.fetch
+  let busy = true
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ busy, active: busy }),
+  })
+  t.after(() => { globalThis.fetch = realFetch })
+
+  const { ctx, routes, timers, tools } = createContext()
+  apply(ctx, {
+    stateFile: tempStateFile('market-done'),
+    recoveryDelayMs: 0,
+    enabled: true,
+    settleMs: 10000,
+    marketStatusUrl: 'http://127.0.0.1:9/dsh-market/status',
+    marketProbeIntervalMs: 1000,
+    marketInstallCooldownMs: 15000,
+  })
+
+  await queueRestart(tools)
+  const flush = () => new Promise((resolve) => setImmediate(resolve))
+  tick(timers)
+  await flush(); await flush()
+  clock.value += 2000
+  tick(timers)
+  await flush()
+
+  // The market finished; the cooldown still holds the restart.
+  busy = false
+  clock.value += 2000
+  tick(timers)
+  await flush(); await flush()
+  assert.equal(gateOf(routes).allowRestart, false, 'the cooldown bridges the gap between two installs')
+
+  // The cooldown passes with nobody working: the restart is allowed again.
+  clock.value += 20000
+  tick(timers)
+  await flush(); await flush()
+  const gate = gateOf(routes)
+  assert.equal(gate.allowRestart, true, 'and then it really restarts: ' + JSON.stringify(gate.gate))
+  assert.equal(gate.gate.reason, 'quiet')
+})
