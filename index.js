@@ -12383,6 +12383,29 @@ function sleepGate(runtime) {
       }],
     }
   }
+  // THE EXTERNAL BLOCKERS COME SECOND, and for their own reason (user decision,
+  // 2026-11-11): the restart already waits for the plugin market and for the
+  // plugin files, and a shutdown cuts an installation in half even more surely
+  // than a restart does. Same judgement, same wording, one gate.
+  let external = []
+  try {
+    external = typeof runtime.externalBlockers === 'function' ? runtime.externalBlockers() : []
+  } catch {
+    external = []
+  }
+  if (Array.isArray(external) && external.length > 0) {
+    const first = external[0]
+    return {
+      allow: false,
+      reason: first.reason === 'plugin-files' ? 'plugin-files' : 'plugin-install',
+      blockedBy: external.map((entry) => ({
+        sessionId: null,
+        kind: entry.kind,
+        label: entry.label,
+        name: entry.name,
+      })),
+    }
+  }
   let busy = []
   try {
     busy = runtime.busyAgents()
@@ -12469,7 +12492,9 @@ function createSleepService(ctx, runtime, config, options = {}) {
   // The configured command (if any) replaces the detected one; the final plan
   // is what decides whether the feature may run and what the UI is told.
   const invocation = () => effectiveSleepPlan(plan, config)
-  const gate = () => sleepGate(runtime)
+  // The same external blockers the restart gate uses — passed through the
+  // runtime so `sleepGate` stays a plain function.
+  const gate = () => sleepGate({ ...runtime, externalBlockers: options.externalBlockers })
   const final = invocation()
   const now = typeof options.sleepNow === 'function' ? options.sleepNow : () => Date.now()
   const spawn = typeof options.sleepSpawn === 'function' ? options.sleepSpawn : undefined
@@ -13395,7 +13420,12 @@ export function apply(ctx, rawConfig, options = {}) {
   const log = runtime.log
   // The graceful sleep: the host plan and the state machine that waits for the
   // conversations, counts down and switches the machine off.
-  const sleep = createSleepService(ctx, runtime, config, options)
+  const sleep = createSleepService(ctx, runtime, config, {
+    ...options,
+    // A shutdown must not cut an installation in half either: the very same
+    // blockers the restart gate consults.
+    externalBlockers: () => externalBlockersNow(),
+  })
 
   log.info('activated', {
     stateFile: runtime.stateFile,
