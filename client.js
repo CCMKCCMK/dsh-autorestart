@@ -4178,17 +4178,22 @@
                   ? `${t('busyPrefix')}${otherBusy}${t('busySuffix')}`
                   : (gateReason === 'settling' ? t('settling') : t('idle'))
 
-        const tooltipText = otherBusy > 0 ? t('tooltipBusy') : t('tooltip')
+        // THE MARKET IS NOT A CONVERSATION, so its sentence REPLACES the
+        // "waiting for the other sessions" sentence instead of being appended to
+        // it. Appending produced a hover text that talked about sessions while
+        // the capsule right next to it talked about the market (user report,
+        // 2026-11-10: the bubble was right, the floating panel was not).
+        const tooltipText = market.installing
+          ? market.tooltip
+          : otherBusy > 0 ? t('tooltipBusy') : t('tooltip')
         // The tooltip carries the COMPLETE list of the blockers: the capsule
         // shows numbers only, the tooltip every name.
         const blockersLine = longWait.hasLongWait
           ? longWait.full
           : (blockers.total === 0 ? '' : fill(t('blockersTitleLine'), { blockers: blockers.full }))
-        // THE MARKET IS INSTALLING: the sentence goes NEXT TO the blockers (the
-        // market is not a conversation, so it is never one of them).
-        const detail = market.installing
-          ? (blockersLine === '' ? market.tooltip : `${blockersLine} ${market.tooltip}`)
-          : blockersLine
+        // The leading sentence already names the market, so this line carries the
+        // blockers only: naming the market here as well would say it twice.
+        const detail = blockersLine
         const titleText = parkError
           ? fill(t('tooltipWithError'), { message: parkError })
           : (detail === '' ? tooltipText : `${tooltipText} ${detail}`)
@@ -4585,11 +4590,15 @@
         // THE MARKET IS INSTALLING: the dot is icon-only, so its tooltip is the
         // ONE place where this sentence can be read from the sidebar.
         const market = marketInstallCopy(info, t)
-        const dotTitle = longWait.hasLongWait ? `${t('tooltip')} ${longWait.full}` : t('tooltip')
+        // The market is not a conversation: while it installs, its sentence IS the
+        // tooltip (the same rule as the capsule, so the two can never disagree).
+        const dotTitle = market.installing
+          ? market.tooltip
+          : longWait.hasLongWait ? `${t('tooltip')} ${longWait.full}` : t('tooltip')
 
         return h('span', {
           style: dotStyle(SIDEBAR_DOT_STYLE, pulsing),
-          title: market.installing ? `${dotTitle} ${market.tooltip}` : dotTitle,
+          title: dotTitle,
           role: 'status',
           'aria-live': 'polite',
           'aria-label': t('dotAria'),
