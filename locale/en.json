@@ -38,6 +38,8 @@
   "longWaitTooltip": "Waiting for {duration}. Running: {blockers}",
   "marketInstallPill": " · waiting for the plugin market to finish installing",
   "marketInstallTooltip": "The plugin market is installing plugins: waiting for the plugin market to finish before restarting.",
+  "pluginFilesPill": " · waiting for a plugin install to finish",
+  "pluginFilesTooltip": "The plugin files are being changed (a manual plugin install does this too): waiting for them to settle before restarting.",
   "blockerGeneric": "another session",
   "blockerJoin": ", ",
   "blockerGroupSubagents": "{label} ({n} subagents)",

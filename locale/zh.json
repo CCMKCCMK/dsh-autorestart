@@ -38,6 +38,8 @@
   "longWaitTooltip": "已等 {duration}。在跑：{blockers}",
   "marketInstallPill": " · 等插件市场装完插件后再重启",
   "marketInstallTooltip": "插件市场正在安装/更新插件：等插件市场装完插件后再重启。",
+  "pluginFilesPill": " · 等插件装完再重启",
+  "pluginFilesTooltip": "检测到插件目录正在被修改（手动安装插件也会这样）：等它改完、安静下来再重启。",
   "blockerGeneric": "有会话",
   "blockerJoin": "、",
   "blockerGroupSubagents": "{label}（{n} 个子智能体）",

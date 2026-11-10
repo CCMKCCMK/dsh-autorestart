@@ -202,6 +202,8 @@
     // no button — the restart is simply waiting for the market to finish.
     marketInstallPill: ' · 等插件市场装完插件后再重启',
     marketInstallTooltip: '插件市场正在安装/更新插件：等插件市场装完插件后再重启。',
+    pluginFilesPill: ' · 等插件装完再重启',
+    pluginFilesTooltip: '检测到插件目录正在被修改（手动安装插件也会这样）：等它改完、安静下来再重启。',
     // The blockers of one list. They are grouped by the session that created
     // them (N subagents of one session are ONE item), the tooltip names them
     // ALL and the shutdown card lists them. One rule, two surfaces: the
@@ -728,6 +730,8 @@
     // no button — the restart is simply waiting for the market to finish.
     marketInstallPill: ' · waiting for the plugin market to finish installing',
     marketInstallTooltip: 'The plugin market is installing plugins: waiting for the plugin market to finish before restarting.',
+    pluginFilesPill: ' · waiting for a plugin install to finish',
+    pluginFilesTooltip: 'The plugin files are being changed (a manual plugin install does this too): waiting for them to settle before restarting.',
     // The blockers of one list: they are grouped by the session that created
     // them (N subagents of one session are ONE item), the tooltip names them
     // ALL and the shutdown card lists them. One rule, two surfaces.
@@ -2902,13 +2906,25 @@
     const market = payload && payload.marketInstall && typeof payload.marketInstall === 'object'
       ? payload.marketInstall
       : null
+    // THE PLUGIN FILES (2026-11-10): the market-independent signal — a manual
+    // `pnpm add`, or the host plugin manager. It deserves its own sentence
+    // because the market may not even be installed on this machine.
+    const files = payload && payload.pluginFiles && typeof payload.pluginFiles === 'object'
+      ? payload.pluginFiles
+      : null
+    const filesChanging = (files !== null && files.changing === true)
+      || (payload !== null && payload.reason === 'plugin-files')
+    // The market names the package, so it wins when both are true (its own
+    // install is what touches the files).
+    const marketCopyIsSpecific = market !== null && market.installing === true
     const installing = (market !== null && market.installing === true)
       || (payload !== null && payload.reason === 'plugin-install')
+      || filesChanging
     if (!installing) return { installing: false, pill: '', tooltip: '' }
     return {
       installing: true,
-      pill: translate('marketInstallPill'),
-      tooltip: translate('marketInstallTooltip'),
+      pill: translate(marketCopyIsSpecific ? 'marketInstallPill' : 'pluginFilesPill'),
+      tooltip: translate(marketCopyIsSpecific ? 'marketInstallTooltip' : 'pluginFilesTooltip'),
     }
   }
 

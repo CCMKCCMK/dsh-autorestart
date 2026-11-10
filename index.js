@@ -25,6 +25,14 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { collectCapabilities, compareCapabilities, listDisappearances } from './lib/plugin-watch.js'
+import {
+  PLUGIN_FILES_MAX_BLOCK_MS,
+  PLUGIN_FILES_STABLE_MS,
+  emptyFilesState,
+  filesBlocker,
+  readFingerprint,
+  sampleFingerprint,
+} from './lib/plugin-files.js'
 
 import {
   armSleep,
@@ -737,6 +745,12 @@ function buildConfigSchema() {
         .description('How often the market is asked while a restart is waiting (milliseconds).'),
       marketInstallCooldownMs: schemastery.number().min(0).default(15000)
         .description('How long the restart still waits after the market reported that it finished, to bridge the gap between two operations of its queue (milliseconds).'),
+      pluginFilesWatch: schemastery.boolean().default(true)
+        .description('Also wait while the profile plugin files are being changed (package.json, pnpm-lock.yaml, node_modules), which covers installs that never go through the market: a manual pnpm add, or the host plugin manager.'),
+      pluginFilesStableMs: schemastery.number().min(0).default(15000)
+        .description('How long the plugin files must stay unchanged before the change counts as finished (milliseconds). A false positive clears itself after this window.'),
+      pluginFilesMaxBlockMs: schemastery.number().min(0).default(300000)
+        .description('The longest a single file-change episode may hold a restart, so a stuck installation cannot pin the host shut (milliseconds).'),
       autoReloadPage: schemastery.boolean().default(true)
         .description('Reload the web page automatically when the host boot token changes.'),
       blockManualRestart: schemastery.boolean().default(true)
@@ -852,6 +866,9 @@ const DEFAULTS = {
   marketProbeTimeoutMs: PROBE_TIMEOUT_MS,
   marketProbeIntervalMs: 1500,
   marketInstallCooldownMs: INSTALL_COOLDOWN_MS,
+  pluginFilesWatch: true,
+  pluginFilesStableMs: PLUGIN_FILES_STABLE_MS,
+  pluginFilesMaxBlockMs: PLUGIN_FILES_MAX_BLOCK_MS,
   autoReloadPage: true,
   blockManualRestart: true,
   healthPath: '/__dsh_autorestart/health',
@@ -4193,6 +4210,83 @@ let queueDiagLog = { at: 0, requestedAt: 0 }
    * conversation — `blockedBy` stays conversation-only, so the task count of the
    * bubble can never count the market as a session.
    */
+  /**
+   * THE PLUGIN-FILES EPISODE — memory only, never persisted.
+   *
+   * WHY (user question, 2026-11-10): the market probe only knows what a market
+   * plugin reports. An install done by hand (`pnpm add` in a terminal) or by the
+   * host's own plugin manager never sets that flag, so a restart used to cut it
+   * in half — how dsh-mnemon was lost. These three files change for every real
+   * installation and for nothing else the harness does during the day.
+   *
+   * The first sample after a start is a baseline, so a restart never blocks
+   * itself (the host touches node_modules while it boots); that is also why a
+   * persisted fingerprint would be worse than none.
+   */
+  let pluginFilesState = emptyFilesState()
+  let pluginFilesSampledAt = 0
+
+  const samplePluginFiles = (now = Date.now()) => {
+    if (config.pluginFilesWatch !== true) {
+      pluginFilesState = emptyFilesState()
+      return
+    }
+    // Three stats and one readdir: cheap, but not worth doing on every timer
+    // tick when the same second has already looked.
+    if (pluginFilesSampledAt !== 0 && now - pluginFilesSampledAt < 1000) return
+    pluginFilesSampledAt = now
+    let dir = null
+    try {
+      dir = resolveProfileDir()
+    } catch {
+      dir = null
+    }
+    pluginFilesState = sampleFingerprint(pluginFilesState, readFingerprint(dir), { now })
+  }
+
+  const pluginFilesExternalBlockers = (now = Date.now()) => {
+    if (config.pluginFilesWatch !== true) return []
+    samplePluginFiles(now)
+    const blocker = filesBlocker(pluginFilesState, {
+      now,
+      stableMs: config.pluginFilesStableMs,
+      maxBlockMs: config.pluginFilesMaxBlockMs,
+    })
+    if (blocker === null) return []
+    return [{
+      sessionId: null,
+      kind: blocker.kind,
+      reason: blocker.reason,
+      label: 'plugin files',
+      name: 'the plugin files are being changed',
+      packageName: null,
+      phase: null,
+      cooldown: false,
+    }]
+  }
+
+  /** Both external blockers: the market when it answers, the files always. */
+  const externalBlockersNow = (now = Date.now()) => [
+    ...marketExternalBlockers(now),
+    ...pluginFilesExternalBlockers(now),
+  ]
+
+  /** The plugin-files block for the state payload. */
+  const pluginFilesInfo = (now = Date.now()) => {
+    samplePluginFiles(now)
+    const watched = config.pluginFilesWatch === true
+    const blocker = watched
+      ? filesBlocker(pluginFilesState, { now, stableMs: config.pluginFilesStableMs, maxBlockMs: config.pluginFilesMaxBlockMs })
+      : null
+    return {
+      watched,
+      changing: blocker !== null,
+      stableMs: config.pluginFilesStableMs,
+      maxBlockMs: config.pluginFilesMaxBlockMs,
+      quietForMs: pluginFilesState.lastChangeAt === 0 ? null : Math.max(0, now - pluginFilesState.lastChangeAt),
+    }
+  }
+
   const marketExternalBlockers = (now = Date.now()) => {
     const status = marketInstallNow(now)
     if (status.installing !== true) return []
@@ -4229,7 +4323,7 @@ let queueDiagLog = { at: 0, requestedAt: 0 }
   /** The two-layer restart gate: no busy conversation AND a quiet window. */
   const gate = () => restartGate(state, {
     busyAgents: busyAgents(),
-    externalBlockers: marketExternalBlockers(),
+    externalBlockers: externalBlockersNow(),
     lastActivityAt: quietSince(),
     now: Date.now(),
     settleMs: effectiveSettleMs(),
@@ -7191,7 +7285,7 @@ const titleOfSummary = (item) => {
     const decision = restartDecision(state, {
       anyAgentRunning: busy.length > 0,
       busyAgents: busy,
-      externalBlockers: marketExternalBlockers(now),
+      externalBlockers: externalBlockersNow(now),
       lastActivityAt: quietSince(),
       settleMs: effectiveSettleMs(),
       now,
@@ -7227,7 +7321,7 @@ const titleOfSummary = (item) => {
             : null,
           reason: entry && typeof entry.reason === 'string' ? entry.reason : 'busy',
         })),
-        externalBlockers: marketExternalBlockers(now).map((entry) => ({
+        externalBlockers: externalBlockersNow(now).map((entry) => ({
           kind: entry.kind,
           reason: entry.reason,
           packageName: entry.packageName,
@@ -7681,6 +7775,7 @@ const titleOfSummary = (item) => {
     // THE PLUGIN MARKET (2026-11-10): what the probe saw and what the gate does
     // with it. Read only - it never writes anything on the market's side.
     marketInstallInfo: (now) => marketInstallInfo(now),
+    pluginFilesInfo: (now) => pluginFilesInfo(now),
     restartRequestSummary,
     restartRequestOutcome,
     requestSnapshotCancel,
@@ -12680,6 +12775,7 @@ function registerHealthRoute(ctx, runtime, config, sleep) {
             quietForMs: verdict.quietForMs,
           },
           marketInstall: runtime.marketInstallInfo(),
+            pluginFiles: runtime.pluginFilesInfo(),
           phase: state.phase,
           generation: state.generation,
           pendingRestart: state.restart !== null,
@@ -12809,6 +12905,7 @@ function registerHealthRoute(ctx, runtime, config, sleep) {
             // THE PLUGIN MARKET (2026-11-10): whether it is installing something,
             // which package, and — for the bubbles — the ONE sentence they show.
             marketInstall: runtime.marketInstallInfo(),
+            pluginFiles: runtime.pluginFilesInfo(),
             // THE STAGE OF THE RESTART, for the pill and the settings page:
             // which of the four stages is on screen, the real copy progress of
             // the snapshot, whether it is going slower than expected, and
@@ -12947,6 +13044,7 @@ function registerHealthRoute(ctx, runtime, config, sleep) {
             // The degraded answer says the same thing as the healthy one: the
             // bubble must never claim the market is installing on a guess.
             marketInstall: null,
+            pluginFiles: null,
             parkUrl: resolveParkPath(config),
             recoverUrl: resolveRecoverPath(config),
             cancelUrl: resolveCancelPath(config),
