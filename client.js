@@ -132,8 +132,19 @@
   /** The countdown length the settings page offers (a dropdown). */
   const SLEEP_COUNTDOWN_CHOICES = Object.freeze([0, 10, 20, 30, 60])
 
-  /** The countdown length used when the Host did not report one. */
-  const SLEEP_DEFAULT_COUNTDOWN_SECONDS = 20
+  /**
+   * The countdown length used when the Host did not report one.
+   *
+   * MUST EQUAL `DEFAULT_COUNTDOWN_SECONDS` in `lib/sleep.js` (10 since
+   * 2026-11-11). This file is a CLASSIC script evaluated by the client module
+   * loader, so it cannot import the host constant — the two are kept in step
+   * by a test instead ('the browser half falls back to the same default
+   * countdown as the host'), which fails as soon as either number drifts.
+   *
+   * In practice the Host always reports a number (`countdownSeconds` in the
+   * status route), so this is only the last-resort default.
+   */
+  const SLEEP_DEFAULT_COUNTDOWN_SECONDS = 10
 
   /** How long the note of a finished rehearsal stays on screen (ms). */
   const SLEEP_DRY_RUN_NOTICE_MS = 8_000
@@ -151,6 +162,20 @@
   /** The RESTART reserve used when the Host did not report one (ms / seconds). */
   const GRACE_DEFAULT_MS = 0
   const GRACE_DEFAULT_SECONDS = 0
+
+  /**
+   * THE TWO SCALES OF THE PLUGIN-FOLDER WATCHDOG (user decision, 2026-11-11).
+   *
+   * The user does not want to type a number: the page offers the usual values
+   * as a dropdown. They are milliseconds here — what the configuration stores —
+   * so an option value can be written back unchanged.
+   */
+  const PLUGIN_FILES_STABLE_CHOICES = Object.freeze([5000, 10000, 15000, 30000, 60000])
+  const PLUGIN_FILES_MAX_CHOICES = Object.freeze([300000, 600000, 1800000, 3600000])
+
+  /** The two scales used when the Host did not report one (ms). */
+  const PLUGIN_FILES_DEFAULT_STABLE_MS = 15000
+  const PLUGIN_FILES_DEFAULT_MAX_BLOCK_MS = 300000
 
   const ZH = {
     label: '待重启',
@@ -218,7 +243,7 @@
     // A CANCELLED QUEUED RESTART, IN PLAIN WORDS (user report, 2026-11-03): the request
     // waited over two hours, then a host restart cancelled it and the page said nothing.
     // No internal identifier may reach the screen.
-    'settings.restart.cancelledNote': '上次要的重启没有做成：你在 {at} 请求重启，等了 {waited}，它一直没有执行；这次宿主重启之后，那个请求已经被取消了。想重启的话，再点一次就行。',
+    'settings.restart.cancelledNote': '上次要的重启没有做成：你在 {at} 请求重启，等了 {waited}，它一直没有执行；这次 DSH 重启之后，那个请求已经被取消了。想重启的话，再点一次就行。',
     'restart.waitedSeconds': '几秒',
     'restart.waitedMinutes': '约 {n} 分钟',
     'restart.waitedHours': '约 {n} 小时 {m} 分',
@@ -297,30 +322,33 @@
     'settings.groups.restart': '重启相关设置',
     'settings.groups.shutdown': '关机相关设置',
     'settings.advanced.title': '更多设置',
-    'settings.pluginFiles.watch': '盯住插件目录：正在装插件时先不重启、不关机',
-    'settings.pluginFiles.stable': '安静多久才算装完（秒）',
-    'settings.pluginFiles.max': '最多为它等多久（分钟）',
+    // THE 「查看说明」 ENTRY (user decision, 2026-11-11): every explanation on
+    // this page lives behind one of these, so the page shows only titles and
+    // controls until somebody asks for the words.
+    'settings.viewHint': '查看说明',
+    'settings.pluginFiles.watch': '装插件时先不重启、不关机',
+    'settings.pluginFiles.watchHint': '正在装插件时（手动装的也算），先不重启、也不关机，等插件目录安静下来再说。',
+    'settings.pluginFiles.stable': '等待插件没有文件改动多少秒，就算装完',
+    'settings.pluginFiles.stableHint': '插件安装时，文件是一个一个写进来的，中间会有停顿。这里设定：插件目录连续这么多秒没有新的文件变动，就当作装完了，重启或关机可以继续。',
+    'settings.pluginFiles.max': '最多等插件安装多久',
+    'settings.pluginFiles.seconds': '{n} 秒',
+    'settings.pluginFiles.minutes': '{n} 分钟',
+    'settings.pluginFiles.currentValue': '当前值',
+    'settings.pluginFiles.offHint': '关掉上面那个开关时，这两项不起作用。',
+    'settings.pluginFiles.maxHint': '这是兜底：万一插件安装卡住了（比如网络断了、安装进程卡死），也不会永远等下去——最多等这么久；超过这个时间就照常重启或关机，不再等它。',
     'settings.seconds.label': '关机倒数秒数',
     'settings.seconds.immediate': '不倒数（立即关机）',
     'settings.seconds.value': '{n} 秒',
     'settings.seconds.hint': '所有会话收工后，屏幕上会显示这段倒数（可点「不关了」取消），数完才关机；想要更多落盘时间就把倒数调大。',
-    'settings.restartGrace.label': '重启前等待',
-    'settings.restartGrace.hint': '重启没有倒数环节，会话一收工就会立刻重启；如果你装了“会话结束后才写”的记忆/总结类插件，把这里调大（默认 0 秒）。',
+    'settings.restartGrace.label': '重启倒数时间',
+    'settings.restartGrace.hint': '设置重启倒数时间（默认 0 秒）；如果你装了“会话结束后才写”的记忆/总结类插件，建议调整到 10 秒或以上。',
     'settings.restartGrace.value': '{n} 秒',
     'settings.restartGrace.immediate': '不等（立即重启）',
-    'settings.window.label': '辅助脚本的运行方式',
-    'settings.window.foreground': '前台运行（会短暂出现一个窗口，默认）',
-    'settings.window.background': '后台运行（不出现窗口，也不抢焦点）',
-    'settings.window.hint': '只决定重启时那个辅助脚本怎么被拉起来，改完在下次重启生效。后台模式用 VBScript 垫片启动：不创建窗口，也不会把全屏中的游戏切走；若机器安全策略禁用脚本宿主，会自动回落到隐藏窗口的 PowerShell，并把原因记进重启报告。',
-    'settings.window.lastLabel': '上次重启',
-    'settings.window.lastWscript': '后台（wscript，无窗口）',
-    'settings.window.lastHidden': '后台，回落到 PowerShell 隐藏窗口',
-    'settings.window.lastForeground': '前台（有窗口）',
-    'settings.window.lastUnknown': '未知',
-    'settings.window.lastFallback': '回落原因：{reason}',
-    'settings.window.shimLeft': '临时垫片没能自动删除，下次重启会清掉（重启报告里也有记录）',
+    'settings.window.label': '重启命令脚本运行方式',
+    'settings.window.foreground': '前台运行（会短暂出现一个窗口）',
+    'settings.window.background': '后台运行（不出现窗口，也不抢焦点，默认）',
+    'settings.window.hint': '只决定重启时那条命令怎么被拉起来，改完在下次重启生效。后台运行不会弹出任何窗口，也不会把正在全屏的游戏切走；如果这台电脑不让运行这类小脚本，会自动换成另一种方式，并把原因写进重启报告。',
     'settings.backup.label': '重启前备份',
-    'settings.backup.details': '详情',
     'settings.backup.when': '什么时候会备份？',
     'settings.backup.whenBody': '每次重启前先比对 DSH 配置（勾了「备份包含已安装插件」时还会比对已安装插件）有没有变化：有变化才新建一份备份；没变化就跳过、沿用最近一份。备份条数等于「配置真正改过几次」。关掉「重启前备份」开关时不做比对，也不产生备份。',
     // THE TRACE OF A SKIPPED COPY (user decision, 2026-11-07): "no new backup"
@@ -328,10 +356,11 @@
     // skipped it and which copy it kept on using.
     'settings.backup.lastSkipped': '上次重启（{time}）：配置和插件没有变化，未新建备份，沿用 {dir}',
     'settings.backup.lastSkippedConfig': '上次重启（{time}）：配置没有变化，未新建备份，沿用 {dir}',
-    'settings.backup.section': '备份说明及手动备份操作',
-    'settings.backup.hint': '重启前自动存一份存档；插件不会自动还原，要回退得在下面自己点。存的是：你的设置（一定）；你自己写的、直接链接到源码目录的插件（连文件一起拷）；从网上下载装的插件（只记下装过哪些、什么版本，不拷文件，真出事时按清单重装）。',
+    'settings.backup.section': '备份信息',
+    'settings.backup.hint': '重启前自动存一份存档；插件不会自动还原，要回退得在下面自己点。存的是：你的设置（一定）；你自己写的、就放在本机目录里的插件（连文件一起拷）；从网上下载装的插件（只记下装过哪些、什么版本，不拷文件，真出事时按清单重装）。',
     'settings.backupPlugins.label': '备份包含已安装插件',
-    'settings.backupPlugins.hint': '关闭后只备份 DSH 自身状态，不含 profile 里的插件目录。',
+    'settings.backupPlugins.hint': '关闭后只备份 DSH 自己，不包含你装的那些插件。',
+    'settings.backupPlugins.offHint': '关掉上面那个开关（重启前备份）时，这一项不起作用。',
     'settings.restartBanner.title': '这台机器现在还没有重启能力：本插件不会重启，也不会在重启前备份。点一下「帮我配好」，我自动推导并写入；配错了可以撤销。',
     'settings.restartBanner.fix': '帮我配好',
     'settings.groups.supervisor': '开机自启',
@@ -341,14 +370,14 @@
     'settings.supervisor.unknown': '未知',
     'settings.supervisor.off': '关闭',
     'settings.supervisor.capable': '重启能力',
-    'settings.supervisor.capableYes': '可用：宿主退出后会自动回来',
-    'settings.supervisor.capableNo': '不可用：宿主退出后不会自动回来',
+    'settings.supervisor.capableYes': '可用：DSH 意外退出后会自动回来',
+    'settings.supervisor.capableNo': '不可用：DSH 意外退出后不会自动回来',
     'settings.supervisor.install': '装上守护',
     'settings.supervisor.uninstall': '卸载守护',
-    'settings.supervisor.hint': '守护是一个独立进程：登录时自动启动，宿主进程掉了自动拉起，启动失败自动回滚上次快照。不需要管理员。',
+    'settings.supervisor.hint': '守护是一个单独的后台程序：登录时自动启动，DSH 意外退出时自动把它拉回来，启动失败会自动退回到上一次的状态。不需要管理员权限。',
     'settings.supervisor.noInstallDesktop': '桌面版自带重启，这里不用装守护。',
-    'settings.supervisor.noInstallExternal': '已经有别的守护在管这个宿主：再装一个会两个一起拉起、抢同一个端口，所以这里不提供安装。',
-    'settings.supervisor.noInstallUnknown': '宿主没说清是谁在拉起它，所以这里不提供安装。',
+    'settings.supervisor.noInstallExternal': '已经有别的守护在管这台 DSH：再装一个会两个一起拉起、抢同一个端口，所以这里不提供安装。',
+    'settings.supervisor.noInstallUnknown': '还没弄清是谁在拉起这台 DSH，所以这里不提供安装。',
     'settings.supervisor.access': '当前访问链接',
     'settings.supervisor.accessHint': '重启后 token 会变，链接也会变。这个链接一直是最新的。',
     'settings.supervisor.pending': '卸载没有完成，请手动执行：{commands}',
@@ -367,7 +396,7 @@
     'settings.supervisor.reason.container-no-init': '这台机器没有开机自启机制（容器），所以不承诺自动拉起。',
     'settings.supervisor.reason.port-not-fixable': '端口每次都变，浏览器会被踢出去；得先把端口固定下来。',
     'settings.supervisor.reason.supervised': '插件自己的守护在管这个进程，重启直接交给它。',
-    'settings.supervisor.status.external': '我记下的启动方式：由你的脚本拉起（重启交给它，我不插手）',
+    'settings.supervisor.status.external': '我记下的启动方式：由你自己的程序拉起（重启交给它，我不插手）',
     'settings.supervisor.status.bareWritten': '我记下的启动方式：按你确认过的那条命令重启',
     'settings.supervisor.status.bareUnknown': '我还不知道怎么把你拉起来',
     'settings.supervisor.status.unknown': '我看不出你是怎么启动的（我不猜，也不会自己乱拉）',
@@ -421,14 +450,14 @@
     // MORE THAN ONE PROFILE (2026-11-02): the host cannot tell which profile to
     // back up, so backups and rollbacks stop. Saying nothing would look like
     // "everything is fine".
-    'settings.backup.multiProfile': '检测到多个 profile，备份和回滚已暂停：它不知道该备份哪一个。解决办法：启动时指定 DSH_PROFILE，或者只保留一个 profile。',
+    'settings.backup.multiProfile': '检测到有多个 DSH 配置目录，备份和回滚已暂停：它不知道该备份哪一个。解决办法：启动时指定 DSH_PROFILE，或者只保留一个配置目录。',
     'settings.backup.keep': '最多保留 {n} 份，超出自动删最旧的那份。',
     // THE SECOND SENTENCE THE USER SAW TWICE IS GONE (user report, 2026-11-02):
     // "最多保留 2 份" said the same thing as the line above, and the long
     // paragraph about what the folder is for repeated the number a third time.
     // Two lines say everything the page can promise; the dropdown below changes
     // the number, so no sentence carries a frozen copy of it.
-    'settings.backup.kindsLocal': '链接安装（自己写的）和本地化过的插件（目录里有 .git）都已完整备份，可以回档。',
+    'settings.backup.kindsLocal': '自己写的插件（直接放在本机目录里的）都已完整备份，可以回档。',
     'settings.backup.kindsThirdParty': '第三方插件由插件作者维护，有异常建议重装',
     'settings.backup.limitLabel': '保留份数',
     // THE DISK WARNING SITS NEXT TO THE DROPDOWN (user report, 2026-11-02): it
@@ -746,7 +775,7 @@
     blockerMore: '… and {n} more',
     blockersTitleLine: 'Blocking sessions: {blockers}',
     durationSeconds: '{n}s',
-    'settings.restart.cancelledNote': 'The restart you asked for did not happen: you requested it at {at}, waited {waited}, and it was never carried out; after the host restarted, that request was cancelled. If you still want it, just ask once more.',
+    'settings.restart.cancelledNote': 'The restart you asked for did not happen: you requested it at {at}, waited {waited}, and it was never carried out; after DSH restarted, that request was cancelled. If you still want it, just ask once more.',
     'restart.waitedSeconds': 'a few seconds',
     'restart.waitedMinutes': 'about {n} min',
     'restart.waitedHours': 'about {n}h {m}m',
@@ -825,30 +854,33 @@
     'settings.groups.restart': 'Restart settings',
     'settings.groups.shutdown': 'Shutdown settings',
     'settings.advanced.title': 'More settings',
-    'settings.pluginFiles.watch': 'Watch the plugin folder (wait while it installs)',
-    'settings.pluginFiles.stable': 'Quiet seconds before it counts as done',
-    'settings.pluginFiles.max': 'Longest to wait for that (minutes)',
+    // THE 「查看说明」 ENTRY (user decision, 2026-11-11): every explanation on
+    // this page lives behind one of these, so the page shows only titles and
+    // controls until somebody asks for the words.
+    'settings.viewHint': 'Show details',
+    'settings.pluginFiles.watch': 'Do not restart or shut down while plugins are installing',
+    'settings.pluginFiles.watchHint': 'While plugins are being installed (even by hand), neither a restart nor a shutdown happens — the plugin folder has to settle first.',
+    'settings.pluginFiles.stable': 'How many seconds without a file change mean the plugin is installed',
+    'settings.pluginFiles.stableHint': 'While a plugin is being installed its files arrive one by one, with pauses in between. This is the rule: when the plugin folder has seen no new file change for this many seconds, the install counts as done and a restart or a shutdown may go ahead.',
+    'settings.pluginFiles.max': 'How long to wait at most for the plugin install',
+    'settings.pluginFiles.seconds': '{n} seconds',
+    'settings.pluginFiles.minutes': '{n} minutes',
+    'settings.pluginFiles.currentValue': 'Current value',
+    'settings.pluginFiles.offHint': 'When the switch above is off, these two do nothing.',
+    'settings.pluginFiles.maxHint': 'This is the safety net: if an install gets stuck (the network dropped, the installer hangs), it does not wait for ever — at most this long; after that it restarts or shuts down as usual and stops waiting for the install.',
     'settings.seconds.label': 'Shutdown countdown seconds',
     'settings.seconds.immediate': 'No countdown (switch off right away)',
     'settings.seconds.value': '{n} seconds',
     'settings.seconds.hint': 'Once every conversation is done, this countdown is shown on screen (pick "Never mind, keep it on" to cancel); the machine goes off when it reaches zero. Raise it when you want more time to write.',
-    'settings.restartGrace.label': 'Wait before the restart',
-    'settings.restartGrace.hint': 'A restart has no countdown: the host restarts as soon as the conversations are done. Raise this if you rely on a memory or summary plugin that writes its notes after the conversation ended (default 0 seconds).',
+    'settings.restartGrace.label': 'Restart countdown',
+    'settings.restartGrace.hint': 'Set the restart countdown (0 seconds by default); if you use a memory or summary plugin that writes after the conversation ended, set it to 10 seconds or more.',
     'settings.restartGrace.value': '{n} seconds',
     'settings.restartGrace.immediate': 'Do not wait (restart right away)',
-    'settings.window.label': 'How the restart helper runs',
-    'settings.window.foreground': 'Foreground (a window appears briefly; the default)',
-    'settings.window.background': 'Background (no window at all, and it never takes the focus)',
-    'settings.window.hint': 'It only decides how the restart helper is started; a change applies to the NEXT restart. Background mode starts it through a VBScript shim: no window is created and a full-screen game is not switched away from. If a machine policy forbids Windows Script Host, it falls back to a hidden PowerShell and the reason is written into the restart report.',
-    'settings.window.lastLabel': 'Last restart',
-    'settings.window.lastWscript': 'Background (wscript, no window)',
-    'settings.window.lastHidden': 'Background, fell back to a hidden PowerShell',
-    'settings.window.lastForeground': 'Foreground (with a window)',
-    'settings.window.lastUnknown': 'Unknown',
-    'settings.window.lastFallback': 'Fallback reason: {reason}',
-    'settings.window.shimLeft': 'The temporary shim could not delete itself; the next restart removes it (the restart report records it too)',
+    'settings.window.label': 'How the restart command script runs',
+    'settings.window.foreground': 'Foreground (a window appears briefly)',
+    'settings.window.background': 'Background (no window at all, and it never takes the focus; the default)',
+    'settings.window.hint': 'It only decides how the restart command is started; a change applies to the NEXT restart. The background mode shows no window at all and never takes the focus, so a full-screen game is not switched away from. If this computer does not allow such little scripts to run, another way is used instead and the reason is written into the restart report.',
     'settings.backup.label': 'Backup before a restart',
-    'settings.backup.details': 'Details',
     'settings.backup.when': 'When is a backup taken?',
     'settings.backup.whenBody': 'Before every restart the DSH configuration is compared (with 「include the installed plugins」 on, the installed plugins too): only a real change writes a new copy; no change skips the copy and keeps the newest one. The number of copies equals the number of times the configuration really changed. With 「backup before a restart」 off there is no comparison and no copy.',
     // THE TRACE OF A SKIPPED COPY (user decision, 2026-11-07): "no new backup"
@@ -856,10 +888,11 @@
     // skipped it and which copy it kept on using.
     'settings.backup.lastSkipped': 'The last restart ({time}): no change to configuration or plugins, no new copy written, reusing {dir}',
     'settings.backup.lastSkippedConfig': 'The last restart ({time}): no change to the configuration, no new copy written, reusing {dir}',
-    'settings.backup.section': 'What is backed up, and the manual backup steps',
-    'settings.backup.hint': 'A copy is taken before every restart - an archive, not an automatic rollback: nothing is put back unless you click it below. What it holds: your settings (always); plugins you wrote and linked from a source directory (copied file by file); plugins downloaded from the internet (only which ones and which version are recorded - never copied; they are reinstalled from that list).',
+    'settings.backup.section': 'Backup info',
+    'settings.backup.hint': 'A copy is taken before every restart - an archive, not an automatic rollback: nothing is put back unless you click it below. What it holds: your settings (always); plugins you wrote and that live in a folder on this machine (copied file by file); plugins downloaded from the internet (only which ones and which version are recorded - never copied; they are reinstalled from that list).',
     'settings.backupPlugins.label': 'Include the installed plugins in the backup',
-    'settings.backupPlugins.hint': 'Off: only the state of DSH itself is backed up — the plugin directory of the profile is left out.',
+    'settings.backupPlugins.hint': 'Off: only DSH itself is backed up — the plugins you installed are left out.',
+    'settings.backupPlugins.offHint': 'When the switch above (back up before a restart) is off, this one does nothing.',
     'settings.restartBanner.title': 'This machine has no restart capability right now: this plugin will not restart, and will not take a backup before a restart. Press "Set it up for me" and I derive and write it — and that can be undone.',
     'settings.restartBanner.fix': 'Set it up for me',
     'settings.groups.supervisor': 'Start at login',    'settings.supervisor.status': 'Started by',
@@ -868,14 +901,14 @@
     'settings.supervisor.unknown': 'nobody knows',
     'settings.supervisor.off': 'switched off',
     'settings.supervisor.capable': 'Restart capability',
-    'settings.supervisor.capableYes': 'available: the host comes back on its own',
-    'settings.supervisor.capableNo': 'not available: the host does not come back on its own',
+    'settings.supervisor.capableYes': 'available: DSH comes back on its own after an unexpected exit',
+    'settings.supervisor.capableNo': 'not available: DSH does not come back on its own after an unexpected exit',
     'settings.supervisor.install': 'Install the supervisor',
     'settings.supervisor.uninstall': 'Uninstall the supervisor',
-    'settings.supervisor.hint': 'The supervisor is a process of its own: it starts at login, it starts the host again when its process is gone, and it restores the last snapshot when the host does not come up. No administrator rights needed.',
+    'settings.supervisor.hint': 'The supervisor is a program of its own: it starts at login, it starts DSH again when it is gone, and it restores the last snapshot when DSH does not come up. No administrator rights needed.',
     'settings.supervisor.noInstallDesktop': 'The desktop app restarts itself — there is no supervisor to install here.',
-    'settings.supervisor.noInstallExternal': 'Another supervisor is already in charge of this host. A second one would start the host as well and both would fight over the port, so there is nothing to install here.',
-    'settings.supervisor.noInstallUnknown': 'The host did not say who starts it, so there is nothing to install here.',
+    'settings.supervisor.noInstallExternal': 'Another supervisor is already in charge of this DSH. A second one would start it as well and both would fight over the port, so there is nothing to install here.',
+    'settings.supervisor.noInstallUnknown': 'Nobody said who starts this DSH, so there is nothing to install here.',
     'settings.supervisor.access': 'The current access link',
     'settings.supervisor.accessHint': 'The token changes with every restart, and so does the link. This one is always the current one.',
     'settings.supervisor.pending': 'The uninstall did not finish. Please run it by hand: {commands}',
@@ -894,7 +927,7 @@
     'settings.supervisor.reason.container-no-init': 'This machine has no "at login" (a container), so no automatic start is promised.',
     'settings.supervisor.reason.port-not-fixable': 'The port changes every time, so the browser would be logged out; the port has to be fixed first.',
     'settings.supervisor.reason.supervised': 'The supervisor of this plugin is in charge: the restart is handed to it.',
-    'settings.supervisor.status.external': 'How I remember you were started: by your own script (the restart is its job — I stay out of it)',
+    'settings.supervisor.status.external': 'How I remember you were started: by a program of your own (the restart is its job — I stay out of it)',
     'settings.supervisor.status.bareWritten': 'How I remember you were started: restarted with the command you confirmed',
     'settings.supervisor.status.bareUnknown': "I don't know yet how to start you again",
     'settings.supervisor.status.unknown': "I cannot tell how you were started (I don't guess, and I won't start you on my own)",
@@ -937,9 +970,9 @@
     'text.missing': '(this text is missing yet)',
     'settings.backup.list': 'What is backed up right now',
     'settings.backup.count': '{n} copies right now, using {size}.',
-    'settings.backup.multiProfile': 'More than one profile was found, so backups and rollbacks are paused: it cannot tell which one to back up. Fix it by starting with DSH_PROFILE set, or by keeping a single profile.',
+    'settings.backup.multiProfile': 'More than one settings folder was found, so backups and rollbacks are paused: it cannot tell which one to back up. Fix it by starting with DSH_PROFILE set, or by keeping a single settings folder.',
     'settings.backup.keep': 'At most {n} copies are kept; the oldest one is deleted when there are more.',
-    'settings.backup.kindsLocal': 'Both linked plugins (written by hand) and localized ones (their directory has a .git) are in the copy in full, so they can be rolled back.',
+    'settings.backup.kindsLocal': 'The plugins you wrote yourself (the ones in a folder on this machine) are in the copy in full, so they can be rolled back.',
     'settings.backup.kindsThirdParty': 'Third-party plugins are maintained by their authors; if something is wrong, reinstall them.',
     'settings.backup.limitLabel': 'Copies kept',
     'settings.backup.limitHint': 'Backups take disk space, so it is best to keep as few copies as possible.',
@@ -952,7 +985,7 @@
     'settings.backup.empty': 'No backup yet; one is written before every restart.',
     // THE SKIPPED BACKUP MUST BE VISIBLE (2026-11-07): a backup that was not
     // taken, announced only in the log, is a backup the user believes exists.
-    'settings.backup.profileUnknown': 'No backup this time: your profile directory could not be found ({n} candidates).',
+    'settings.backup.profileUnknown': 'No backup this time: your settings folder could not be found ({n} candidates).',
     'settings.backup.path': 'Where they live',
     'settings.backup.copyPath': 'Copy the path',
     'settings.backup.copied': 'The path is on the clipboard',
@@ -3029,6 +3062,140 @@
       const React = require('react')
       const h = React.createElement
       const { useState, useEffect, useRef } = React
+
+      /* ---------------------------------------------------------------- *
+       * THE SETTINGS ROW (user decision, 2026-11-11).
+       *
+       * ONE setting, ONE line, the same shape everywhere on the page: the
+       * title on the left, the control on the right, and the explanation
+       * folded away behind ONE 「查看说明」 entry (the user asked for the
+       * explanations to be folded, not spread under the titles).
+       *
+       * The title is a real `<label for=...>` when the row has a control, so
+       * clicking the title still works the control and a screen reader reads
+       * the title as the name of that control.
+       *
+       * The text behind the fold is ALWAYS in the tree: only `<details>`
+       * hides it, so opening the fold never re-mounts a control.
+       * ---------------------------------------------------------------- */
+
+      /**
+       * One setting, one row.
+       *
+       * @param {Function} t the translator of this plugin
+       * @param {object} options the row
+       * @param {string} options.rowKey the key of the setting (a marker)
+       * @param {string} options.title the title on the left
+       * @param {object} options.control the control on the right
+       * @param {object} [options.hint] the explanation, folded by default
+       * @param {string} [options.controlId] the id of the control (the title
+       *   becomes a `<label>` for it)
+       * @param {string} [options.titleClass] the class of the title (a row
+       *   whose left side is a sentence rather than a title uses it)
+       * @param {boolean} [options.wide] the right side is a long value
+       */
+      function settingsRow(t, options) {
+        const titleClass = 'dsh-autorestart-settings__label'
+          + (options.titleClass ? ' ' + options.titleClass : '')
+        const title = options.controlId
+          ? h(
+              'label',
+              { className: titleClass, htmlFor: options.controlId },
+              options.title,
+            )
+          : h('span', { className: titleClass }, options.title)
+        return h(
+          'div',
+          {
+            className: 'dsh-autorestart-settings__row'
+              + (options.wide === true ? ' dsh-autorestart-settings__row--wide' : '')
+              + (options.disabled === true ? ' dsh-autorestart-settings__row--off' : ''),
+            'aria-disabled': options.disabled === true ? 'true' : undefined,
+            'data-dsh-autorestart-row': options.rowKey,
+          },
+          h(
+            'div',
+            { className: 'dsh-autorestart-settings__row-main' },
+            title,
+            options.hint
+              ? h(
+                  'details',
+                  {
+                    className: 'dsh-autorestart-settings__details',
+                    'data-dsh-autorestart-row-help': options.rowKey,
+                  },
+                  h('summary', { className: 'dsh-autorestart-settings__summary' }, t('settings.viewHint')),
+                  h('div', { className: 'dsh-autorestart-settings__row-help' }, options.hint),
+                )
+              : null,
+          ),
+          h('div', { className: 'dsh-autorestart-settings__row-control' }, options.control),
+        )
+      }
+
+      /**
+       * THE SLIDING SWITCH: the real checkbox plus the track and the dot.
+       *
+       * The checkbox is the control (the keyboard reaches it, the space bar
+       * flips it); the track and the dot are only how it LOOKS.
+       *
+       * @param {object} options the switch
+       * @param {string} options.settingKey the key of the setting (a marker)
+       * @param {string} options.id the id of the checkbox (the title labels it)
+       * @param {boolean} options.checked the value in effect
+       * @param {boolean} [options.disabled] greyed out (a save is running)
+       * @param {Function} options.onChange what a click writes
+       */
+      function settingsSwitch(options) {
+        return h(
+          'span',
+          { className: 'dsh-autorestart-settings__switch' },
+          h('input', {
+            type: 'checkbox',
+            id: options.id,
+            className: 'dsh-autorestart-settings__switch-input',
+            checked: options.checked === true,
+            disabled: options.disabled === true,
+            'data-dsh-autorestart-setting': options.settingKey,
+            onChange: options.onChange,
+          }),
+          h(
+            'span',
+            { className: 'dsh-autorestart-settings__switch-track', 'aria-hidden': 'true' },
+            h('span', { className: 'dsh-autorestart-settings__switch-dot' }),
+          ),
+        )
+      }
+
+      /**
+       * THE DROPDOWN OF A COMMON-VALUE LIST (user decision, 2026-11-11).
+       *
+       * The user does not want to type a number: the page offers the usual
+       * values instead. The value that is REALLY in force is always in the
+       * list — when it is not one of the usual ones, it is appended as
+       * 「当前值」 and stays selected, so a hand-edited configuration is never
+       * silently rewritten.
+       *
+       * The option values are the milliseconds themselves, so saving writes
+       * back exactly the number that is on screen.
+       *
+       * @param {Function} t the translator of this plugin
+       * @param {number[]} choices the usual values, in milliseconds
+       * @param {number} currentMs the value in force, in milliseconds
+       * @param {number} divisor the unit in milliseconds (1000 = seconds)
+       * @param {string} unitKey the dictionary key of the unit
+       * @returns {{ms: number, label: string}[]} the options, in order
+       */
+      function durationOptions(t, choices, currentMs, divisor, unitKey) {
+        const list = choices.indexOf(currentMs) === -1 ? [...choices, currentMs] : choices.slice()
+        return list.map((ms) => ({
+          ms,
+          label: choices.indexOf(ms) === -1
+            ? t('settings.pluginFiles.currentValue')
+              + '（' + fill(t(unitKey), { n: Math.round(ms / divisor) }) + '）'
+            : fill(t(unitKey), { n: Math.round(ms / divisor) }),
+        }))
+      }
 
       const NS = 'dshAutorestart'
       const HEALTH_URL = '/__dsh_autorestart/health?state=1'
@@ -5809,7 +5976,8 @@
         '}',
         '.dsh-autorestart-settings__field{display:flex;flex-direction:column;gap:4px;}',
         '.dsh-autorestart-settings__label{font-size:13px;font-weight:600;color:var(--dsw-alias-label-primary);}',
-        '.dsh-autorestart-settings__select{',
+        '.dsh-autorestart-settings__select,',
+        '.dsh-autorestart-settings__number{',
         '  min-height:30px;',
         '  padding:4px 8px;',
         '  border:1px solid var(--dsw-alias-border-l1);',
@@ -5820,6 +5988,70 @@
         '  font-size:13px;',
         '}',
         '.dsh-autorestart-settings__hint{font-size:12px;line-height:17px;color:var(--dsw-alias-label-secondary);}',
+        // THE ROW (user decision, 2026-11-11): ONE setting, ONE line, and the
+        // SAME shape everywhere on the page — the title on the left, the
+        // control on the right, a thin line between two rows. The right column
+        // has a fixed width, so a dropdown, a number box and a switch all end
+        // at the same right edge.
+        '.dsh-autorestart-settings__rows{display:flex;flex-direction:column;}',
+        '.dsh-autorestart-settings__row{',
+        '  display:grid;',
+        '  grid-template-columns:minmax(0,1fr) 260px;',
+        '  align-items:center;',
+        '  gap:12px;',
+        '  padding:10px 0;',
+        '  border-top:1px solid var(--dsw-alias-border-l1);',
+        '}',
+        // The first row of a block carries no line above it.
+        '.dsh-autorestart-settings__rows > .dsh-autorestart-settings__row:first-child{',
+        '  border-top:none;',
+        '  padding-top:0;',
+        '}',
+        // A row whose right side is a VALUE and not a control: the text needs
+        // the whole right half, so this one does not use the fixed column.
+        '.dsh-autorestart-settings__row--wide{grid-template-columns:minmax(0,1fr) minmax(0,1fr);}',
+        '.dsh-autorestart-settings__row-main{display:flex;flex-direction:column;gap:2px;min-width:0;}',
+        '.dsh-autorestart-settings__row-control{display:flex;align-items:center;justify-content:flex-end;gap:8px;min-width:0;}',
+        // A DROPDOWN KEEPS ITS WIDTH (user decision, 2026-11-11): the column is
+        // 260px so 「60 分钟」 and 「后台运行（不出现窗口，也不抢焦点，默认）」
+        // are not squeezed into an ellipsis, and the select never shrinks below
+        // 200px even when the row title next to it grows.
+        '.dsh-autorestart-settings__row-control > .dsh-autorestart-settings__select{width:100%;min-width:200px;}',
+        '.dsh-autorestart-settings__number{width:140px;}',
+        // The text behind 「查看说明」: it is ALWAYS in the tree, the fold only
+        // hides it (so opening it never re-mounts the controls).
+        '.dsh-autorestart-settings__row-help{display:flex;flex-direction:column;gap:6px;padding:4px 0 2px;}',
+        '.dsh-autorestart-settings__row-help-title{font-size:12px;font-weight:600;color:var(--dsw-alias-label-primary);}',
+        // THE SUBORDINATE ROWS (user decision, 2026-11-11): the two scales the
+        // watchdog switch owns are drawn as ITS children — indented, with a
+        // faint vertical line — so the page says at a glance who they belong
+        // to. The colour is a theme token, so it works in both themes.
+        '.dsh-autorestart-settings__subrows{',
+        '  margin-left:16px;',
+        '  padding-left:14px;',
+        '  border-left:2px solid var(--dsw-alias-border-l1);',
+        '}',
+        // A row whose switch above is off: the control is greyed out.
+        '.dsh-autorestart-settings__row--off .dsh-autorestart-settings__row-control{',
+        '  opacity:.5;',
+        '}',
+        '.dsh-autorestart-settings__row--off .dsh-autorestart-settings__label{',
+        '  opacity:.7;',
+        '}',
+        // THE 「更多设置」 BLOCK (user decision, 2026-11-11): a block of its own,
+        // closed by default, with the very same rows as everywhere else.
+        '.dsh-autorestart-settings__advanced{',
+        '  border:1px solid var(--dsw-alias-border-l1);',
+        '  border-radius:10px;',
+        '  padding:12px 14px;',
+        '}',
+        '.dsh-autorestart-settings__advanced-summary{',
+        '  font-size:12px;',
+        '  font-weight:700;',
+        '  line-height:18px;',
+        '  color:var(--dsw-alias-label-secondary);',
+        '  cursor:pointer;',
+        '}',
         // THE BACKUP LIST (user report, 2026-10-29: the old one-liner
         // "2026-10-29 22:08:46+08:00 156.0 MB 含已装插件" was unreadable).
         // One GROUP per backup, a labelled row for the time and one for the
@@ -5996,15 +6228,63 @@
         '.dsh-autorestart-settings__details[open] .dsh-autorestart-settings__summary{',
         '  margin-bottom:4px;',
         '}',
-        // The two backup switches.
+        // THE SLIDING SWITCH (user decision, 2026-11-11): a track and a dot.
+        //
+        // The real `<input type="checkbox">` stays in the tree: it is what the
+        // keyboard talks to (Tab reaches it, the space bar flips it) and what
+        // a screen reader reads. Only its LOOK is replaced by the track and
+        // the dot next to it — no image, no third-party widget.
         '.dsh-autorestart-settings__switch{',
-        '  width:16px;',
-        '  height:16px;',
+        '  position:relative;',
+        '  display:inline-flex;',
+        '  align-items:center;',
+        '  flex:none;',
+        '  width:38px;',
+        '  height:22px;',
+        '}',
+        '.dsh-autorestart-settings__switch-input{',
+        '  position:absolute;',
+        '  inset:0;',
+        '  width:100%;',
+        '  height:100%;',
         '  margin:0;',
-        '  accent-color:var(--dsw-alias-brand-primary,#4d6bfe);',
+        '  opacity:0;',
         '  cursor:pointer;',
         '}',
-        '.dsh-autorestart-settings__switch:disabled{cursor:not-allowed;opacity:.5;}',
+        '.dsh-autorestart-settings__switch-input:disabled{cursor:not-allowed;}',
+        '.dsh-autorestart-settings__switch-track{',
+        '  display:block;',
+        '  width:38px;',
+        '  height:22px;',
+        '  border-radius:11px;',
+        '  border:1px solid var(--dsw-alias-border-l1);',
+        '  background:color-mix(in srgb, var(--dsw-alias-label-primary) 22%, transparent);',
+        '  transition:background .15s ease;',
+        '}',
+        '.dsh-autorestart-settings__switch-dot{',
+        '  display:block;',
+        '  width:16px;',
+        '  height:16px;',
+        '  margin:2px;',
+        '  border-radius:50%;',
+        '  background:var(--dsw-alias-bg-layer-1,var(--dsw-alias-label-primary));',
+        '  transition:transform .15s ease;',
+        '}',
+        '.dsh-autorestart-settings__switch-input:checked + .dsh-autorestart-settings__switch-track{',
+        '  background:var(--dsw-alias-brand-primary,#4d6bfe);',
+        '  border-color:var(--dsw-alias-brand-primary,#4d6bfe);',
+        '}',
+        '.dsh-autorestart-settings__switch-input:checked + .dsh-autorestart-settings__switch-track .dsh-autorestart-settings__switch-dot{',
+        '  transform:translateX(16px);',
+        '}',
+        // The keyboard must see where it is.
+        '.dsh-autorestart-settings__switch-input:focus-visible + .dsh-autorestart-settings__switch-track{',
+        '  outline:2px solid var(--dsw-alias-state-business-primary,var(--dsw-alias-brand-primary,#4d6bfe));',
+        '  outline-offset:2px;',
+        '}',
+        '.dsh-autorestart-settings__switch-input:disabled + .dsh-autorestart-settings__switch-track{',
+        '  opacity:.5;',
+        '}',
         '.dsh-autorestart-settings__error{',
         '  margin:0;',
         '  color:var(--dsw-alias-danger,#d14343);',
@@ -6493,9 +6773,7 @@
         const [detailsOpen, setDetailsOpen] = useState(false)
         // The two folds of the BACKUP group (user decision, 2026-11-02): the long
         // explanation and the per-copy technical rows are collapsed by default,
-        // while every switch stays visible. Both use the neutral label
-        // `settings.backup.details` (added with the user's approval).
-        const [backupDetailsOpen, setBackupDetailsOpen] = useState(false)
+        // while every switch stays visible.
         const [backupListDetailsOpen, setBackupListDetailsOpen] = useState(false)
         // THE WHOLE BACKUP BLOCK IS ONE FOLD (user decision, 2026-11-02): the
         // four switches stay visible, everything that only EXPLAINS the backups
@@ -6625,20 +6903,26 @@
         const restartGraceSeconds = GRACE_CHOICES_SECONDS.indexOf(Math.round(reportedRestartGraceMs / 1000)) === -1
           ? GRACE_DEFAULT_SECONDS
           : Math.round(reportedRestartGraceMs / 1000)
-        // HOW THE RESTART HELPER IS STARTED (user decision, 2026-11-09): the
-        // Host reports the mode and the launch record of the last restart, so a
-        // background run that had to fall back is visible on the page.
-        const restartWindow = status && typeof status === 'object' && status.restartWindow === 'background'
-          ? 'background'
-          : 'foreground'
-        // THE LAUNCH RECORD of the last restart (which LAUNCHER ran), reported
-        // under `lastLaunch`.
-        const lastLaunch = status
-          && typeof status === 'object'
-          && status.lastLaunch
-          && typeof status.lastLaunch === 'object'
-          ? status.lastLaunch
-          : null
+        // HOW THE RESTART COMMAND IS STARTED (user decision, 2026-11-09; the
+        // DEFAULT became BACKGROUND on 2026-11-11): the Host reports the mode,
+        // so a machine that already stored `foreground` keeps running that way
+        // — the new default only applies where nothing was ever stored.
+        const restartWindow = status && typeof status === 'object' && status.restartWindow === 'foreground'
+          ? 'foreground'
+          : 'background'
+        // THE PLUGIN-FOLDER WATCHDOG AND ITS TWO SCALES (user decision,
+        // 2026-11-11): the switch owns the two numbers below it, so the page
+        // needs to know whether it is on and which values are in force.
+        const pluginFiles = status && typeof status === 'object' && status.pluginFiles && typeof status.pluginFiles === 'object'
+          ? status.pluginFiles
+          : {}
+        const pluginFilesWatched = pluginFiles.watched !== false
+        const pluginFilesStableMs = Number.isFinite(pluginFiles.stableMs)
+          ? pluginFiles.stableMs
+          : PLUGIN_FILES_DEFAULT_STABLE_MS
+        const pluginFilesMaxBlockMs = Number.isFinite(pluginFiles.maxBlockMs)
+          ? pluginFiles.maxBlockMs
+          : PLUGIN_FILES_DEFAULT_MAX_BLOCK_MS
 
         // THE SUPERVISOR: who starts this host, and can the restart work at all.
         // The Host reports it in the state payload.
@@ -7255,121 +7539,137 @@
                 },
                 restartStageText(info && info.restartPhase),
               ),
-            h(
-              'label',
-              { className: 'dsh-autorestart-settings__field' },
-              h('span', { className: 'dsh-autorestart-settings__label' }, t('settings.restartGrace.label')),
-              h(
-                'select',
-                {
-                  className: 'dsh-autorestart-settings__select',
-                  value: String(restartGraceSeconds),
-                  disabled: busy,
-                  'data-dsh-autorestart-setting': 'restartGraceMs',
-                  onChange: (event) => {
-                    const value = Number(event && event.target ? event.target.value : NaN)
-                    if (!Number.isFinite(value) || value === restartGraceSeconds) return
-                    void save({ restartGraceMs: value * 1000 })
-                  },
-                },
-                GRACE_CHOICES_SECONDS.map((choice) => h(
-                  'option',
-                  { key: String(choice), value: String(choice) },
-                  choice === 0
-                    ? t('settings.restartGrace.immediate')
-                    : fill(t('settings.restartGrace.value'), { n: choice }),
-                )),
-              ),
-              h('span', { className: 'dsh-autorestart-settings__hint' }, t('settings.restartGrace.hint')),
-            ),
-            // WHEN A COPY IS TAKEN (user decision, 2026-11-07): the page now
-            // says, ABOVE the switches that govern it, that a restart first
-            // compares the configuration (and, with plugins in the copy, the
-            // installed plugins) and only writes a copy when something really
-            // changed. Without this the count ("only three backups after ten
-            // restarts") had no explanation anywhere on the page.
+            // THE ROWS (user decision, 2026-11-11): every setting of this group
+            // is the same row — the title on the left, the control on the
+            // right, the explanation folded behind ONE 「查看说明」 entry.
             h(
               'div',
-              { className: 'dsh-autorestart-settings__field', 'data-dsh-autorestart-backup': 'when' },
-              h(
-                'span',
-                {
-                  className: 'dsh-autorestart-settings__label',
-                  'data-dsh-autorestart-backup': 'when-label',
-                },
-                t('settings.backup.when'),
-              ),
-              h(
-                'span',
-                {
-                  className: 'dsh-autorestart-settings__hint',
-                  'data-dsh-autorestart-backup': 'when-body',
-                },
-                t('settings.backup.whenBody'),
-              ),
-            ),
-            h(
-              'label',
-              { className: 'dsh-autorestart-settings__field' },
-              h('span', { className: 'dsh-autorestart-settings__label' }, t('settings.backup.label')),
-              h(
-                'input',
-                {
-                  type: 'checkbox',
-                  className: 'dsh-autorestart-settings__switch',
+              { className: 'dsh-autorestart-settings__rows' },
+              // ① HOW LONG THE HOST WAITS BEFORE A RESTART.
+              settingsRow(t, {
+                rowKey: 'restartGraceMs',
+                title: t('settings.restartGrace.label'),
+                controlId: 'dsh-autorestart-setting-restartGraceMs',
+                control: h(
+                  'select',
+                  {
+                    className: 'dsh-autorestart-settings__select',
+                    id: 'dsh-autorestart-setting-restartGraceMs',
+                    value: String(restartGraceSeconds),
+                    disabled: busy,
+                    'data-dsh-autorestart-setting': 'restartGraceMs',
+                    onChange: (event) => {
+                      const value = Number(event && event.target ? event.target.value : NaN)
+                      if (!Number.isFinite(value) || value === restartGraceSeconds) return
+                      void save({ restartGraceMs: value * 1000 })
+                    },
+                  },
+                  GRACE_CHOICES_SECONDS.map((choice) => h(
+                    'option',
+                    { key: String(choice), value: String(choice) },
+                    choice === 0
+                      ? t('settings.restartGrace.immediate')
+                      : fill(t('settings.restartGrace.value'), { n: choice }),
+                  )),
+                ),
+                hint: h(
+                  'span',
+                  { className: 'dsh-autorestart-settings__hint' },
+                  t('settings.restartGrace.hint'),
+                ),
+              }),
+              // ② THE PRE-RESTART BACKUP.
+              //
+              // Its explanation carries the two paragraphs that used to lie
+              // spread over the page: WHEN a copy is taken (2026-11-07) and
+              // WHAT the copy holds. The user named the second one as the
+              // example of what a folded explanation looks like — so it is
+              // FOLDED, never dropped.
+              settingsRow(t, {
+                rowKey: 'backupOnRestart',
+                title: t('settings.backup.label'),
+                controlId: 'dsh-autorestart-setting-backupOnRestart',
+                control: settingsSwitch({
+                  settingKey: 'backupOnRestart',
+                  id: 'dsh-autorestart-setting-backupOnRestart',
                   checked: backupOnRestart,
                   disabled: busy,
-                  'data-dsh-autorestart-setting': 'backupOnRestart',
                   onChange: (event) => {
                     const value = Boolean(event && event.target ? event.target.checked : false)
                     if (value === backupOnRestart) return
                     void save({ backupOnRestart: value })
                   },
-                },
-              ),
-              // THE EXPLANATION IS FOLDED (user decision, 2026-11-02): the switch
-              // above stays on screen — only the words fold.
-              h(
-                'details',
-                {
-                  className: 'dsh-autorestart-settings__details',
-                  'data-dsh-autorestart-backup': 'details',
-                  onToggle: (event) => {
-                    setBackupDetailsOpen(Boolean(event && event.target ? event.target.open : false))
-                  },
-                },
-                h('summary', { className: 'dsh-autorestart-settings__summary' }, t('settings.backup.details')),
-                backupDetailsOpen
-                  ? h(
+                }),
+                hint: [
+                  h(
                     'span',
-                    { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-backup': 'content-hint' },
+                    {
+                      key: 'when-title',
+                      className: 'dsh-autorestart-settings__row-help-title',
+                      'data-dsh-autorestart-backup': 'when-label',
+                    },
+                    t('settings.backup.when'),
+                  ),
+                  h(
+                    'span',
+                    {
+                      key: 'when-body',
+                      className: 'dsh-autorestart-settings__hint',
+                      'data-dsh-autorestart-backup': 'when-body',
+                    },
+                    t('settings.backup.whenBody'),
+                  ),
+                  h(
+                    'span',
+                    {
+                      key: 'what',
+                      className: 'dsh-autorestart-settings__hint',
+                      'data-dsh-autorestart-backup': 'content-hint',
+                    },
                     t('settings.backup.hint'),
-                  )
-                  : null,
-              ),
-            ),
-            h(
-              'label',
-              { className: 'dsh-autorestart-settings__field' },
-              h('span', { className: 'dsh-autorestart-settings__label' }, t('settings.backupPlugins.label')),
+                  ),
+                ],
+              }),
+              // ③ WHETHER THE COPY ALSO HOLDS THE PLUGINS — a SUBORDINATE row
+              // (user decision, 2026-11-11): it only means something when the
+              // backup above is on, so it is drawn as that switch's child —
+              // indented, behind the same faint line as the plugin-folder
+              // scales — and goes grey when the switch is off.
               h(
-                'input',
-                {
-                  type: 'checkbox',
-                  className: 'dsh-autorestart-settings__switch',
-                  checked: backupIncludePlugins,
-                  // Without a pre-restart backup there is nothing to extend: the
-                  // switch is greyed out (and the Host never reads it).
-                  disabled: busy || !backupOnRestart,
-                  'data-dsh-autorestart-setting': 'backupIncludePlugins',
-                  onChange: (event) => {
-                    const value = Boolean(event && event.target ? event.target.checked : false)
-                    if (value === backupIncludePlugins) return
-                    void save({ backupIncludePlugins: value })
-                  },
-                },
+                'div',
+                { className: 'dsh-autorestart-settings__subrows' },
+                settingsRow(t, {
+                  rowKey: 'backupIncludePlugins',
+                  title: t('settings.backupPlugins.label'),
+                  controlId: 'dsh-autorestart-setting-backupIncludePlugins',
+                  disabled: !backupOnRestart,
+                  control: settingsSwitch({
+                    settingKey: 'backupIncludePlugins',
+                    id: 'dsh-autorestart-setting-backupIncludePlugins',
+                    checked: backupIncludePlugins,
+                    // Without a pre-restart backup there is nothing to extend: the
+                    // switch is greyed out (and the Host never reads it).
+                    disabled: busy || !backupOnRestart,
+                    onChange: (event) => {
+                      const value = Boolean(event && event.target ? event.target.checked : false)
+                      if (value === backupIncludePlugins) return
+                      void save({ backupIncludePlugins: value })
+                    },
+                  }),
+                  hint: [
+                    h(
+                      'span',
+                      { key: 'hint', className: 'dsh-autorestart-settings__hint' },
+                      t('settings.backupPlugins.hint'),
+                    ),
+                    h(
+                      'span',
+                      { key: 'off', className: 'dsh-autorestart-settings__hint' },
+                      t('settings.backupPlugins.offHint'),
+                    ),
+                  ],
+                }),
               ),
-              h('span', { className: 'dsh-autorestart-settings__hint' }, t('settings.backupPlugins.hint')),
             ),
             // MORE THAN ONE PROFILE = NO BACKUPS AT ALL (2026-11-02): the Host
             // cannot tell which profile to copy, so backups and rollbacks are
@@ -7766,141 +8066,15 @@
               ),
                 )
               })(),
-            // HOW THE RESTART HELPER IS STARTED, and HOW THE NEW HOST APPEARS
-            // (user decision, 2026-11-09). Both are restart settings, so they
-            // live INSIDE this group, right after the backup section, instead of
-            // a group of their own. They are independent of each other.
-            // THE ONCE-AND-DONE SETTINGS (user decision, 2026-11-11): the
-            // launcher mode and the plugin-folder watchdog are set once and then
-            // forgotten, so they fold away under 「更多设置」 and the group above
-            // stays readable instead of growing three more rows.
-            h(
-              'details',
-              { className: 'dsh-autorestart-settings__advanced', 'data-dsh-autorestart-advanced': 'section' },
-              h('summary', { className: 'dsh-autorestart-settings__advanced-summary' }, t('settings.advanced.title')),
-            h(
-              'label',
-              { className: 'dsh-autorestart-settings__field' },
-              h('span', { className: 'dsh-autorestart-settings__label' }, t('settings.window.label')),
-              h(
-                'select',
-                {
-                  className: 'dsh-autorestart-settings__select',
-                  value: restartWindow,
-                  disabled: busy,
-                  'data-dsh-autorestart-setting': 'restartWindow',
-                  onChange: (event) => {
-                    const value = event && event.target ? String(event.target.value) : ''
-                    if (value !== 'foreground' && value !== 'background') return
-                    if (value === restartWindow) return
-                    void save({ restartWindow: value })
-                  },
-                },
-                h('option', { key: 'foreground', value: 'foreground' }, t('settings.window.foreground')),
-                h('option', { key: 'background', value: 'background' }, t('settings.window.background')),
-              ),
-              h('span', { className: 'dsh-autorestart-settings__hint' }, t('settings.window.hint')),
-            ),
-            // THE PLUGIN-FOLDER WATCHDOG: an install that never goes through the
-            // market (a manual `pnpm add`, the host plugin manager) touches
-            // exactly these files, so a restart or a power-off holds while they
-            // move.
-            h(
-              'label',
-              { className: 'dsh-autorestart-settings__field' },
-              h('span', { className: 'dsh-autorestart-settings__label' }, t('settings.pluginFiles.watch')),
-              h('input', {
-                type: 'checkbox',
-                disabled: busy,
-                checked: !(status && status.pluginFiles && status.pluginFiles.watched === false),
-                'data-dsh-autorestart-setting': 'pluginFilesWatch',
-                onChange: (event) => {
-                  void save({ pluginFilesWatch: !!(event && event.target && event.target.checked) })
-                },
-              }),
-            ),
-            h(
-              'label',
-              { className: 'dsh-autorestart-settings__field' },
-              h('span', { className: 'dsh-autorestart-settings__label' }, t('settings.pluginFiles.stable')),
-              h('input', {
-                type: 'number',
-                min: 0,
-                step: 1,
-                className: 'dsh-autorestart-settings__select',
-                disabled: busy,
-                value: Math.round(
-                  ((status && status.pluginFiles && Number.isFinite(status.pluginFiles.stableMs))
-                    ? status.pluginFiles.stableMs
-                    : 15000) / 1000,
-                ),
-                'data-dsh-autorestart-setting': 'pluginFilesStableMs',
-                onChange: (event) => {
-                  const raw = event && event.target ? Number(event.target.value) : NaN
-                  if (!Number.isFinite(raw) || raw < 0) return
-                  void save({ pluginFilesStableMs: Math.round(raw * 1000) })
-                },
-              }),
-            ),
-            h(
-              'label',
-              { className: 'dsh-autorestart-settings__field' },
-              h('span', { className: 'dsh-autorestart-settings__label' }, t('settings.pluginFiles.max')),
-              h('input', {
-                type: 'number',
-                min: 0,
-                step: 1,
-                className: 'dsh-autorestart-settings__select',
-                disabled: busy,
-                value: Math.round(
-                  ((status && status.pluginFiles && Number.isFinite(status.pluginFiles.maxBlockMs))
-                    ? status.pluginFiles.maxBlockMs
-                    : 300000) / 60000,
-                ),
-                'data-dsh-autorestart-setting': 'pluginFilesMaxBlockMs',
-                onChange: (event) => {
-                  const raw = event && event.target ? Number(event.target.value) : NaN
-                  if (!Number.isFinite(raw) || raw < 0) return
-                  void save({ pluginFilesMaxBlockMs: Math.round(raw * 60000) })
-                },
-              }),
-            ),
-            ),
-            // THE LAST LAUNCH: background mode is invisible, so which launcher
-            // really ran (and whether the shim cleaned up) is shown here.
-            lastLaunch === null ? null : h(
-              'div',
-              { className: 'dsh-autorestart-settings__field', 'data-dsh-autorestart-window': 'last-launch' },
-              h('span', { className: 'dsh-autorestart-settings__label' }, t('settings.window.lastLabel')),
-              h(
-                'span',
-                { className: 'dsh-autorestart-settings__value', 'data-dsh-autorestart-window': 'launcher' },
-                t(
-                  lastLaunch.launcher === 'wscript'
-                    ? 'settings.window.lastWscript'
-                    : lastLaunch.launcher === 'powershell-hidden'
-                      ? 'settings.window.lastHidden'
-                      : lastLaunch.launcher === 'foreground'
-                        ? 'settings.window.lastForeground'
-                        : 'settings.window.lastUnknown',
-                ),
-              ),
-              lastLaunch.fallbackReason
-                ? h(
-                  'span',
-                  { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-window': 'fallback' },
-                  fill(t('settings.window.lastFallback'), { reason: String(lastLaunch.fallbackReason) }),
-                )
-                : null,
-              lastLaunch.shimLeftBehind === true
-                ? h(
-                  'span',
-                  { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-window': 'shim-left' },
-                  t('settings.window.shimLeft'),
-                )
-                : null,
-            ),
           ),
+          // THE ONCE-AND-DONE SETTINGS MOVED OUT (user decision, 2026-11-11):
+          // the launcher mode and the plugin-folder watchdog are set once and
+          // then forgotten, so they live in the 「更多设置」 block of their own
+          // — after the shutdown settings and before 「遇到问题」 — and that
+          // block is closed by default. The 「上次重启」 row is gone from the
+          // page as well (2026-11-11): the launcher that really ran is still
+          // reported by the Host (the status payload and the diagnostics),
+          // it simply does not take up room on the settings page any more.
           h(
             'div',
             {
@@ -7913,29 +8087,197 @@
               t('settings.groups.shutdown'),
             ),
             h(
-              'label',
-              { className: 'dsh-autorestart-settings__field' },
-              h('span', { className: 'dsh-autorestart-settings__label' }, t('settings.seconds.label')),
-              h(
-                'select',
-                {
-                  className: 'dsh-autorestart-settings__select',
-                  value: String(seconds),
-                  disabled: busy,
-                  'data-dsh-autorestart-setting': 'sleepCountdownSeconds',
-                  onChange: (event) => {
-                    const value = Number(event && event.target ? event.target.value : NaN)
-                    if (!Number.isFinite(value) || value === seconds) return
-                    void save({ sleepCountdownSeconds: value })
+              'div',
+              { className: 'dsh-autorestart-settings__rows' },
+              settingsRow(t, {
+                rowKey: 'sleepCountdownSeconds',
+                title: t('settings.seconds.label'),
+                controlId: 'dsh-autorestart-setting-sleepCountdownSeconds',
+                control: h(
+                  'select',
+                  {
+                    className: 'dsh-autorestart-settings__select',
+                    id: 'dsh-autorestart-setting-sleepCountdownSeconds',
+                    value: String(seconds),
+                    disabled: busy,
+                    'data-dsh-autorestart-setting': 'sleepCountdownSeconds',
+                    onChange: (event) => {
+                      const value = Number(event && event.target ? event.target.value : NaN)
+                      if (!Number.isFinite(value) || value === seconds) return
+                      void save({ sleepCountdownSeconds: value })
+                    },
                   },
-                },
-                SLEEP_COUNTDOWN_CHOICES.map((choice) => h(
-                  'option',
-                  { key: String(choice), value: String(choice) },
-                  choice === 0 ? t('settings.seconds.immediate') : fill(t('settings.seconds.value'), { n: choice }),
-                )),
+                  SLEEP_COUNTDOWN_CHOICES.map((choice) => h(
+                    'option',
+                    { key: String(choice), value: String(choice) },
+                    choice === 0 ? t('settings.seconds.immediate') : fill(t('settings.seconds.value'), { n: choice }),
+                  )),
+                ),
+                hint: h(
+                  'span',
+                  { className: 'dsh-autorestart-settings__hint' },
+                  t('settings.seconds.hint'),
+                ),
+              }),
+            ),
+          ),
+          // THE 「更多设置」 BLOCK (user decision, 2026-11-11): a block of its
+          // own, closed by default, placed after the shutdown settings and
+          // before 「遇到问题」. Its four rows are the very same rows as
+          // everywhere else on the page.
+          h(
+            'details',
+            {
+              className: 'dsh-autorestart-settings__advanced',
+              'data-dsh-autorestart-advanced': 'section',
+              'data-dsh-autorestart-group': 'advanced',
+            },
+            h('summary', { className: 'dsh-autorestart-settings__advanced-summary' }, t('settings.advanced.title')),
+            h(
+              'div',
+              { className: 'dsh-autorestart-settings__rows' },
+              // ① HOW THE RESTART COMMAND IS STARTED.
+              settingsRow(t, {
+                rowKey: 'restartWindow',
+                title: t('settings.window.label'),
+                controlId: 'dsh-autorestart-setting-restartWindow',
+                control: h(
+                  'select',
+                  {
+                    className: 'dsh-autorestart-settings__select',
+                    id: 'dsh-autorestart-setting-restartWindow',
+                    value: restartWindow,
+                    disabled: busy,
+                    'data-dsh-autorestart-setting': 'restartWindow',
+                    onChange: (event) => {
+                      const value = event && event.target ? String(event.target.value) : ''
+                      if (value !== 'foreground' && value !== 'background') return
+                      if (value === restartWindow) return
+                      void save({ restartWindow: value })
+                    },
+                  },
+                  h('option', { key: 'foreground', value: 'foreground' }, t('settings.window.foreground')),
+                  h('option', { key: 'background', value: 'background' }, t('settings.window.background')),
+                ),
+                hint: h(
+                  'span',
+                  { className: 'dsh-autorestart-settings__hint' },
+                  t('settings.window.hint'),
+                ),
+              }),
+              // ② THE PLUGIN-FOLDER WATCHDOG: an install that never goes
+              // through the market (a manual `pnpm add`, the host plugin
+              // manager) touches exactly these files, so a restart or a
+              // power-off holds while they move.
+              settingsRow(t, {
+                rowKey: 'pluginFilesWatch',
+                title: t('settings.pluginFiles.watch'),
+                controlId: 'dsh-autorestart-setting-pluginFilesWatch',
+                control: settingsSwitch({
+                  settingKey: 'pluginFilesWatch',
+                  id: 'dsh-autorestart-setting-pluginFilesWatch',
+                  checked: pluginFilesWatched,
+                  disabled: busy,
+                  onChange: (event) => {
+                    void save({ pluginFilesWatch: !!(event && event.target && event.target.checked) })
+                  },
+                }),
+                hint: [
+                  h(
+                    'span',
+                    { key: 'what', className: 'dsh-autorestart-settings__hint' },
+                    t('settings.pluginFiles.watchHint'),
+                  ),
+                  // What the switch MEANS for the two rows below it (user
+                  // decision, 2026-11-11): the sentence belongs here, with the
+                  // switch it talks about.
+                  h(
+                    'span',
+                    { key: 'off', className: 'dsh-autorestart-settings__hint' },
+                    t('settings.pluginFiles.offHint'),
+                  ),
+                ],
+              }),
+              // ③④ THE TWO SCALES THE WATCHDOG OWNS (user decision, 2026-11-11).
+              //
+              // They are drawn as its subordinate items — indented, with a
+              // faint vertical line — so the page says at a glance that they
+              // belong to the switch above, and they go grey when that switch
+              // is off. Their values are DROPDOWNS of the usual lengths (the
+              // user does not want to type a number); a value that is not one
+              // of them stays in the list as 「当前值」 and is never rewritten.
+              h(
+                'div',
+                { className: 'dsh-autorestart-settings__subrows' },
+                // ③ HOW LONG THE FOLDER HAS TO BE QUIET.
+                settingsRow(t, {
+                  rowKey: 'pluginFilesStableMs',
+                  title: t('settings.pluginFiles.stable'),
+                  controlId: 'dsh-autorestart-setting-pluginFilesStableMs',
+                  disabled: !pluginFilesWatched,
+                  control: h(
+                    'select',
+                    {
+                      className: 'dsh-autorestart-settings__select',
+                      id: 'dsh-autorestart-setting-pluginFilesStableMs',
+                      value: String(pluginFilesStableMs),
+                      disabled: busy || !pluginFilesWatched,
+                      'data-dsh-autorestart-setting': 'pluginFilesStableMs',
+                      onChange: (event) => {
+                        const raw = event && event.target ? Number(event.target.value) : NaN
+                        if (!Number.isFinite(raw) || raw < 0) return
+                        if (raw === pluginFilesStableMs) return
+                        void save({ pluginFilesStableMs: Math.round(raw) })
+                      },
+                    },
+                    durationOptions(t, PLUGIN_FILES_STABLE_CHOICES, pluginFilesStableMs, 1000, 'settings.pluginFiles.seconds')
+                      .map((option) => h(
+                        'option',
+                        { key: String(option.ms), value: String(option.ms) },
+                        option.label,
+                      )),
+                  ),
+                  hint: h(
+                    'span',
+                    { className: 'dsh-autorestart-settings__hint' },
+                    t('settings.pluginFiles.stableHint'),
+                  ),
+                }),
+                // ④ HOW LONG IT MAY WAIT AT MOST.
+                settingsRow(t, {
+                  rowKey: 'pluginFilesMaxBlockMs',
+                  title: t('settings.pluginFiles.max'),
+                  controlId: 'dsh-autorestart-setting-pluginFilesMaxBlockMs',
+                  disabled: !pluginFilesWatched,
+                  control: h(
+                    'select',
+                    {
+                      className: 'dsh-autorestart-settings__select',
+                      id: 'dsh-autorestart-setting-pluginFilesMaxBlockMs',
+                      value: String(pluginFilesMaxBlockMs),
+                      disabled: busy || !pluginFilesWatched,
+                      'data-dsh-autorestart-setting': 'pluginFilesMaxBlockMs',
+                      onChange: (event) => {
+                        const raw = event && event.target ? Number(event.target.value) : NaN
+                        if (!Number.isFinite(raw) || raw < 0) return
+                        if (raw === pluginFilesMaxBlockMs) return
+                        void save({ pluginFilesMaxBlockMs: Math.round(raw) })
+                      },
+                    },
+                    durationOptions(t, PLUGIN_FILES_MAX_CHOICES, pluginFilesMaxBlockMs, 60000, 'settings.pluginFiles.minutes')
+                      .map((option) => h(
+                        'option',
+                        { key: String(option.ms), value: String(option.ms) },
+                        option.label,
+                      )),
+                  ),
+                  hint: h(
+                    'span',
+                    { className: 'dsh-autorestart-settings__hint' },
+                    t('settings.pluginFiles.maxHint'),
+                  ),
+                }),
               ),
-              h('span', { className: 'dsh-autorestart-settings__hint' }, t('settings.seconds.hint')),
             ),
           ),
           // The SUPERVISOR group: who starts this host, and whether the restart
@@ -7953,90 +8295,104 @@
               { className: 'dsh-autorestart-settings__group-title' },
               t('settings.groups.supervisor'),
             ),
+            // THE SAME ROWS AS EVERYWHERE ELSE (2026-11-11): the title on the
+            // left, the value on the right, the explanation folded behind
+            // 「查看说明」.
             h(
               'div',
-              { className: 'dsh-autorestart-settings__field' },
-              h(
-                'span',
-                { className: 'dsh-autorestart-settings__label' },
-                t('settings.supervisor.status'),
-              ),
-              h(
-                'span',
-                { className: 'dsh-autorestart-settings__value', 'data-dsh-autorestart-supervisor': 'mode' },
-                supervisorModeLabel(t, supervisorStatus),
-              ),
-              h(
-                'span',
-                { className: 'dsh-autorestart-settings__hint' },
-                t('settings.supervisor.hint'),
-              ),
-            ),
-            h(
-              'div',
-              { className: 'dsh-autorestart-settings__field' },
-              h(
-                'span',
-                { className: 'dsh-autorestart-settings__label' },
-                t('settings.supervisor.capable'),
-              ),
-              h(
-                'span',
-                { className: 'dsh-autorestart-settings__value', 'data-dsh-autorestart-supervisor': 'capable' },
-                supervisorStatus && supervisorStatus.restartCapable === true
-                  ? t('settings.supervisor.capableYes')
-                  : t('settings.supervisor.capableNo'),
-              ),
-            ),
-            supervisorStartup !== null
-              ? h(
-                  'div',
-                  { className: 'dsh-autorestart-settings__field' },
-                  h(
-                    'span',
-                    { className: 'dsh-autorestart-settings__label' },
-                    t('settings.supervisor.startup'),
-                  ),
-                  h(
-                    'span',
-                    { className: 'dsh-autorestart-settings__value', 'data-dsh-autorestart-supervisor': 'startup' },
-                    startupModeLabel(t, supervisorStartup),
-                  ),
-                  h(
-                    'span',
-                    { className: 'dsh-autorestart-settings__hint' },
-                    startupWhy(t, supervisorStartup),
-                  ),
-                )
-              : null,
-            supervisorAutostart !== null
-              ? h(
-                  'div',
-                  { className: 'dsh-autorestart-settings__field' },
-                  h(
-                    'span',
-                    { className: 'dsh-autorestart-settings__label' },
-                    t('settings.supervisor.autostart'),
-                  ),
-                  h(
-                    'span',
-                    { className: 'dsh-autorestart-settings__value', 'data-dsh-autorestart-supervisor': 'autostart' },
-                    humanKind(t, supervisorAutostart.kind),
-                  ),
-                  h(
-                    'span',
-                    { className: 'dsh-autorestart-settings__hint' },
-                    stripMarkdown(supervisorAutostart.reason),
-                  ),
-                  supervisorAutostart.commands.length > 0
-                    ? h(
+              { className: 'dsh-autorestart-settings__rows' },
+              settingsRow(t, {
+                rowKey: 'supervisor.status',
+                wide: true,
+                title: t('settings.supervisor.status'),
+                control: h(
+                  'span',
+                  { className: 'dsh-autorestart-settings__value', 'data-dsh-autorestart-supervisor': 'mode' },
+                  supervisorModeLabel(t, supervisorStatus),
+                ),
+                hint: h(
+                  'span',
+                  { className: 'dsh-autorestart-settings__hint' },
+                  t('settings.supervisor.hint'),
+                ),
+              }),
+              settingsRow(t, {
+                rowKey: 'supervisor.capable',
+                wide: true,
+                title: t('settings.supervisor.capable'),
+                control: h(
+                  'span',
+                  { className: 'dsh-autorestart-settings__value', 'data-dsh-autorestart-supervisor': 'capable' },
+                  supervisorStatus && supervisorStatus.restartCapable === true
+                    ? t('settings.supervisor.capableYes')
+                    : t('settings.supervisor.capableNo'),
+                ),
+              }),
+              supervisorStartup !== null
+                ? settingsRow(t, {
+                    rowKey: 'supervisor.startup',
+                    wide: true,
+                    title: t('settings.supervisor.startup'),
+                    control: h(
+                      'span',
+                      { className: 'dsh-autorestart-settings__value', 'data-dsh-autorestart-supervisor': 'startup' },
+                      startupModeLabel(t, supervisorStartup),
+                    ),
+                    hint: h(
+                      'span',
+                      { className: 'dsh-autorestart-settings__hint' },
+                      startupWhy(t, supervisorStartup),
+                    ),
+                  })
+                : null,
+              supervisorAutostart !== null
+                ? settingsRow(t, {
+                    rowKey: 'supervisor.autostart',
+                    wide: true,
+                    title: t('settings.supervisor.autostart'),
+                    control: h(
+                      'span',
+                      { className: 'dsh-autorestart-settings__value', 'data-dsh-autorestart-supervisor': 'autostart' },
+                      humanKind(t, supervisorAutostart.kind),
+                    ),
+                    hint: [
+                      h(
                         'span',
-                        { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-supervisor': 'autostart-commands' },
-                        supervisorAutostart.commands.join('   ;   '),
-                      )
-                    : null,
-                )
-              : null,
+                        { key: 'reason', className: 'dsh-autorestart-settings__hint' },
+                        stripMarkdown(supervisorAutostart.reason),
+                      ),
+                      supervisorAutostart.commands.length > 0
+                        ? h(
+                            'span',
+                            {
+                              key: 'commands',
+                              className: 'dsh-autorestart-settings__hint',
+                              'data-dsh-autorestart-supervisor': 'autostart-commands',
+                            },
+                            supervisorAutostart.commands.join('   ;   '),
+                          )
+                        : null,
+                    ],
+                  })
+                : null,
+              accessUrl
+                ? settingsRow(t, {
+                    rowKey: 'supervisor.access',
+                    wide: true,
+                    title: t('settings.supervisor.access'),
+                    control: h(
+                      'code',
+                      { className: 'dsh-autorestart-settings__value', 'data-dsh-autorestart-access': 'url' },
+                      accessUrl,
+                    ),
+                    hint: h(
+                      'span',
+                      { className: 'dsh-autorestart-settings__hint' },
+                      t('settings.supervisor.accessHint'),
+                    ),
+                  })
+                : null,
+            ),
             supervisorInstalled || supervisorCanInstall
               ? h(
                   'div',
@@ -8069,27 +8425,6 @@
                     t(supervisorNoInstall),
                   ),
                 ),
-            accessUrl
-              ? h(
-                  'div',
-                  { className: 'dsh-autorestart-settings__field' },
-                  h(
-                    'span',
-                    { className: 'dsh-autorestart-settings__label' },
-                    t('settings.supervisor.access'),
-                  ),
-                  h(
-                    'code',
-                    { className: 'dsh-autorestart-settings__value', 'data-dsh-autorestart-access': 'url' },
-                    accessUrl,
-                  ),
-                  h(
-                    'span',
-                    { className: 'dsh-autorestart-settings__hint' },
-                    t('settings.supervisor.accessHint'),
-                  ),
-                )
-              : null,
             // E + B, in plain words: ONE line that says what this plugin
             // remembers about the way the host was started, two small actions
             // next to it, and the command itself folded away ("technical
@@ -8256,48 +8591,44 @@
             ),
             h(
               'div',
-              { className: 'dsh-autorestart-settings__field' },
-              h(
-                'span',
-                { className: 'dsh-autorestart-settings__label' },
-                t('settings.report.label'),
-              ),
-              h(
-                'button',
-                {
-                  type: 'button',
-                  className: 'dsh-autorestart-settings__button',
-                  disabled: busy,
-                  'data-dsh-autorestart-report': 'github',
-                  onClick: () => void reportIssue(),
-                },
-                t('settings.report.github'),
-              ),
-              h(
-                'span',
-                { className: 'dsh-autorestart-settings__hint' },
-                t('settings.report.hint'),
-              ),
-            ),
-            h(
-              'div',
-              { className: 'dsh-autorestart-settings__field' },
-              h(
-                'span',
-                { className: 'dsh-autorestart-settings__hint' },
-                fill(t('settings.report.email'), { email: reportEmail }),
-              ),
-              h(
-                'button',
-                {
-                  type: 'button',
-                  className: 'dsh-autorestart-settings__button',
-                  disabled: busy,
-                  'data-dsh-autorestart-report': 'copy',
-                  onClick: () => void copyDiagnostics(),
-                },
-                t('settings.report.copy'),
-              ),
+              { className: 'dsh-autorestart-settings__rows' },
+              settingsRow(t, {
+                rowKey: 'report.github',
+                title: t('settings.report.label'),
+                control: h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'dsh-autorestart-settings__button',
+                    disabled: busy,
+                    'data-dsh-autorestart-report': 'github',
+                    onClick: () => void reportIssue(),
+                  },
+                  t('settings.report.github'),
+                ),
+                hint: h(
+                  'span',
+                  { className: 'dsh-autorestart-settings__hint' },
+                  t('settings.report.hint'),
+                ),
+              }),
+              settingsRow(t, {
+                rowKey: 'report.copy',
+                wide: true,
+                titleClass: 'dsh-autorestart-settings__hint',
+                title: fill(t('settings.report.email'), { email: reportEmail }),
+                control: h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'dsh-autorestart-settings__button',
+                    disabled: busy,
+                    'data-dsh-autorestart-report': 'copy',
+                    onClick: () => void copyDiagnostics(),
+                  },
+                  t('settings.report.copy'),
+                ),
+              }),
             ),
             reportFallback === ''
               ? null

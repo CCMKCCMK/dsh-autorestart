@@ -6,9 +6,12 @@ import {
   bootPlan,
   continuationPrompt,
   describeState,
+  isGoalRunning,
+  isGoalStopped,
   restartDecision,
   restartGate,
   resumeStep,
+  selectBusyGoals,
   selectRecoverableSessions,
 } from '../lib/lifecycle.js';
 import {
@@ -390,4 +393,91 @@ test('restartDecision defaults keep the previous idle behaviour', () => {
   // second: there is no window in which the page pretends nothing is happening.
   assert.equal(busy.action, 'long-wait');
   assert.equal(busy.reason, 'waiting-for-conversations');
+});
+
+// ---------------------------------------------------------------------------
+// WHAT COUNTS AS "THE GOAL IS STILL GOING" (bug, 2026-11-11).
+//
+// The goal object is the HOST's: it carries `phase` (what the goal is doing)
+// and `activation` (whether it still has the authority to drive itself). The
+// power-off path read the booleans `activated` / `active` instead — fields the
+// host never sets — so it never recognised a paused or a disarmed goal as
+// "not running", and the machine could not be switched off.
+//
+// The end-to-end proof (the real plugin, the real sleep route) lives in
+// `test/sleep-external-blockers.test.mjs`.
+// ---------------------------------------------------------------------------
+
+/** A goal of the shape the host really hands out. */
+function goalOf(overrides = {}) {
+  return {
+    id: 'goal-1',
+    revision: 1,
+    phase: 'active',
+    activation: 'armed',
+    roundsStarted: 1,
+    maxGoalRounds: 10,
+    ...overrides,
+  };
+}
+
+test('an armed goal with rounds left is work in progress', () => {
+  assert.equal(isGoalRunning(goalOf()), true);
+});
+
+test('a goal that is not running any more is not work in progress', () => {
+  assert.equal(isGoalRunning(goalOf({ phase: 'paused' })), false, 'paused');
+  assert.equal(isGoalRunning(goalOf({ phase: 'blocked' })), false, 'blocked');
+  assert.equal(isGoalRunning(goalOf({ phase: 'complete' })), false, 'complete');
+  assert.equal(isGoalRunning(goalOf({ phase: 'completed' })), false, 'completed');
+  assert.equal(isGoalRunning(goalOf({ phase: 'done' })), false, 'done');
+  assert.equal(isGoalRunning(goalOf({ activation: 'disarmed' })), false, 'disarmed');
+  assert.equal(isGoalRunning(goalOf({ roundsStarted: 10, maxGoalRounds: 10 })), false, 'out of rounds');
+  assert.equal(isGoalRunning(null), false, 'no goal at all');
+});
+
+test('a goal whose activation is missing counts as running (fail-closed)', () => {
+  // THE TRADE-OFF (2026-11-11): the power-off gate would rather hold the
+  // machine for a moment than switch it off while a goal may still be
+  // running. The user sees the blocker on the shutdown card and can cancel it.
+  // A goal that is plainly stopped (paused / blocked / complete) or plainly
+  // without authority ('disarmed') never holds the host.
+  assert.equal(isGoalRunning({ phase: 'active' }), true, 'an active goal without an activation is still work');
+  assert.equal(isGoalRunning({ phase: 'active', activation: '' }), true, 'an empty activation is still work');
+  assert.equal(isGoalRunning({}), true, 'a goal the host does not describe is treated as work, not as idle');
+});
+
+test('the activation is read the same way as the phase: trimmed and lower-cased', () => {
+  assert.equal(isGoalRunning(goalOf({ activation: 'ARMED' })), true, 'ARMED is armed');
+  assert.equal(isGoalRunning(goalOf({ activation: ' Armed ' })), true, 'padded and mixed case is armed');
+  assert.equal(isGoalRunning(goalOf({ activation: 'DISARMED' })), false, 'DISARMED is disarmed');
+  assert.equal(isGoalRunning(goalOf({ activation: ' Disarmed ' })), false, 'padded and mixed case is disarmed');
+  assert.equal(isGoalRunning(goalOf({ phase: 'PAUSED' })), false, 'PAUSED is paused');
+  assert.equal(isGoalRunning(goalOf({ phase: ' Active ' })), true, 'padded and mixed case is active');
+});
+
+test('a goal somebody stopped on purpose is "stopped", not merely "not running"', () => {
+  assert.equal(isGoalStopped(goalOf({ phase: 'paused' })), true, 'paused');
+  assert.equal(isGoalStopped(goalOf({ phase: 'blocked' })), true, 'blocked');
+  assert.equal(isGoalStopped(goalOf({ phase: 'PAUSED' })), true, 'the phase is normalized');
+  assert.equal(isGoalStopped(goalOf({ activation: 'paused' })), true, 'an activation that says paused');
+  assert.equal(isGoalStopped(goalOf()), false, 'an armed, active goal is not stopped');
+  // The plugin's OWN disarm is not "stopped": that goal is the one the boot has
+  // to give back.
+  assert.equal(isGoalStopped(goalOf({ activation: 'disarmed' })), false, 'disarmed is the plugin’s own disarm');
+  assert.equal(isGoalStopped(null), false, 'no goal at all');
+});
+
+test('only the running goals are kept, and the session id must be there', () => {
+  const busy = selectBusyGoals([
+    { sessionId: 'session-a', goal: goalOf() },
+    { sessionId: 'session-b', goal: goalOf({ phase: 'paused' }) },
+    { sessionId: 'session-c', goal: goalOf({ activation: 'disarmed' }) },
+    { sessionId: 'session-d', goal: goalOf({ phase: 'complete' }) },
+    { sessionId: '', goal: goalOf() },
+    { sessionId: 'session-e' },
+    null,
+  ]);
+  assert.deepEqual(busy.map((entry) => entry.sessionId), ['session-a']);
+  assert.equal(busy[0].goal.id, 'goal-1', 'the goal itself is carried along');
 });

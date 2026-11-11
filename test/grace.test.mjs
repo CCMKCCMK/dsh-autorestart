@@ -676,15 +676,37 @@ test('the settings section offers the restart wait and the shutdown countdown', 
   assert.equal(textOf(groups[2].children[0]), '开机自启', 'the supervisor group has a visible title')
   assert.equal(textOf(groups[3].children[0]), '遇到问题', 'the report group has a visible title')
 
-  // The restart group carries four controls plus the restart-window setting and
-  // the three plugin-folder settings (user decision, 2026-11-11: the watchdog is
-  // a restart setting, so it lives here, folded under 「更多设置」).
+  // The restart group carries the wait, the two backup switches and the copy
+  // limit (the limit lives in the backup fold). The restart window and the
+  // plugin-folder watchdog moved into the 「更多设置」 block of their own
+  // (user decision, 2026-11-11).
   const restartControls = walk(groups[0]).filter((node) => node.type === 'select' || node.type === 'input')
   assert.deepEqual(
     restartControls.map((node) => node.props['data-dsh-autorestart-setting']),
-    ['restartGraceMs', 'backupOnRestart', 'backupIncludePlugins', 'maxBackups', 'restartWindow',
-      'pluginFilesWatch', 'pluginFilesStableMs', 'pluginFilesMaxBlockMs'],
-    'the restart group carries the wait, the two backup switches, the copy limit, the restart window and the plugin-folder watchdog',
+    ['restartGraceMs', 'backupOnRestart', 'backupIncludePlugins', 'maxBackups'],
+    'the restart group carries the wait, the two backup switches and the copy limit',
+  )
+  // The 「更多设置」 block: a block of its own, closed by default, standing
+  // AFTER the shutdown settings and BEFORE 「遇到问题」.
+  const advanced = walk(panel).find(
+    (node) => node.type === 'details' && node.props['data-dsh-autorestart-advanced'] === 'section',
+  )
+  assert.ok(advanced, 'the 「更多设置」 block must be there')
+  assert.equal(advanced.props.open, undefined, 'the block starts closed')
+  assert.deepEqual(
+    walk(advanced)
+      .filter((node) => node.type === 'select' || node.type === 'input')
+      .map((node) => node.props['data-dsh-autorestart-setting']),
+    ['restartWindow', 'pluginFilesWatch', 'pluginFilesStableMs', 'pluginFilesMaxBlockMs'],
+    'the block carries the restart window and the plugin-folder watchdog',
+  )
+  const blockOrder = walk(panel)
+    .filter((node) => typeof node.props['data-dsh-autorestart-group'] === 'string')
+    .map((node) => node.props['data-dsh-autorestart-group'])
+  assert.deepEqual(
+    blockOrder,
+    ['restart', 'shutdown', 'advanced', 'supervisor', 'report'],
+    'the 「更多设置」 block stands after the shutdown settings and before 「遇到问题」',
   )
   const shutdownControls = walk(groups[1]).filter((node) => node.type === 'select' || node.type === 'input')
   assert.deepEqual(
@@ -710,9 +732,9 @@ test('the settings section offers the restart wait and the shutdown countdown', 
 
   // The two labels tell the two situations apart.
   const shown = textOf(panel)
-  assert.match(shown, /重启前等待/, `the restart label must be there: ${shown}`)
+  assert.match(shown, /重启倒数时间/, `the restart label must be there: ${shown}`)
   assert.match(shown, /关机倒数秒数/, `the shutdown label must be there: ${shown}`)
-  assert.match(shown, /重启没有倒数环节/, `the restart hint must explain the restart: ${shown}`)
+  assert.match(shown, /设置重启倒数时间（默认 0 秒）；如果你装了“会话结束后才写”的记忆\/总结类插件，建议调整到 10 秒或以上。/, `the restart hint must explain the restart: ${shown}`)
   assert.match(shown, /屏幕上会显示这段倒数/, `the shutdown hint must explain the countdown: ${shown}`)
 
   // Choosing another value writes it into the profile configuration.
@@ -744,11 +766,15 @@ test('the copy of the settings lives in the locale files', () => {
   assert.ok(en.settings.groups.restart, 'the en locale must carry the group titles')
   assert.ok(en.settings.groups.shutdown, 'the en locale must carry the group titles')
   // The two labels.
-  assert.equal(zh.settings.restartGrace.label, '重启前等待')
+  assert.equal(zh.settings.restartGrace.label, '重启倒数时间')
   assert.equal(zh.settings.seconds.label, '关机倒数秒数')
-  assert.match(zh.settings.restartGrace.hint, /重启没有倒数环节/, 'the zh restart copy must explain the restart')
+  assert.equal(
+    zh.settings.restartGrace.hint,
+    '设置重启倒数时间（默认 0 秒）；如果你装了“会话结束后才写”的记忆/总结类插件，建议调整到 10 秒或以上。',
+    'the zh restart copy is the sentence of the user, word for word',
+  )
   assert.match(zh.settings.seconds.hint, /屏幕上会显示这段倒数/, 'the zh countdown copy must explain the countdown')
-  assert.match(en.settings.restartGrace.hint, /no countdown/, 'the en restart copy must explain the restart')
+  assert.match(en.settings.restartGrace.hint, /restart countdown/, 'the en restart copy must explain the restart')
   assert.match(en.settings.seconds.hint, /countdown is shown on screen/, 'the en countdown copy must explain the countdown')
   // The removed shutdown reserve is gone from both locale files.
   assert.equal(

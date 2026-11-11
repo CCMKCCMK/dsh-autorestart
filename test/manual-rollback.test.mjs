@@ -790,8 +790,8 @@ test('④ the panel no longer writes the old tier out — and the true sentences
   assert.equal(value('footprint'), '', 'and the separate footprint line it replaced')
   assert.equal(
     value('kinds-local'),
-    '链接安装（自己写的）和本地化过的插件（目录里有 .git）都已完整备份，可以回档。',
-    'linked and localized plugins are in the copy in full',
+    '自己写的插件（直接放在本机目录里的）都已完整备份，可以回档。',
+    'the plugins you wrote yourself are in the copy in full',
   )
   assert.equal(
     value('kinds-third-party'),

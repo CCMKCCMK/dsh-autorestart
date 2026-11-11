@@ -26,6 +26,14 @@ import {
   sampleFingerprint,
 } from '../lib/plugin-files.js'
 
+/**
+ * The directory of the linked plugins, next to `node_modules` in the profile.
+ *
+ * It is spelled out here on purpose: the test must fail because the watchdog
+ * does not SEE that directory — not because a constant is missing.
+ */
+const LINK_DIR = 'node_modules-link'
+
 function fsStub(files) {
   return {
     statSync(path) {
@@ -131,4 +139,84 @@ test('an absent path is still a comparable state, and appearing counts as a chan
   })
   assert.match(readFingerprint(profile, empty), /absent/)
   assert.notEqual(readFingerprint(profile, empty), readFingerprint(profile, installed))
+})
+
+// ---------------------------------------------------------------------------
+// THE EPISODE MUST END WHERE THE BLOCKER ENDS (bug, 2026-11-11).
+//
+// `firstChangeAt` is the moment the episode started and the cap is measured
+// from it. The old code never cleared it, so the marker of the FIRST change of
+// the process stayed in the state for ever: once the cap had released that
+// episode, every LATER installation was measured against that old timestamp
+// and was over the cap from the first second — the watchdog was dead for the
+// rest of the process's life.
+// ---------------------------------------------------------------------------
+
+test('a finished episode clears its marker, so the NEXT install is seen again', () => {
+  // The first installation: the files move, then they settle.
+  let state = sampleFingerprint(emptyFilesState(), 'A', { now: 1000 })
+  state = sampleFingerprint(state, 'B', { now: 2000 })
+  assert.equal(state.firstChangeAt, 2000)
+  assert.equal(filesChanging(state, { now: 2000 }), true)
+
+  // The files settle: the blocker goes away and the marker is cleared.
+  const settled = sampleFingerprint(state, 'B', { now: 2000 + PLUGIN_FILES_STABLE_MS })
+  assert.equal(settled.firstChangeAt, 0, 'the episode is over, so its marker is gone')
+  assert.equal(filesChanging(settled, { now: 2000 + PLUGIN_FILES_STABLE_MS }), false)
+
+  // A SECOND installation, minutes later: it must be seen, not swallowed by
+  // the marker of the first one.
+  const second = sampleFingerprint(settled, 'C', { now: 600000 })
+  assert.equal(second.firstChangeAt, 600000, 'the new episode starts at the new change')
+  assert.equal(filesChanging(second, { now: 600000 }), true, 'the watchdog is alive again')
+  assert.notEqual(filesBlocker(second, { now: 600000 }), null)
+})
+
+test('after the cap released the episode, the marker does not stay for ever', () => {
+  // A stuck installation churns for longer than the cap.
+  let state = sampleFingerprint(emptyFilesState(), 'A', { now: 1000 })
+  let at = 1000
+  for (let i = 0; i < 400; i++) {
+    at += 1000
+    state = sampleFingerprint(state, `F${i}`, { now: at })
+  }
+  assert.equal(filesChanging(state, { now: at, maxBlockMs: PLUGIN_FILES_MAX_BLOCK_MS }), false, 'the cap released it')
+
+  // The churn stops and the files settle: the marker is cleared, so the next
+  // installation is a fresh episode instead of an instant over-the-cap one.
+  const quiet = sampleFingerprint(state, 'F399', { now: at + PLUGIN_FILES_STABLE_MS + 1000 })
+  assert.equal(quiet.firstChangeAt, 0)
+
+  const next = sampleFingerprint(quiet, 'G', { now: at + PLUGIN_FILES_STABLE_MS + 2000 })
+  assert.equal(next.firstChangeAt, at + PLUGIN_FILES_STABLE_MS + 2000)
+  assert.equal(filesChanging(next, { now: at + PLUGIN_FILES_STABLE_MS + 2000 }), true)
+})
+
+// ---------------------------------------------------------------------------
+// THE LINKED PLUGINS COUNT TOO (2026-11-11).
+//
+// A plugin installed with `link:` / a junction is not a copy: the profile
+// keeps the names of those plugins in `node_modules-link` next to
+// `node_modules`. Installing one touches that directory and NOTHING of the
+// three watched paths — so the watchdog was completely blind to it.
+// ---------------------------------------------------------------------------
+
+test('the fingerprint changes when a linked plugin appears', () => {
+  const profile = 'C:/profile'
+  const links = join(profile, LINK_DIR)
+  const before = fsStub({
+    [join(profile, 'package.json')]: { mtimeMs: 100, size: 10 },
+    [join(profile, 'pnpm-lock.yaml')]: { mtimeMs: 200, size: 20 },
+    [join(profile, 'node_modules')]: [{ name: 'a' }],
+  })
+  const after = fsStub({
+    [join(profile, 'package.json')]: { mtimeMs: 100, size: 10 },
+    [join(profile, 'pnpm-lock.yaml')]: { mtimeMs: 200, size: 20 },
+    [join(profile, 'node_modules')]: [{ name: 'a' }],
+    [links]: [{ name: 'dsh-my-plugin' }],
+  })
+  const a = readFingerprint(profile, before)
+  const b = readFingerprint(profile, after)
+  assert.notEqual(a, b, 'a linked plugin must be visible to the watchdog')
+  assert.equal(readFingerprint(profile, after), b, 'and the reading is stable')
 })

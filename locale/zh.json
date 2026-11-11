@@ -41,9 +41,17 @@
   "pluginFilesPill": " · 等插件装完再重启",
   "pluginFilesTooltip": "检测到插件目录正在被修改（手动安装插件也会这样）：等它改完、安静下来再重启。",
   "settings.advanced.title": "更多设置",
-  "settings.pluginFiles.watch": "盯住插件目录：正在装插件时先不重启、不关机",
-  "settings.pluginFiles.stable": "安静多久才算装完（秒）",
-  "settings.pluginFiles.max": "最多为它等多久（分钟）",
+  "settings.viewHint": "查看说明",
+  "settings.pluginFiles.watch": "装插件时先不重启、不关机",
+  "settings.pluginFiles.watchHint": "正在装插件时（手动装的也算），先不重启、也不关机，等插件目录安静下来再说。",
+  "settings.pluginFiles.stable": "等待插件没有文件改动多少秒，就算装完",
+  "settings.pluginFiles.stableHint": "插件安装时，文件是一个一个写进来的，中间会有停顿。这里设定：插件目录连续这么多秒没有新的文件变动，就当作装完了，重启或关机可以继续。",
+  "settings.pluginFiles.max": "最多等插件安装多久",
+  "settings.pluginFiles.seconds": "{n} 秒",
+  "settings.pluginFiles.minutes": "{n} 分钟",
+  "settings.pluginFiles.currentValue": "当前值",
+  "settings.pluginFiles.offHint": "关掉上面那个开关时，这两项不起作用。",
+  "settings.pluginFiles.maxHint": "这是兜底：万一插件安装卡住了（比如网络断了、安装进程卡死），也不会永远等下去——最多等这么久；超过这个时间就照常重启或关机，不再等它。",
   "blockerGeneric": "有会话",
   "blockerJoin": "、",
   "blockerGroupSubagents": "{label}（{n} 个子智能体）",
@@ -192,38 +200,30 @@
       "hint": "所有会话收工后，屏幕上会显示这段倒数（可点「不关了」取消），数完才关机；想要更多落盘时间就把倒数调大。"
     },
     "restartGrace": {
-      "label": "重启前等待",
-      "hint": "重启没有倒数环节，会话一收工就会立刻重启；如果你装了“会话结束后才写”的记忆/总结类插件，把这里调大（默认 0 秒）。",
+      "label": "重启倒数时间",
+      "hint": "设置重启倒数时间（默认 0 秒）；如果你装了“会话结束后才写”的记忆/总结类插件，建议调整到 10 秒或以上。",
       "value": "{n} 秒",
       "immediate": "不等（立即重启）"
     },
     "window": {
-      "label": "辅助脚本的运行方式",
-      "foreground": "前台运行（会短暂出现一个窗口，默认）",
-      "background": "后台运行（不出现窗口，也不抢焦点）",
-      "hint": "只决定重启时那个辅助脚本怎么被拉起来，改完在下次重启生效。后台模式用 VBScript 垫片启动：不创建窗口，也不会把全屏中的游戏切走；若机器安全策略禁用脚本宿主，会自动回落到隐藏窗口的 PowerShell，并把原因记进重启报告。",
-      "lastLabel": "上次重启",
-      "lastWscript": "后台（wscript，无窗口）",
-      "lastHidden": "后台，回落到 PowerShell 隐藏窗口",
-      "lastForeground": "前台（有窗口）",
-      "lastUnknown": "未知",
-      "lastFallback": "回落原因：{reason}",
-      "shimLeft": "临时垫片没能自动删除，下次重启会清掉（重启报告里也有记录）"
+      "label": "重启命令脚本运行方式",
+      "foreground": "前台运行（会短暂出现一个窗口）",
+      "background": "后台运行（不出现窗口，也不抢焦点，默认）",
+      "hint": "只决定重启时那条命令怎么被拉起来，改完在下次重启生效。后台运行不会弹出任何窗口，也不会把正在全屏的游戏切走；如果这台电脑不让运行这类小脚本，会自动换成另一种方式，并把原因写进重启报告。"
     },
     "backup": {
       "label": "重启前备份",
-      "details": "详情",
-      "section": "备份说明及手动备份操作",
-      "hint": "重启前自动存一份存档；插件不会自动还原，要回退得在下面自己点。存的是：你的设置（一定）；你自己写的、直接链接到源码目录的插件（连文件一起拷）；从网上下载装的插件（只记下装过哪些、什么版本，不拷文件，真出事时按清单重装）。",
+      "section": "备份信息",
+      "hint": "重启前自动存一份存档；插件不会自动还原，要回退得在下面自己点。存的是：你的设置（一定）；你自己写的、就放在本机目录里的插件（连文件一起拷）；从网上下载装的插件（只记下装过哪些、什么版本，不拷文件，真出事时按清单重装）。",
       "list": "现在备份了什么",
       "when": "什么时候会备份？",
       "whenBody": "每次重启前先比对 DSH 配置（勾了「备份包含已安装插件」时还会比对已安装插件）有没有变化：有变化才新建一份备份；没变化就跳过、沿用最近一份。备份条数等于「配置真正改过几次」。关掉「重启前备份」开关时不做比对，也不产生备份。",
       "lastSkipped": "上次重启（{time}）：配置和插件没有变化，未新建备份，沿用 {dir}",
       "lastSkippedConfig": "上次重启（{time}）：配置没有变化，未新建备份，沿用 {dir}",
       "count": "当前 {n} 份，实际占用 {size}。",
-      "multiProfile": "检测到多个 profile，备份和回滚已暂停：它不知道该备份哪一个。解决办法：启动时指定 DSH_PROFILE，或者只保留一个 profile。",
+      "multiProfile": "检测到有多个 DSH 配置目录，备份和回滚已暂停：它不知道该备份哪一个。解决办法：启动时指定 DSH_PROFILE，或者只保留一个配置目录。",
       "keep": "最多保留 {n} 份，超出自动删最旧的那份。",
-      "kindsLocal": "链接安装（自己写的）和本地化过的插件（目录里有 .git）都已完整备份，可以回档。",
+      "kindsLocal": "自己写的插件（直接放在本机目录里的）都已完整备份，可以回档。",
       "kindsThirdParty": "第三方插件由插件作者维护，有异常建议重装",
       "limitLabel": "保留份数",
       "limitHint": "备份会占用磁盘空间，建议尽量选更少的备份数。",
@@ -274,7 +274,8 @@
     },
     "backupPlugins": {
       "label": "备份包含已安装插件",
-      "hint": "关闭后只备份 DSH 自身状态，不含 profile 里的插件目录。"
+      "hint": "关闭后只备份 DSH 自己，不包含你装的那些插件。",
+      "offHint": "关掉上面那个开关（重启前备份）时，这一项不起作用。"
     },
     "restartBanner": {
       "title": "这台机器现在还没有重启能力：本插件不会重启，也不会在重启前备份。点一下「帮我配好」，我自动推导并写入；配错了可以撤销。",
@@ -282,7 +283,7 @@
     },
     "supervisor": {
       "status": "当前由",
-      "status.external": "我记下的启动方式：由你的脚本拉起（重启交给它，我不插手）",
+      "status.external": "我记下的启动方式：由你自己的程序拉起（重启交给它，我不插手）",
       "status.bareWritten": "我记下的启动方式：按你确认过的那条命令重启",
       "status.bareUnknown": "我还不知道怎么把你拉起来",
       "status.unknown": "我看不出你是怎么启动的（我不猜，也不会自己乱拉）",
@@ -293,14 +294,14 @@
       "unknown": "未知",
       "off": "关闭",
       "capable": "重启能力",
-      "capableYes": "可用：宿主退出后会自动回来",
-      "capableNo": "不可用：宿主退出后不会自动回来",
+      "capableYes": "可用：DSH 意外退出后会自动回来",
+      "capableNo": "不可用：DSH 意外退出后不会自动回来",
       "install": "装上守护",
       "uninstall": "卸载守护",
-      "hint": "守护是一个独立进程：登录时自动启动，宿主进程掉了自动拉起，启动失败自动回滚上次快照。不需要管理员。",
+      "hint": "守护是一个单独的后台程序：登录时自动启动，DSH 意外退出时自动把它拉回来，启动失败会自动退回到上一次的状态。不需要管理员权限。",
       "noInstallDesktop": "桌面版自带重启，这里不用装守护。",
-      "noInstallExternal": "已经有别的守护在管这个宿主：再装一个会两个一起拉起、抢同一个端口，所以这里不提供安装。",
-      "noInstallUnknown": "宿主没说清是谁在拉起它，所以这里不提供安装。",
+      "noInstallExternal": "已经有别的守护在管这台 DSH：再装一个会两个一起拉起、抢同一个端口，所以这里不提供安装。",
+      "noInstallUnknown": "还没弄清是谁在拉起这台 DSH，所以这里不提供安装。",
       "access": "当前访问链接",
       "accessHint": "重启后 token 会变，链接也会变。这个链接一直是最新的。",
       "pending": "卸载没有完成，请手动执行：{commands}",
@@ -377,7 +378,7 @@
     "thirdParty": "这个插件不是你自己开发的，没法从备份恢复，需要重新安装。",
     "version": "版本 {version}",
     "restart": {
-      "cancelledNote": "上次要的重启没有做成：你在 {at} 请求重启，等了 {waited}，它一直没有执行；这次宿主重启之后，那个请求已经被取消了。想重启的话，再点一次就行。"
+      "cancelledNote": "上次要的重启没有做成：你在 {at} 请求重启，等了 {waited}，它一直没有执行；这次 DSH 重启之后，那个请求已经被取消了。想重启的话，再点一次就行。"
     }
   },
   "meta": {

@@ -384,7 +384,7 @@ test('a hosted host that somebody else supervises sees one line and two small ac
   const nodes = marked(panel, 'data-dsh-autorestart-supervisor')
   const status = nodes.filter((node) => node.props['data-dsh-autorestart-supervisor'] === 'startup-status')
   assert.equal(status.length, 1, 'exactly one line')
-  assert.equal(textOf(status[0]), '我记下的启动方式：由你的脚本拉起（重启交给它，我不插手）', 'the plain copy')
+  assert.equal(textOf(status[0]), '我记下的启动方式：由你自己的程序拉起（重启交给它，我不插手）', 'the plain copy')
 
   const redetect = nodes.filter((node) => node.props['data-dsh-autorestart-supervisor'] === 'redetect')
   assert.equal(redetect.length, 1, 'the "detect again" action')
@@ -1022,8 +1022,8 @@ test('③ the page no longer promises a tier — the old 安全份 paragraphs ar
   assert.deepEqual(backupValues(panel, 'footprint'), [], 'the old separate footprint line is gone as well')
   assert.equal(
     backupValues(panel, 'kinds-local')[0],
-    '链接安装（自己写的）和本地化过的插件（目录里有 .git）都已完整备份，可以回档。',
-    'linked and localized plugins are in the copy in full',
+    '自己写的插件（直接放在本机目录里的）都已完整备份，可以回档。',
+    'the plugins you wrote yourself are in the copy in full',
   )
   assert.equal(
     backupValues(panel, 'kinds-third-party')[0],
@@ -1237,9 +1237,11 @@ test('the whole backup explanation is one fold, closed by default', async () => 
   // The TITLE is the first child; a second, smaller line was added on
   // 2026-11-02 ("what is inside"), so the summary starts with the title instead
   // of being only it.
-  assert.equal(summary[0].children[0], '备份说明及手动备份操作', 'the title the user asked for')
+  // The title says WHAT is inside (user decision, 2026-11-11): it used to be
+  // the same 「查看说明」 as the row help, which said nothing about backups.
+  assert.equal(summary[0].children[0], '备份信息', 'the title says what is inside the fold')
   assert.equal(
-    textOf(summary[0]).startsWith('备份说明及手动备份操作'),
+    textOf(summary[0]).startsWith('备份信息'),
     true,
     `the title still leads the summary: ${textOf(summary[0])}`,
   )
@@ -1876,7 +1878,7 @@ test('more than one profile is said out loud, above the fold', async () => {
   const notice = marked(panel, 'data-dsh-autorestart-backup')
     .filter((node) => node.props['data-dsh-autorestart-backup'] === 'multi-profile-text')
   assert.equal(notice.length, 1, 'the warning is there')
-  assert.match(textOf(notice[0]), /检测到多个 profile/, 'it names the cause')
+  assert.match(textOf(notice[0]), /检测到有多个 DSH 配置目录/, 'it names the cause')
   assert.match(textOf(notice[0]), /备份和回滚已暂停/, 'and the consequence')
   assert.match(textOf(notice[0]), /DSH_PROFILE/, 'and how to fix it')
 

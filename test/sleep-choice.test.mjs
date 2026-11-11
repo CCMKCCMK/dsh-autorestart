@@ -18,11 +18,13 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { apply } from '../index.js'
+import { apply, normalizeConfig, resolveCountdownSeconds } from '../index.js'
+import { COUNTDOWN_CHOICES } from '../lib/sleep.js'
 
 /** The route that persists the choices. */
 const CHOICE_PATH = '/__dsh_autorestart/choice'
 const SLEEP_PATH = '/__dsh_autorestart/sleep'
+const HEALTH_PATH = '/__dsh_autorestart/health'
 
 /** Create a temporary state directory per test. */
 function tempStateDir(label) {
@@ -113,6 +115,21 @@ function choiceRoute(routes) {
   const route = routes.find((entry) => entry.path === CHOICE_PATH)
   assert.ok(route, `the choice route ${CHOICE_PATH} must be registered`)
   return route
+}
+
+/** What the state route answers right now (the settings page reads it). */
+function stateOf(routes) {
+  const route = routes.find((entry) => entry.path === HEALTH_PATH)
+  assert.ok(route, `the health route ${HEALTH_PATH} must be registered`)
+  const res = fakeResponse()
+  route.handler({
+    method: 'GET',
+    url: `${HEALTH_PATH}?state=1`,
+    headers: { 'content-type': 'application/json' },
+    socket: { remoteAddress: '127.0.0.1' },
+    on() { return this },
+  }, res)
+  return JSON.parse(res.body)
 }
 
 test('the old answer (only includePlugins) still works exactly as before', async () => {
@@ -241,8 +258,165 @@ test('the settings of the configuration page are written into the profile row', 
   assert.equal(status.countdownSeconds, 30)
 })
 
-test('the pre-restart backup scope is written into the profile row', async () => {
-  const { file } = tempStateDir('backup-scope')
+// THE DEFAULT COUNTDOWN IS TEN SECONDS NOW (2026-11-11).
+//
+// The user asked for "关机改成默认 10 秒". The default only decides what a
+// profile that NEVER set the countdown gets: a stored choice (the profile row,
+// or the degraded `install-choice.json` fallback) must be read back exactly as
+// it was saved. Nothing migrates a stored 20 / 30 / 60 onto the new default.
+test('an explicitly stored countdown is never overwritten by the new default', async () => {
+  for (const stored of [0, 10, 20, 30, 60]) {
+    const { file } = tempStateDir(`stored-countdown-${stored}`)
+    const { ctx, routes } = createContext()
+    apply(ctx, {
+      stateFile: file,
+      recoveryDelayMs: 0,
+      enabled: true,
+      // What the profile row carries for a user who picked this length.
+      sleepCountdownSeconds: stored,
+    })
+
+    const state = fakeResponse()
+    const sleep = routes.find((entry) => entry.path === SLEEP_PATH)
+    assert.ok(sleep, 'the sleep route must be registered')
+    sleep.handler(fakeRequest('GET'), state)
+    await settle()
+    assert.equal(
+      JSON.parse(state.body).countdownSeconds,
+      stored,
+      `a stored ${stored} must be read back as ${stored}, not replaced by the default`,
+    )
+  }
+})
+
+test('a profile that never set the countdown gets the new ten-second default', async () => {
+  const { file } = tempStateDir('default-countdown')
+  const { ctx, routes } = createContext()
+  // No `sleepCountdownSeconds` in the row: this is the "never set it" case.
+  apply(ctx, { stateFile: file, recoveryDelayMs: 0, enabled: true })
+
+  const state = fakeResponse()
+  const sleep = routes.find((entry) => entry.path === SLEEP_PATH)
+  assert.ok(sleep, 'the sleep route must be registered')
+  sleep.handler(fakeRequest('GET'), state)
+  await settle()
+  assert.equal(JSON.parse(state.body).countdownSeconds, 10, 'the built-in default is ten seconds now')
+
+  // The same two answers, one layer down: the row wins, the default fills in.
+  assert.equal(normalizeConfig({}).sleepCountdownSeconds, 10, 'nothing stored → the default')
+  for (const stored of [0, 20, 30, 60]) {
+    assert.equal(
+      normalizeConfig({ sleepCountdownSeconds: stored }).sleepCountdownSeconds,
+      stored,
+      `a stored ${stored} must survive normalizeConfig unchanged`,
+    )
+  }
+})
+
+// THE DEGRADED FALLBACK FILE WAS WRITTEN AND NEVER READ (bug, 2026-11-11).
+//
+// `persistConfigChoice` records the countdown in `install-choice.json` when the
+// configEditor service is unavailable, and `readInstallChoice` reads it back —
+// but no resolver ever put it into the effective value, so the choice was made,
+// stored, and silently lost. The three levels are now explicitly pinned:
+// profile row > fallback file > built-in default.
+
+/** Write a degraded `install-choice.json` next to the state file. */
+function writeFallbackChoice(dir, payload) {
+  fs.writeFileSync(path.join(dir, 'install-choice.json'), JSON.stringify(payload), 'utf8')
+}
+
+test('the countdown resolver: the profile row wins over the fallback file', () => {
+  const { dir } = tempStateDir('resolver-row')
+  writeFallbackChoice(dir, { sleepCountdownSeconds: 30 })
+  const resolved = resolveCountdownSeconds({ sleepCountdownSeconds: 20 }, dir)
+  assert.equal(resolved.countdownSeconds, 20, 'the row is the single source of truth')
+  assert.equal(resolved.source, 'config')
+})
+
+test('the countdown resolver: a row without the key falls back to the file', () => {
+  const { dir } = tempStateDir('resolver-file')
+  writeFallbackChoice(dir, { sleepCountdownSeconds: 30 })
+  const resolved = resolveCountdownSeconds({ enabled: true }, dir)
+  assert.equal(resolved.countdownSeconds, 30, 'the recorded choice must be read back, not lost')
+  assert.equal(resolved.source, 'fallback-file')
+})
+
+test('the countdown resolver: neither level says anything → the built-in default', () => {
+  const { dir } = tempStateDir('resolver-default')
+  const resolved = resolveCountdownSeconds({}, dir)
+  assert.equal(resolved.countdownSeconds, 10, 'the default is ten seconds')
+  assert.equal(resolved.source, 'default')
+  // A missing state directory is not an error either.
+  assert.equal(resolveCountdownSeconds({}, '').source, 'default')
+})
+
+test('the countdown resolver: an unusable fallback value is ignored, not guessed', () => {
+  // The file is hand-editable ("any JSON"): anything that is not one of the
+  // offered lengths must be dropped so the next level decides.
+  for (const junk of ['30', null, true, {}, [], 15, -5, 1e9, Number.NaN]) {
+    const { dir } = tempStateDir('resolver-junk')
+    writeFallbackChoice(dir, { sleepCountdownSeconds: junk })
+    const resolved = resolveCountdownSeconds({}, dir)
+    assert.equal(
+      resolved.countdownSeconds,
+      10,
+      `${JSON.stringify(junk) ?? String(junk)} is not an offered length: the default must win`,
+    )
+    assert.equal(resolved.source, 'default')
+  }
+  // Every offered length, on the other hand, IS honoured.
+  for (const offered of COUNTDOWN_CHOICES) {
+    const { dir } = tempStateDir(`resolver-offered-${offered}`)
+    writeFallbackChoice(dir, { sleepCountdownSeconds: offered })
+    assert.equal(resolveCountdownSeconds({}, dir).countdownSeconds, offered)
+  }
+})
+
+test('the countdown resolver: the row keeps its old-value snapping', () => {
+  // A profile that still carries 15 is snapped onto the nearest offered length
+  // by `normalizeConfig`; the resolver must not undo that.
+  const { dir } = tempStateDir('resolver-snap')
+  const resolved = resolveCountdownSeconds({ sleepCountdownSeconds: 15 }, dir)
+  assert.equal(resolved.countdownSeconds, 20, '15 snaps up to 20, as it always did')
+  assert.equal(resolved.source, 'config')
+})
+
+test('a countdown chosen while the configEditor was unavailable is read back after a restart', async () => {
+  // The degraded path: the choice only exists in the fallback file.
+  const { dir, file } = tempStateDir('degraded-restart')
+  writeFallbackChoice(dir, { sleepCountdownSeconds: 30 })
+
+  const { ctx, routes } = createContext()
+  // No `configEditor` service in this context: exactly the degraded environment.
+  apply(ctx, { stateFile: file, recoveryDelayMs: 0, enabled: true })
+
+  const state = fakeResponse()
+  const sleep = routes.find((entry) => entry.path === SLEEP_PATH)
+  assert.ok(sleep, 'the sleep route must be registered')
+  sleep.handler(fakeRequest('GET'), state)
+  await settle()
+  assert.equal(
+    JSON.parse(state.body).countdownSeconds,
+    30,
+    'the stored choice must survive the restart, not fall back to the default',
+  )
+})
+
+test('a stored row still wins over a stale fallback file on the next boot', async () => {
+  const { dir, file } = tempStateDir('degraded-stale-file')
+  writeFallbackChoice(dir, { sleepCountdownSeconds: 30 })
+  const { ctx, routes } = createContext()
+  apply(ctx, { stateFile: file, recoveryDelayMs: 0, enabled: true, sleepCountdownSeconds: 60 })
+
+  const state = fakeResponse()
+  const sleep = routes.find((entry) => entry.path === SLEEP_PATH)
+  sleep.handler(fakeRequest('GET'), state)
+  await settle()
+  assert.equal(JSON.parse(state.body).countdownSeconds, 60, 'the row outranks the file')
+})
+
+test('the pre-restart backup scope is written into the profile row', async () => {  const { file } = tempStateDir('backup-scope')
   const edits = []
   const { ctx, routes } = createContext({ services: { configEditor: createEditor(edits) } })
   apply(ctx, { stateFile: file, recoveryDelayMs: 0, enabled: true })
@@ -390,4 +564,115 @@ test('a later answer does not erase the earlier one', async () => {
   const recorded = JSON.parse(fs.readFileSync(path.join(dir, 'install-choice.json'), 'utf8'))
   assert.equal(recorded.includePlugins, true, 'the backup scope must survive')
   assert.equal(recorded.showSleepButton, true)
+})
+
+// ---------------------------------------------------------------------------
+// THE PLUGIN-FILES WATCHDOG MUST BE SAVEABLE (bug, 2026-11-11).
+//
+// The settings page shows three controls for the plugin-files watchdog — the
+// switch, the stable window and the upper bound — and posts them to
+// `POST {prefix}/choice`. But the route did not know the three keys: a body
+// that carried only them fell through to `no-choice` and answered `400`, and
+// `persistConfigChoice` had no branch for them either, so even a body that
+// carried something else dropped these three on the floor. The settings could
+// not be saved at all.
+// ---------------------------------------------------------------------------
+
+test('the three plugin-files settings are written into the profile row', async () => {
+  const { file } = tempStateDir('files-save')
+  const edits = []
+  const { ctx, routes } = createContext({ services: { configEditor: createEditor(edits) } })
+  apply(ctx, { stateFile: file, recoveryDelayMs: 0, enabled: true })
+
+  const res = fakeResponse()
+  choiceRoute(routes).handler(fakeRequest('POST', {
+    pluginFilesWatch: false,
+    pluginFilesStableMs: 30000,
+    pluginFilesMaxBlockMs: 600000,
+  }), res)
+  await settle()
+
+  assert.equal(res.statusCode, 200, 'the settings of the watchdog must be accepted')
+  assert.equal(JSON.parse(res.body).ok, true)
+  assert.equal(edits.length, 1, 'the profile row must be edited exactly once')
+  assert.equal(edits[0].next.pluginFilesWatch, false)
+  assert.equal(edits[0].next.pluginFilesStableMs, 30000)
+  assert.equal(edits[0].next.pluginFilesMaxBlockMs, 600000)
+})
+
+test('the Host reports the new plugin-files values back', async () => {
+  const { file } = tempStateDir('files-readback')
+  const edits = []
+  const { ctx, routes } = createContext({ services: { configEditor: createEditor(edits) } })
+  apply(ctx, { stateFile: file, recoveryDelayMs: 0, enabled: true })
+
+  const before = stateOf(routes).pluginFiles
+  assert.equal(before.watched, true)
+  assert.equal(before.stableMs, 15000)
+  assert.equal(before.maxBlockMs, 300000)
+
+  const res = fakeResponse()
+  choiceRoute(routes).handler(fakeRequest('POST', {
+    pluginFilesWatch: false,
+    pluginFilesStableMs: 45000,
+    pluginFilesMaxBlockMs: 120000,
+  }), res)
+  await settle()
+  assert.equal(res.statusCode, 200)
+
+  // The settings page reads these three fields back from the Host.
+  const after = stateOf(routes).pluginFiles
+  assert.equal(after.watched, false, 'the switch must be the new value')
+  assert.equal(after.stableMs, 45000, 'the stable window must be the new value')
+  assert.equal(after.maxBlockMs, 120000, 'the upper bound must be the new value')
+})
+
+test('a malformed plugin-files value is refused and NOTHING is written', async () => {
+  const { file } = tempStateDir('files-refuse')
+  const edits = []
+  const { ctx, routes } = createContext({ services: { configEditor: createEditor(edits) } })
+  apply(ctx, { stateFile: file, recoveryDelayMs: 0, enabled: true })
+
+  // A switch that is not a boolean.
+  const notBoolean = fakeResponse()
+  choiceRoute(routes).handler(fakeRequest('POST', { pluginFilesWatch: 'yes' }), notBoolean)
+  await settle()
+  assert.equal(notBoolean.statusCode, 400)
+  assert.match(String(JSON.parse(notBoolean.body).error), /pluginFilesWatch/)
+
+  // A duration that is not a number.
+  const notANumber = fakeResponse()
+  choiceRoute(routes).handler(fakeRequest('POST', { pluginFilesStableMs: 'soon' }), notANumber)
+  await settle()
+  assert.equal(notANumber.statusCode, 400)
+  assert.match(String(JSON.parse(notANumber.body).error), /pluginFilesStableMs/)
+
+  // A negative duration.
+  const negative = fakeResponse()
+  choiceRoute(routes).handler(fakeRequest('POST', { pluginFilesMaxBlockMs: -1 }), negative)
+  await settle()
+  assert.equal(negative.statusCode, 400)
+  assert.match(String(JSON.parse(negative.body).error), /pluginFilesMaxBlockMs/)
+
+  assert.equal(edits.length, 0, 'a refused answer must not write anything')
+  // And the configuration is untouched.
+  const files = stateOf(routes).pluginFiles
+  assert.equal(files.watched, true)
+  assert.equal(files.stableMs, 15000)
+  assert.equal(files.maxBlockMs, 300000)
+})
+
+test('a hand-edited profile row cannot break the watchdog', () => {
+  const config = normalizeConfig({
+    pluginFilesWatch: 'yes',
+    pluginFilesStableMs: -5,
+    pluginFilesMaxBlockMs: 'soon',
+  })
+  assert.equal(config.pluginFilesWatch, true, 'a switch that is not a boolean falls back to "watch"')
+  assert.equal(config.pluginFilesStableMs, 15000, 'a negative duration falls back to the default')
+  assert.equal(config.pluginFilesMaxBlockMs, 300000, 'a duration that is not a number falls back to the default')
+
+  const clamped = normalizeConfig({ pluginFilesStableMs: 1234.7, pluginFilesMaxBlockMs: 90000.2 })
+  assert.equal(clamped.pluginFilesStableMs, 1234, 'a duration is a whole number of milliseconds')
+  assert.equal(clamped.pluginFilesMaxBlockMs, 90000)
 })

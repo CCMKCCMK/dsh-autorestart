@@ -23,6 +23,7 @@ import vm from 'node:vm'
 
 import {
   COUNTDOWN_CHOICES,
+  DEFAULT_COUNTDOWN_SECONDS,
   createSleepController,
   detectShutdownPlan,
   normalizeCountdownSeconds,
@@ -490,7 +491,8 @@ test('the countdown length is clamped into the supported range', () => {
   assert.equal(normalizeCountdownSeconds(-5), 0)
   assert.equal(normalizeCountdownSeconds(999), 120)
   assert.equal(normalizeCountdownSeconds(10), 10)
-  assert.equal(normalizeCountdownSeconds('nonsense'), 20)
+  // NOT A NUMBER → the DEFAULT, which is 10 seconds since 2026-11-11 (it was 20).
+  assert.equal(normalizeCountdownSeconds('nonsense'), 10)
 })
 
 test('an old countdown value is snapped onto one of the offered choices', () => {
@@ -499,8 +501,10 @@ test('an old countdown value is snapped onto one of the offered choices', () => 
   assert.equal(snapCountdownChoice(15), 20)
   assert.equal(snapCountdownChoice(45), 60)
   assert.equal(snapCountdownChoice('20'), 20)
-  assert.equal(snapCountdownChoice(null), 20)
-  assert.equal(snapCountdownChoice(undefined), 20)
+  // NOTHING STORED → the default, which is 10 seconds since 2026-11-11.
+  assert.equal(snapCountdownChoice(null), 10)
+  assert.equal(snapCountdownChoice(undefined), 10)
+  assert.equal(snapCountdownChoice(''), 10)
   assert.equal(snapCountdownChoice(0), 0)
   assert.equal(snapCountdownChoice(10), 10)
   assert.equal(snapCountdownChoice(30), 30)
@@ -508,6 +512,77 @@ test('an old countdown value is snapped onto one of the offered choices', () => 
   for (const value of [0, 10, 20, 30, 60]) {
     assert.equal(COUNTDOWN_CHOICES.indexOf(snapCountdownChoice(value)) !== -1, true)
   }
+})
+
+test('the default countdown is 10 seconds, written down exactly once', () => {
+  // The user asked for a ten-second default (2026-11-11). The number lives in
+  // ONE constant; the schema `.default(...)`, the `DEFAULTS` row and the sleep
+  // controller all read it, so a stray second 20 (or a second 10) would drift.
+  assert.equal(DEFAULT_COUNTDOWN_SECONDS, 10, 'the default countdown is ten seconds')
+  assert.equal(normalizeCountdownSeconds(undefined), 10, 'the clamp falls back to the constant')
+  assert.equal(snapCountdownChoice(undefined), 10, 'the snap falls back to the constant')
+
+  const source = fs.readFileSync(new URL('../index.js', import.meta.url), 'utf8')
+  const schemaDefault = /sleepCountdownSeconds:\s*schemastery\.union\([\s\S]*?\.default\(\s*([^)\s]+)\s*\)/.exec(source)
+  assert.ok(schemaDefault, 'the schema must declare a default for the countdown')
+  assert.equal(
+    schemaDefault[1],
+    'DEFAULT_COUNTDOWN_SECONDS',
+    'the schema default must be the shared constant, never a second hardcoded 20',
+  )
+  const defaultsRow = /const DEFAULTS = \{[\s\S]*?sleepCountdownSeconds:\s*([^\s,]+)/.exec(source)
+  assert.ok(defaultsRow, 'the DEFAULTS row must carry the countdown')
+  assert.equal(
+    defaultsRow[1],
+    'DEFAULT_COUNTDOWN_SECONDS',
+    'the DEFAULTS row must read the shared constant too',
+  )
+
+  const libSource = fs.readFileSync(new URL('../lib/sleep.js', import.meta.url), 'utf8')
+  assert.equal(
+    /countdownSeconds = DEFAULT_COUNTDOWN_SECONDS,/.test(libSource),
+    true,
+    'the controller fallback must read the shared constant',
+  )
+  assert.equal(
+    /DEFAULT_COUNTDOWN_SECONDS\s*=\s*20\b/.test(libSource),
+    false,
+    'the old twenty-second default must be gone',
+  )
+})
+
+test('a countdown the user stored is never overwritten by the default', () => {
+  // The new default only decides what a profile that never set the countdown
+  // gets. A stored choice — the profile row, or the degraded fallback file —
+  // wins on every offered length, so nothing is migrated behind the user's back.
+  assert.equal(DEFAULT_COUNTDOWN_SECONDS, 10, 'the default is ten seconds')
+  for (const stored of [0, 10, 20, 30, 60]) {
+    assert.equal(normalizeCountdownSeconds(stored), stored, `${stored} is kept as stored`)
+    assert.equal(snapCountdownChoice(stored), stored, `${stored} is not snapped to the default`)
+    if (stored !== DEFAULT_COUNTDOWN_SECONDS) {
+      assert.notEqual(
+        snapCountdownChoice(stored),
+        DEFAULT_COUNTDOWN_SECONDS,
+        `${stored} must not be replaced by the new default`,
+      )
+    }
+  }
+})
+
+test('the browser half falls back to the same default countdown as the host', () => {
+  // `client.js` is a CLASSIC script evaluated by the client module loader: it
+  // cannot import `lib/sleep.js`, so the number is written there a second time.
+  // This test is what keeps the two from drifting apart (it was 20 while the
+  // host had moved to 10).
+  const source = fs.readFileSync(new URL('../client.js', import.meta.url), 'utf8')
+  const match = /SLEEP_DEFAULT_COUNTDOWN_SECONDS\s*=\s*(\d+)/.exec(source)
+  assert.ok(match, 'the browser half must declare its fallback countdown')
+  assert.equal(
+    Number(match[1]),
+    DEFAULT_COUNTDOWN_SECONDS,
+    'the browser fallback must equal DEFAULT_COUNTDOWN_SECONDS in lib/sleep.js',
+  )
+  assert.equal(Number(match[1]), 10, 'and the shared value is ten seconds')
 })
 
 test('the countdown length is a DROPDOWN in the settings page', () => {
@@ -735,7 +810,7 @@ test('the sleep route answers with exactly the agreed shape', async () => {
   assert.deepEqual(Object.keys(payload).sort(), [
     'armed', 'armedAt', 'backupIncludePlugins', 'backupOnRestart', 'blockers', 'countdownSeconds', 'dryRun', 'host', 'lastLaunch', 'lastRun', 'message', 'ok', 'phase', 'quietForMs', 'remainingMs', 'restartGraceMs', 'restartWindow', 'showSleepButton',
   ])
-  assert.equal(payload.restartWindow, 'foreground', 'the restart helper runs in the foreground unless asked otherwise')
+  assert.equal(payload.restartWindow, 'background', 'the restart helper runs in the background unless asked otherwise')
   assert.equal(payload.lastLaunch, null, 'nothing was restarted on this machine yet')
   assert.equal(
     Object.prototype.hasOwnProperty.call(payload, 'restartLaunch'),
@@ -746,7 +821,8 @@ test('the sleep route answers with exactly the agreed shape', async () => {
   assert.equal(payload.phase, 'idle')
   assert.equal(payload.armed, false)
   assert.equal(payload.showSleepButton, true)
-  assert.equal(payload.countdownSeconds, 20)
+  // The default countdown is ten seconds since 2026-11-11 (it was 20).
+  assert.equal(payload.countdownSeconds, 10)
   assert.equal(payload.armedAt, null, 'no shutdown was armed yet')
   assert.equal(payload.restartGraceMs, 0, 'the restart reserve is reported next to it')
   assert.equal(typeof payload.quietForMs, 'number')
@@ -944,14 +1020,22 @@ test('a machine that was not quiet long enough is not reported as busy', () => {
     clearInterval: () => {},
   })
   controller.arm()
+  // The countdown restarts every time the gate says "not quiet yet", so the
+  // phase alternates between 'countdown' and 'waiting'. The copy is what this
+  // test is about — collect the pauses instead of pinning one tick, which
+  // would tie the test to the length of the default countdown.
+  const pauses = []
   for (let step = 0; step < 20; step += 1) {
     clock += 1000
     controller.tick()
+    const status = controller.status()
+    if (status.phase === 'waiting') pauses.push(status)
   }
-  const status = controller.status()
-  assert.equal(status.phase, 'waiting')
-  assert.match(status.message, /还没安静够久/)
-  assert.doesNotMatch(status.message, /有人开始干活/, 'nobody started working: the copy must not say so')
+  assert.ok(pauses.length > 0, 'a machine that is not quiet yet pauses the countdown')
+  for (const status of pauses) {
+    assert.match(status.message, /还没安静够久/)
+    assert.doesNotMatch(status.message, /有人开始干活/, 'nobody started working: the copy must not say so')
+  }
 })
 
 test('a shutdown command that does not start leaves the machine idle, not "shutting down"', async () => {
@@ -1688,19 +1772,32 @@ test('the section shows two titled groups, the restart one first', async () => {
   assert.equal(titles[2], '开机自启', 'the supervisor group must have a visible title')
   assert.equal(titles[3], '遇到问题', 'the report group must have a visible title')
 
-  // The restart group carries four controls plus the restart-window setting that
-  // used to be a group of its own, and the three plugin-folder settings that
-  // fold under 「更多设置」 (user decision, 2026-11-11).
+  // The restart group carries the wait, the two backup switches and the copy
+  // limit. The restart window and the plugin-folder watchdog moved into the
+  // 「更多设置」 block of their own (user decision, 2026-11-11).
   const restartControls = walk(groups[0]).filter(
     (node) => node.type === 'select' || node.type === 'input',
   )
-  assert.equal(restartControls.length, 8, 'the restart group has exactly eight controls')
+  assert.equal(restartControls.length, 4, 'the restart group has exactly four controls')
   const restartKeys = restartControls.map((node) => node.props['data-dsh-autorestart-setting'])
   assert.deepEqual(
     restartKeys,
-    ['restartGraceMs', 'backupOnRestart', 'backupIncludePlugins', 'maxBackups', 'restartWindow',
-      'pluginFilesWatch', 'pluginFilesStableMs', 'pluginFilesMaxBlockMs'],
-    'the restart group ends with the helper window setting and the plugin-folder watchdog, and nothing else',
+    ['restartGraceMs', 'backupOnRestart', 'backupIncludePlugins', 'maxBackups'],
+    'the restart group carries the wait, the two backup switches and the copy limit, and nothing else',
+  )
+  // The 「更多设置」 block: a block of its own, closed by default, standing
+  // AFTER the shutdown settings and BEFORE 「遇到问题」.
+  const advanced = walk(panel).find(
+    (node) => node.type === 'details' && node.props['data-dsh-autorestart-advanced'] === 'section',
+  )
+  assert.ok(advanced, 'the 「更多设置」 block must be there')
+  assert.equal(advanced.props.open, undefined, 'the block starts closed')
+  assert.deepEqual(
+    walk(advanced)
+      .filter((node) => node.type === 'select' || node.type === 'input')
+      .map((node) => node.props['data-dsh-autorestart-setting']),
+    ['restartWindow', 'pluginFilesWatch', 'pluginFilesStableMs', 'pluginFilesMaxBlockMs'],
+    'the block carries the restart window and the plugin-folder watchdog',
   )
 
   // The shutdown group carries exactly one: the countdown.
@@ -1714,17 +1811,18 @@ test('the section shows two titled groups, the restart one first', async () => {
     'the shutdown group carries the countdown',
   )
 
-  // The dropdowns show the values the Host reports. Four of them now: the two
-  // waits, the backup copy limit and the restart window.
+  // The dropdowns show the values the Host reports. Six of them now: the two
+  // waits, the backup copy limit, the restart window and the two plugin-folder
+  // scales (the scales used to be number boxes — user decision, 2026-11-11).
   const selects = walk(panel).filter((node) => node.type === 'select')
-  assert.equal(selects.length, 4, 'the section has exactly four dropdowns')
+  assert.equal(selects.length, 6, 'the section has exactly six dropdowns')
   const byKey = new Map(selects.map((node) => [node.props['data-dsh-autorestart-setting'], node]))
   assert.equal(byKey.get('restartGraceMs').props.value, '0', 'the restart wait the Host reports is shown')
   assert.equal(byKey.get('sleepCountdownSeconds').props.value, '30', 'the countdown the Host reports is shown')
   assert.equal(
     byKey.get('restartWindow').props.value,
-    'foreground',
-    'the restart window defaults to the foreground behaviour',
+    'background',
+    'the restart window defaults to the background behaviour',
   )
   assert.equal(byKey.has('restartLaunch'), false, 'the removed window-style option has no dropdown')
   const secondsOptions = walk(byKey.get('sleepCountdownSeconds'))
@@ -1737,10 +1835,10 @@ test('the section shows two titled groups, the restart one first', async () => {
   assert.deepEqual(graceOptions, ['0', '5', '10', '20', '30', '60'])
 
   // The two backup switches and the plugin-folder watchdog show the values the
-  // Host reports. The two numbers of the watchdog are inputs as well, so they
-  // are picked out by their setting key, not by counting.
+  // Host reports. They are the only inputs left: the two numbers of the
+  // watchdog became dropdowns (user decision, 2026-11-11).
   const switches = walk(panel).filter((node) => node.type === 'input')
-  assert.equal(switches.length, 5, 'the section has five inputs: three switches and two numbers')
+  assert.equal(switches.length, 3, 'the section has exactly three inputs: the three switches')
   const switchByKey = new Map(switches.map((node) => [node.props['data-dsh-autorestart-setting'], node]))
   assert.equal(switchByKey.get('backupOnRestart').props.checked, true)
   assert.equal(switchByKey.get('backupIncludePlugins').props.checked, false)
@@ -1750,10 +1848,10 @@ test('the section shows two titled groups, the restart one first', async () => {
   // The labels and the explanation are on the page.
   const shown = textOf(panel)
   assert.ok(shown.includes('关机倒数秒数'), `the countdown label must be there: ${shown}`)
-  assert.ok(shown.includes('重启前等待'), `the restart wait label must be there: ${shown}`)
+  assert.ok(shown.includes('重启倒数时间'), `the restart countdown label must be there: ${shown}`)
   assert.ok(shown.includes('重启前备份'), `the label must be there: ${shown}`)
   assert.ok(shown.includes('备份包含已安装插件'), `the label must be there: ${shown}`)
-  assert.ok(shown.includes('不含 profile 里的插件目录'), `the scope must be explained: ${shown}`)
+  assert.ok(shown.includes('不包含你装的那些插件'), `the scope must be explained: ${shown}`)
 })
 
 test('the countdown length is written into the profile configuration and read back', async () => {

@@ -28,6 +28,7 @@ import { collectCapabilities, compareCapabilities, listDisappearances } from './
 import {
   PLUGIN_FILES_MAX_BLOCK_MS,
   PLUGIN_FILES_STABLE_MS,
+  describeFilesEpisode,
   emptyFilesState,
   filesBlocker,
   readFingerprint,
@@ -37,6 +38,7 @@ import {
 import {
   armSleep,
   beginBoot,
+  bootRecoveryPlan,
   cancelOwnRestart,
   cancelRestart,
   clearSleep,
@@ -73,15 +75,16 @@ import {
   RESTART_PHASES,
 } from './lib/restart-phase.js'
 import {
-  bootPlan,
   composeHandoff,
   contextOverflow,
   continuationPrompt,
   describeState,
   GOAL_BLOCK_REASONS,
   HANDOFF_DEFAULT_MAX_CHARS,
+  isGoalStopped,
   restartDecision,
   restartGate,
+  selectBusyGoals,
   selectGoalDisarms,
 } from './lib/lifecycle.js'
 import {
@@ -92,6 +95,7 @@ import {
   marketInstallStatus,
   marketStatusUrl,
   PROBE_TIMEOUT_MS,
+  UNREACHABLE_MAX_BLOCK_MS,
   probeMarketStatus,
 } from './lib/market-probe.js'
 import {
@@ -449,7 +453,7 @@ function snapGraceChoice(value, fallback = DEFAULT_RESTART_GRACE_MS) {
  * `pluginVersion()`), but a bundled installation may not ship that file — so
  * the constant below is the last resort. A test keeps the two in sync.
  */
-const PLUGIN_VERSION_FALLBACK = '0.9.5'
+const PLUGIN_VERSION_FALLBACK = '0.9.6'
 
 /**
  * The version of the graceful-shutdown FEATURE, not the version of the package.
@@ -702,14 +706,16 @@ function buildConfigSchema() {
         .description('How the host is restarted: app relaunches the desktop app, command runs restartCommand.'),
       restartCommand: schemastery.string().default('')
         .description('Shell command used when restartMode is "command"; empty means there is no custom command.'),
-      // HOW THE RESTART HELPER IS STARTED (user decision, 2026-11-09): the
-      // helper `.cmd` is a console program, so its window is visible while the
-      // grace delay runs. `background` starts the SAME helper through a
-      // VBScript shim (`wscript.exe //B`, `Run …, 0, False`): no window at all
-      // and no focus steal, which matters when a full-screen app is running.
-      // The default is the foreground behaviour this plugin always had.
-      restartWindow: schemastery.union(['foreground', 'background']).default('foreground')
-        .description('How the restart helper is started: foreground = the visible console window of the helper (the default, unchanged), background = a hidden window that never takes the focus (VBScript shim; falls back to a hidden PowerShell and says so in the report).'),
+      // HOW THE RESTART HELPER IS STARTED (user decision, 2026-11-09; the
+      // DEFAULT became BACKGROUND on 2026-11-11): the helper `.cmd` is a
+      // console program, so its window is visible while the grace delay runs.
+      // `background` starts the SAME helper through a VBScript shim
+      // (`wscript.exe //B`, `Run …, 0, False`): no window at all and no focus
+      // steal, which matters when a full-screen app is running. From this
+      // version on the background mode is what a machine that never chose
+      // anything gets; a row that already stored `foreground` keeps it.
+      restartWindow: schemastery.union(['foreground', 'background']).default('background')
+        .description('How the restart helper is started: background = a hidden window that never takes the focus (the default since 2026-11-11; it starts the helper through a VBScript shim and falls back to a hidden PowerShell, saying so in the report), foreground = the visible console window of the helper (what this plugin always did).'),
       // NO WINDOW-STYLE OPTION FOR THE RELAUNCHED HOST (measured, 2026-11-09):
       // `-WindowStyle Minimized` really is on the command line, but DSH is an
       // Electron app and decides for itself how its window shows up — on the
@@ -745,6 +751,8 @@ function buildConfigSchema() {
         .description('How often the market is asked while a restart is waiting (milliseconds).'),
       marketInstallCooldownMs: schemastery.number().min(0).default(15000)
         .description('How long the restart still waits after the market reported that it finished, to bridge the gap between two operations of its queue (milliseconds).'),
+      marketUnreachableMaxBlockMs: schemastery.number().min(0).default(300000)
+        .description('How long a remembered "the market is installing" answer keeps the restart waiting while the market status route cannot be reached (milliseconds). After this bound the market counts as NOT installing, so a silent market can never hold the host for ever. Default 300000 (5 minutes).'),
       pluginFilesWatch: schemastery.boolean().default(true)
         .description('Also wait while the profile plugin files are being changed (package.json, pnpm-lock.yaml, node_modules), which covers installs that never go through the market: a manual pnpm add, or the host plugin manager.'),
       pluginFilesStableMs: schemastery.number().min(0).default(15000)
@@ -851,8 +859,9 @@ const DEFAULTS = {
   forceRestartWhenBusy: false,
   restartMode: 'app',
   restartCommand: '',
-  // The restart helper is started the way it always was: a visible window.
-  restartWindow: 'foreground',
+  // The restart helper runs in the BACKGROUND by default since 2026-11-11: no
+  // window, no focus steal. A row that already stored `foreground` keeps it.
+  restartWindow: 'background',
   relaunchDelaySeconds: 2,
   settleMs: 2000,
   restartGraceMs: DEFAULT_RESTART_GRACE_MS,
@@ -866,6 +875,7 @@ const DEFAULTS = {
   marketProbeTimeoutMs: PROBE_TIMEOUT_MS,
   marketProbeIntervalMs: 1500,
   marketInstallCooldownMs: INSTALL_COOLDOWN_MS,
+  marketUnreachableMaxBlockMs: UNREACHABLE_MAX_BLOCK_MS,
   pluginFilesWatch: true,
   pluginFilesStableMs: PLUGIN_FILES_STABLE_MS,
   pluginFilesMaxBlockMs: PLUGIN_FILES_MAX_BLOCK_MS,
@@ -925,10 +935,12 @@ function normalizeConfig(raw) {
   }
   if (config.deferPolicy !== 'auto' && config.deferPolicy !== 'wait') config.deferPolicy = 'auto'
   if (config.restartMode !== 'app' && config.restartMode !== 'command') config.restartMode = 'app'
-  // THE WINDOW MODE FALLS BACK, IT NEVER THROWS (user decision, 2026-11-09):
-  // anything that is not exactly `background` is the foreground behaviour, so
-  // a hand-edited row cannot change how a restart is launched by accident.
-  config.restartWindow = config.restartWindow === 'background' ? 'background' : 'foreground'
+  // THE WINDOW MODE FALLS BACK, IT NEVER THROWS (user decision, 2026-11-09;
+  // the fallback became BACKGROUND on 2026-11-11): only an explicitly stored
+  // `foreground` keeps the visible window — anything else (a hand-edited row,
+  // a missing value) is the background behaviour, so a restart is never
+  // launched by accident.
+  config.restartWindow = config.restartWindow === 'foreground' ? 'foreground' : 'background'
   const watchDelay = Number(config.watchDelayMs)
   config.watchDelayMs = Number.isFinite(watchDelay) && watchDelay >= 0 ? Math.trunc(watchDelay) : 8000
   const maxBackups = Number(config.maxBackups)
@@ -989,6 +1001,27 @@ function normalizeConfig(raw) {
   config.marketInstallCooldownMs = Number.isFinite(installCooldown) && installCooldown >= 0
     ? Math.trunc(installCooldown)
     : INSTALL_COOLDOWN_MS
+  // THE SILENT MARKET (2026-11-11): how long a remembered "the market is
+  // installing" answer may hold the host while the status route cannot be
+  // reached. It is an UPPER BOUND, never a blank cheque: after it the market
+  // counts as not installing.
+  const unreachableMax = Number(config.marketUnreachableMaxBlockMs)
+  config.marketUnreachableMaxBlockMs = Number.isFinite(unreachableMax) && unreachableMax >= 0
+    ? Math.trunc(unreachableMax)
+    : UNREACHABLE_MAX_BLOCK_MS
+  // THE PLUGIN-FILES WATCHDOG (2026-11-11). A hand-edited profile row must not
+  // be able to break the watchdog: the switch falls back to "watch", and the two
+  // durations are clamped to whole milliseconds that are not negative — the
+  // same rule the schema states.
+  if (typeof config.pluginFilesWatch !== 'boolean') config.pluginFilesWatch = true
+  const filesStable = Number(config.pluginFilesStableMs)
+  config.pluginFilesStableMs = Number.isFinite(filesStable) && filesStable >= 0
+    ? Math.trunc(filesStable)
+    : PLUGIN_FILES_STABLE_MS
+  const filesMaxBlock = Number(config.pluginFilesMaxBlockMs)
+  config.pluginFilesMaxBlockMs = Number.isFinite(filesMaxBlock) && filesMaxBlock >= 0
+    ? Math.trunc(filesMaxBlock)
+    : PLUGIN_FILES_MAX_BLOCK_MS
   if (typeof config.sleepCommand !== 'string') config.sleepCommand = ''
   if (typeof config.showSleepButton !== 'boolean') config.showSleepButton = true
   return config
@@ -1754,6 +1787,49 @@ export function resolveShowSleepButton(rawConfig, stateDir) {
     return { showSleepButton: fallback.showSleepButton, source: 'fallback-file' }
   }
   return { showSleepButton: DEFAULTS.showSleepButton, source: 'default' }
+}
+
+/**
+ * Resolve the effective `sleepCountdownSeconds` value and where it came from.
+ *
+ * The same rule as the backup scope: the profile row config wins, the degraded
+ * fallback file fills the gap, and the built-in default applies when neither
+ * says anything.
+ *
+ * THE FALLBACK FILE USED TO BE WRITTEN AND NEVER READ (bug, 2026-11-11):
+ * `persistConfigChoice` writes the countdown into `install-choice.json` when
+ * the configEditor service is unavailable, but no resolver ever read it back —
+ * the choice was recorded and then silently lost. This is the missing link.
+ *
+ * Two deliberate differences from the three boolean choices above:
+ *
+ *   - the ROW value is snapped onto an offered length instead of being taken
+ *     verbatim: a profile may still carry a length the dropdown no longer
+ *     offers (15), and `normalizeConfig` snaps exactly that way — the resolver
+ *     must not undo it;
+ *   - the FILE value is only honoured when it is one of the offered lengths.
+ *     The row went through the config schema, the file did not: it is
+ *     hand-editable ("any JSON"), so a string, `NaN`, `15` or `-5` is ignored
+ *     and the next level decides instead of guessing.
+ *
+ * @param {object|null|undefined} rawConfig the loader row config, as received
+ * @param {string} stateDir
+ * @returns {{ countdownSeconds: number, source: 'config'|'fallback-file'|'default' }}
+ */
+export function resolveCountdownSeconds(rawConfig, stateDir) {
+  if (rawConfig && typeof rawConfig === 'object'
+    && Object.prototype.hasOwnProperty.call(rawConfig, 'sleepCountdownSeconds')
+    && typeof rawConfig.sleepCountdownSeconds === 'number'
+    && Number.isFinite(rawConfig.sleepCountdownSeconds)) {
+    return { countdownSeconds: snapCountdownChoice(rawConfig.sleepCountdownSeconds), source: 'config' }
+  }
+  const fallback = typeof stateDir === 'string' && stateDir !== '' ? readInstallChoice(stateDir) : null
+  if (fallback !== null
+    && typeof fallback.sleepCountdownSeconds === 'number'
+    && COUNTDOWN_CHOICES.indexOf(fallback.sleepCountdownSeconds) !== -1) {
+    return { countdownSeconds: fallback.sleepCountdownSeconds, source: 'fallback-file' }
+  }
+  return { countdownSeconds: DEFAULT_COUNTDOWN_SECONDS, source: 'default' }
 }
 
 /**
@@ -3695,13 +3771,16 @@ let queueDiagLog = { at: 0, requestedAt: 0 }
         const sessionId = String(agent.id)
         const goal = goalFor(sessionId, agent)
         if (!goal || typeof goal !== 'object') continue
-        // A goal that is switched off or finished is not work in progress.
-        if (goal.activated === false || goal.active === false) continue
-        if (goal.phase === 'completed' || goal.phase === 'complete' || goal.phase === 'done') continue
+        // THE REAL FIELDS (bug, 2026-11-11). A goal carries `phase` and
+        // `activation` — NOT the booleans `activated` / `active` the old check
+        // read, so a paused or a disarmed goal could never be recognised as
+        // "not running". `selectBusyGoals` reads the fields the host really
+        // sets, and only an armed goal that still has rounds left is work in
+        // progress.
         out.push({ sessionId, goal })
       } catch {}
     }
-    return out
+    return selectBusyGoals(out)
   }
 
   /** The live goal of a session, or undefined when it has none. */
@@ -4191,6 +4270,8 @@ let queueDiagLog = { at: 0, requestedAt: 0 }
   let marketProbeAt = 0
   let marketProbeInFlight = false
   let marketProbeLast = null
+  /** Whether the log already announced the market episode that is running now. */
+  let marketEpisodeLogged = false
 
   /** The host's own web port, or 0 when this host has no web server. */
   const hostWebPort = () => {
@@ -4236,9 +4317,17 @@ let queueDiagLog = { at: 0, requestedAt: 0 }
   const marketInstallNow = (now = Date.now()) => {
     if (now - marketProbeAt >= config.marketProbeIntervalMs) refreshMarketProbe(now)
     try {
-      return marketInstallStatus(marketProbeState, { now, cooldownMs: config.marketInstallCooldownMs })
+      return marketInstallStatus(marketProbeState, {
+        now,
+        cooldownMs: config.marketInstallCooldownMs,
+        maxBlockMs: config.marketUnreachableMaxBlockMs,
+      })
     } catch {
-      return marketInstallStatus(emptyMarketState(), { now, cooldownMs: config.marketInstallCooldownMs })
+      return marketInstallStatus(emptyMarketState(), {
+        now,
+        cooldownMs: config.marketInstallCooldownMs,
+        maxBlockMs: config.marketUnreachableMaxBlockMs,
+      })
     }
   }
 
@@ -4262,6 +4351,8 @@ let queueDiagLog = { at: 0, requestedAt: 0 }
    */
   let pluginFilesState = emptyFilesState()
   let pluginFilesSampledAt = 0
+  /** Whether the log already announced the episode that is running now. */
+  let pluginFilesEpisodeLogged = false
 
   const samplePluginFiles = (now = Date.now()) => {
     if (config.pluginFilesWatch !== true) {
@@ -4278,7 +4369,11 @@ let queueDiagLog = { at: 0, requestedAt: 0 }
     } catch {
       dir = null
     }
-    pluginFilesState = sampleFingerprint(pluginFilesState, readFingerprint(dir), { now })
+    pluginFilesState = sampleFingerprint(pluginFilesState, readFingerprint(dir), {
+      now,
+      stableMs: config.pluginFilesStableMs,
+      maxBlockMs: config.pluginFilesMaxBlockMs,
+    })
   }
 
   const pluginFilesExternalBlockers = (now = Date.now()) => {
@@ -4289,7 +4384,23 @@ let queueDiagLog = { at: 0, requestedAt: 0 }
       stableMs: config.pluginFilesStableMs,
       maxBlockMs: config.pluginFilesMaxBlockMs,
     })
-    if (blocker === null) return []
+    if (blocker === null) {
+      // The episode is over: the next one logs its own line again.
+      pluginFilesEpisodeLogged = false
+      return []
+    }
+    // ONE LINE PER EPISODE (2026-11-11). The gate only says "the plugin files
+    // are moving"; the log says WHEN they last moved, so a user who wonders
+    // why the restart waits can read it there. It is written when the episode
+    // STARTS, not on every tick.
+    if (!pluginFilesEpisodeLogged) {
+      pluginFilesEpisodeLogged = true
+      log.info('the plugin files are moving; the restart and the power-off wait for them:', describeFilesEpisode(pluginFilesState, {
+        now,
+        stableMs: config.pluginFilesStableMs,
+        maxBlockMs: config.pluginFilesMaxBlockMs,
+      }))
+    }
     return [{
       sessionId: null,
       kind: blocker.kind,
@@ -4326,7 +4437,17 @@ let queueDiagLog = { at: 0, requestedAt: 0 }
 
   const marketExternalBlockers = (now = Date.now()) => {
     const status = marketInstallNow(now)
-    if (status.installing !== true) return []
+    if (status.installing !== true) {
+      marketEpisodeLogged = false
+      return []
+    }
+    // ONE LINE PER EPISODE (2026-11-11). The gate says "the plugin market is
+    // installing"; the log says WHICH plugin and how long the cooldown still
+    // runs. It is written when the episode STARTS, not on every tick.
+    if (!marketEpisodeLogged) {
+      marketEpisodeLogged = true
+      log.info('the plugin market is busy; the restart and the power-off wait for it:', describeMarketInstall(status))
+    }
     return [{
       sessionId: null,
       kind: 'market-install',
@@ -4353,7 +4474,10 @@ let queueDiagLog = { at: 0, requestedAt: 0 }
       probedAt: status.sampledAt,
       url: marketProbeUrl(),
       lastError: marketProbeLast && typeof marketProbeLast.error === 'string' ? marketProbeLast.error : null,
-      summary: describeMarketInstall(status),
+      // The `summary` line was here for years and NOTHING ever read it: the
+      // client builds its own sentence in the user's language, so this field
+      // was a dead payload. The sentence it carried now lives in the log,
+      // where an operator reads it (see `marketExternalBlockers`).
     }
   }
 
@@ -4933,7 +5057,7 @@ const titleOfSummary = (item) => {
    *   gateAction     allow | wait | none (what the gate last decided)
    *   gateReason     the gate's own reason word
    *   waitingReason  waiting-for-conversations | waiting-for-quiet | plugin-install | restarting | no-restart-pending
-   *   marketInstall  { installing, reason, packageName, cooldownRemainingMs, summary } - the plugin market
+   *   marketInstall  { installing, reason, packageName, cooldownRemainingMs } - the plugin market
    *                  (2026-11-10): NOT a conversation, so it is never in `blockedBy`
    *   blockedBy      [{ sessionId, reason, label }]
    *   blockedByName  ["<label> (running)"] - ready for a sentence
@@ -7541,6 +7665,22 @@ const titleOfSummary = (item) => {
       wanted.maxBackups = changes.maxBackups
       fallback.maxBackups = changes.maxBackups
     }
+    // THE PLUGIN-FILES WATCHDOG (2026-11-11). These three keys were shown in the
+    // settings page and posted to `/choice`, but this function had no branch
+    // for them: the choice was accepted by the route and then dropped on the
+    // floor here, so the settings page could never save them.
+    if (typeof changes.pluginFilesWatch === 'boolean') {
+      wanted.pluginFilesWatch = changes.pluginFilesWatch
+      fallback.pluginFilesWatch = changes.pluginFilesWatch
+    }
+    if (isPluginFilesDuration(changes.pluginFilesStableMs)) {
+      wanted.pluginFilesStableMs = Math.trunc(changes.pluginFilesStableMs)
+      fallback.pluginFilesStableMs = Math.trunc(changes.pluginFilesStableMs)
+    }
+    if (isPluginFilesDuration(changes.pluginFilesMaxBlockMs)) {
+      wanted.pluginFilesMaxBlockMs = Math.trunc(changes.pluginFilesMaxBlockMs)
+      fallback.pluginFilesMaxBlockMs = Math.trunc(changes.pluginFilesMaxBlockMs)
+    }
     const editor = resolveConfigEditor(ctx)
     if (editor !== null) {
       try {
@@ -8184,6 +8324,17 @@ const titleOfSummary = (item) => {
     },
     noteActivity,
     busyAgents,
+    /**
+     * THE SESSIONS WHOSE GOAL IS STILL GOING.
+     *
+     * It lives on the runtime because the power-off path needs it and the
+     * power-off path is built OUTSIDE this factory: `apply` used to name the
+     * local `goalBusySessions` directly, which is not in its scope — every call
+     * threw `ReferenceError: goalBusySessions is not defined`, the gate caught
+     * it, and the goal branch of the shutdown gate was DEAD CODE: no goal ever
+     * held the machine.
+     */
+    busyGoals: () => goalBusySessions(),
     gate,
     /**
      * The description of a long wait (null when there is none).
@@ -8267,7 +8418,10 @@ const titleOfSummary = (item) => {
           log.info(`forced recovery for ${target}: cleared stale over-limit/handoff marks and the attempt counter`)
         }
       }
-      const pending = recoverableSessions(state, {}).filter((entry) => (
+      // A MANUAL RECOVERY MUST NOT WAKE A STOPPED GOAL EITHER (2026-11-11):
+      // the same guard as the boot adoption — a goal the user paused stays
+      // paused, however the recovery was asked for.
+      const pending = recoverableSessions(state, { getGoal: (sessionId) => liveGoalOf(ctx, sessionId) }).filter((entry) => (
         target === null ? true : String(entry.sessionId) === target
       ))
       if (pending.length === 0 && target !== null) {
@@ -8463,6 +8617,19 @@ async function recoverSession(ctx, runtime, entry, config) {
   }
 
   if (agent === undefined) {
+    // A GOAL THE USER STOPPED STAYS QUIET (bug, 2026-11-11). The session is
+    // not live, so the live goal cannot be read — but the checkpoint recorded
+    // the phase of the goal on every `goal/changed`, and that is enough to know
+    // that the user paused it. A continuation message would WAKE that session.
+    if (isGoalStopped(entry.goal)) {
+      entry.pendingResume = false
+      entry.running = false
+      entry.interrupted = false
+      noteRecovery(state, sessionId, 'goal-stopped', 'the user stopped this goal: the session stays quiet')
+      runtime.persist()
+      log.info(`session ${sessionId} keeps quiet: its goal was stopped on purpose`)
+      return { sessionId, action: 'goal-stopped', detail: 'the goal is paused: the session stays quiet' }
+    }
     // Resolve the controller defensively: the declared dependency first, then the
     // optional lookup (a late-provided service still resumes this way).
     let controller = null
@@ -8586,6 +8753,26 @@ async function recoverSession(ctx, runtime, entry, config) {
   if (!goal || typeof goal !== 'object') {
     goal = undefined
     if (goalLookupError === null) goalLookupError = 'goals.get returned no goal'
+  }
+
+  // A GOAL THE USER STOPPED STAYS QUIET (bug, 2026-11-11).
+  //
+  // `continuum_park_goal` leaves a disarm record; if the user then PAUSES that
+  // goal, the record is stale: re-arming it or injecting a continuation
+  // message would WAKE the session the user deliberately silenced. The live
+  // goal is the freshest source; the phase the checkpoint recorded for the
+  // session is the fallback.
+  //
+  // This is the SECOND of the two guards: the adoption in
+  // `lib/checkpoint.js` does not queue a stopped goal either.
+  if (isGoalStopped(goal) || isGoalStopped(entry.goal)) {
+    entry.pendingResume = false
+    entry.running = false
+    entry.interrupted = false
+    noteRecovery(state, sessionId, 'goal-stopped', 'the user stopped this goal: the session stays quiet')
+    runtime.persist()
+    log.info(`session ${sessionId} keeps quiet: its goal was stopped on purpose`)
+    return { sessionId, action: 'goal-stopped', detail: 'the goal is paused: the session stays quiet' }
   }
 
   const disarmed = disarmedRecord(state, sessionId)
@@ -8786,11 +8973,52 @@ function dropRestartRequestSafe(runtime, options = {}) {
   }
 }
 
+/**
+ * The LIVE goal of a session, or undefined when it cannot be read.
+ *
+ * NEVER THROWS: a broken lookup must not decide anything — it only means that
+ * the "did the user stop this goal?" guard falls back to the phase the
+ * checkpoint recorded for the session.
+ *
+ * @param {object} ctx
+ * @param {string} sessionId
+ * @returns {unknown}
+ */
+function liveGoalOf(ctx, sessionId) {
+  try {
+    if (!ctx || !ctx.agents || typeof ctx.agents.get !== 'function') return undefined
+    const agent = ctx.agents.get(sessionId)
+    if (!agent) return undefined
+    if (!ctx.goals || typeof ctx.goals.get !== 'function') return undefined
+    return ctx.goals.get(agent)
+  } catch {
+    return undefined
+  }
+}
+
 /** The boot recovery pass. Runs once per host boot, bounded and idempotent. */
 async function recoverAfterRestart(ctx, runtime, config) {
   const log = runtime.log
   const state = runtime.state
-  const plan = bootPlan(state, { resumeOnBoot: config.resumeOnBoot, limit: config.maxSessions })
+  // THE LIVE GOAL OF A SESSION, or undefined when it cannot be read.
+  //
+  // It is the freshest source of "did the user stop this goal?": the goal the
+  // plugin disarmed before the restart may have been PAUSED afterwards, and a
+  // paused goal must not be woken up by the boot.
+  const getGoal = (sessionId) => liveGoalOf(ctx, sessionId)
+  // THE PLAN IS COMPUTED WITH THE ADOPTION (bug, 2026-11-11). A goal this
+  // restart disarmed and never gave back IS pending work — but the adoption is
+  // what writes the `pendingResume` mark, and a plan that only looks at
+  // sessions that ALREADY carry it says "nothing to recover" and ends the boot
+  // before the adoption could ever run. So the adoption happens first, inside
+  // `bootRecoveryPlan`, and a session whose only pending work was a disarmed
+  // goal is recovered by the boot itself — no `recover_now` needed.
+  const plan = bootRecoveryPlan(state, {
+    resumeOnBoot: config.resumeOnBoot,
+    limit: config.maxSessions,
+    now: Date.now(),
+    getGoal,
+  })
   if (!plan.recover) {
     setPhase(state, 'idle')
     // NOT "a pending restart was consumed by this boot": that is only true when
@@ -8817,7 +9045,7 @@ async function recoverAfterRestart(ctx, runtime, config) {
   const batchDelayMs = Number.isFinite(config.recoveryBatchDelayMs) ? config.recoveryBatchDelayMs : 1200
   const attempted = new Set()
   for (let batch = 0; batch < maxBatches; batch += 1) {
-    const pending = recoverableSessions(state, {})
+    const pending = recoverableSessions(state, { getGoal })
       .filter((entry) => !attempted.has(entry.sessionId))
       .slice(0, batchSize)
     if (pending.length === 0) break
@@ -8834,7 +9062,7 @@ async function recoverAfterRestart(ctx, runtime, config) {
       }
     }
     // Pause between batches so the resumed turns can start before the next wave.
-    if (batch + 1 < maxBatches && recoverableSessions(state, {}).some((entry) => !attempted.has(entry.sessionId))) {
+    if (batch + 1 < maxBatches && recoverableSessions(state, { getGoal }).some((entry) => !attempted.has(entry.sessionId))) {
       await recoveryDelay(batchDelayMs)
     }
   }
@@ -8852,7 +9080,7 @@ async function recoverAfterRestart(ctx, runtime, config) {
     now: Date.now(),
     maxAgeMs: 7 * 24 * 60 * 60 * 1000,
   })
-  const leftover = recoverableSessions(state, {})
+  const leftover = recoverableSessions(state, { getGoal })
   if (leftover.length > 0) {
     log.warn('recovery left sessions pending after the batch cap; they stay checkpointed for the next boot', {
       pending: leftover.map((entry) => entry.sessionId),
@@ -11944,6 +12172,20 @@ function buildBackupLimitRoute(ctx, runtime, config) {
   }
 }
 
+/**
+ * Is this value a duration of milliseconds the plugin-files watchdog accepts?
+ *
+ * The same rule the schema states (`number().min(0)`): a finite number that is
+ * not negative. A string, a boolean, NaN and a negative number are refused, so
+ * a malformed settings answer changes nothing.
+ *
+ * @param {unknown} value
+ * @returns {boolean}
+ */
+function isPluginFilesDuration(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+}
+
 function buildChoiceRoute(ctx, runtime, config) {
   const routePath = resolveChoicePath(config)
   return {
@@ -11981,7 +12223,14 @@ function buildChoiceRoute(ctx, runtime, config) {
         const hasGrace = Object.prototype.hasOwnProperty.call(body, 'restartGraceMs')
         const hasWindow = Object.prototype.hasOwnProperty.call(body, 'restartWindow')
         const hasAskedVersion = Object.prototype.hasOwnProperty.call(body, 'askedForPluginVersion')
-        if (!hasInclude && !hasBackupInclude && !hasBackup && !hasShow && !hasSeconds && !hasGrace && !hasWindow && !hasAskedVersion) {
+        // THE PLUGIN-FILES WATCHDOG (2026-11-11). These three controls exist in
+        // the settings page and POST here — but the route did not know them, so
+        // a body that carried ONLY them fell through to `no-choice` and the
+        // settings could not be saved at all.
+        const hasFilesWatch = Object.prototype.hasOwnProperty.call(body, 'pluginFilesWatch')
+        const hasFilesStable = Object.prototype.hasOwnProperty.call(body, 'pluginFilesStableMs')
+        const hasFilesMaxBlock = Object.prototype.hasOwnProperty.call(body, 'pluginFilesMaxBlockMs')
+        if (!hasInclude && !hasBackupInclude && !hasBackup && !hasShow && !hasSeconds && !hasGrace && !hasWindow && !hasAskedVersion && !hasFilesWatch && !hasFilesStable && !hasFilesMaxBlock) {
           // No key was asked for: there is nothing to persist.
           res.statusCode = 400
           res.setHeader('content-type', 'application/json; charset=utf-8')
@@ -11989,7 +12238,7 @@ function buildChoiceRoute(ctx, runtime, config) {
           res.end(JSON.stringify({
             ok: false,
             error: 'no-choice',
-            instruction: 'Send { "includePlugins": true | false } and/or { "backupIncludePlugins": true | false } and/or { "backupOnRestart": true | false } and/or { "showSleepButton": true | false } and/or { "sleepCountdownSeconds": 0 | 10 | 20 | 30 | 60 } and/or { "restartGraceMs": 0 | 5000 | 10000 | 20000 | 30000 | 60000 } and/or { "restartWindow": "foreground" | "background" } and/or { "askedForPluginVersion": "1.2.3" }.',
+            instruction: 'Send { "includePlugins": true | false } and/or { "backupIncludePlugins": true | false } and/or { "backupOnRestart": true | false } and/or { "showSleepButton": true | false } and/or { "sleepCountdownSeconds": 0 | 10 | 20 | 30 | 60 } and/or { "restartGraceMs": 0 | 5000 | 10000 | 20000 | 30000 | 60000 } and/or { "restartWindow": "foreground" | "background" } and/or { "askedForPluginVersion": "1.2.3" } and/or { "pluginFilesWatch": true | false } and/or { "pluginFilesStableMs": <milliseconds >= 0> } and/or { "pluginFilesMaxBlockMs": <milliseconds >= 0> }.',
           }))
           return
         }
@@ -12083,6 +12332,43 @@ function buildChoiceRoute(ctx, runtime, config) {
           }))
           return
         }
+        // THE PLUGIN-FILES WATCHDOG: the same rule the schema states — a boolean
+        // switch and two durations that are numbers of milliseconds and not
+        // negative. A malformed value is refused with a reason and NOTHING is
+        // written, so a broken settings page can never change the profile.
+        if (hasFilesWatch && typeof body.pluginFilesWatch !== 'boolean') {
+          res.statusCode = 400
+          res.setHeader('content-type', 'application/json; charset=utf-8')
+          res.setHeader('cache-control', 'no-store')
+          res.end(JSON.stringify({
+            ok: false,
+            error: 'pluginFilesWatch-must-be-boolean',
+            instruction: 'Send { "pluginFilesWatch": true | false }.',
+          }))
+          return
+        }
+        if (hasFilesStable && !isPluginFilesDuration(body.pluginFilesStableMs)) {
+          res.statusCode = 400
+          res.setHeader('content-type', 'application/json; charset=utf-8')
+          res.setHeader('cache-control', 'no-store')
+          res.end(JSON.stringify({
+            ok: false,
+            error: 'pluginFilesStableMs-must-be-milliseconds',
+            instruction: 'Send { "pluginFilesStableMs": <milliseconds >= 0> }.',
+          }))
+          return
+        }
+        if (hasFilesMaxBlock && !isPluginFilesDuration(body.pluginFilesMaxBlockMs)) {
+          res.statusCode = 400
+          res.setHeader('content-type', 'application/json; charset=utf-8')
+          res.setHeader('cache-control', 'no-store')
+          res.end(JSON.stringify({
+            ok: false,
+            error: 'pluginFilesMaxBlockMs-must-be-milliseconds',
+            instruction: 'Send { "pluginFilesMaxBlockMs": <milliseconds >= 0> }.',
+          }))
+          return
+        }
         const changes = {}
         // The route field is `includePlugins`, the configuration key is
         // `backupIncludePlugins` (the profile row keeps the plugin's own name).
@@ -12093,6 +12379,9 @@ function buildChoiceRoute(ctx, runtime, config) {
         if (hasSeconds) changes.sleepCountdownSeconds = body.sleepCountdownSeconds
         if (hasGrace) changes.restartGraceMs = body.restartGraceMs
         if (hasWindow) changes.restartWindow = body.restartWindow
+        if (hasFilesWatch) changes.pluginFilesWatch = body.pluginFilesWatch === true
+        if (hasFilesStable) changes.pluginFilesStableMs = Math.trunc(body.pluginFilesStableMs)
+        if (hasFilesMaxBlock) changes.pluginFilesMaxBlockMs = Math.trunc(body.pluginFilesMaxBlockMs)
         const result = await runtime.applyConfigChoice(changes)
         // THE PLUGIN VERSION THE USER WAS ASKED FOR. It lives in
         // install-choice.json (where readInstallChoice() looks for it), so it is
@@ -13474,6 +13763,12 @@ export function apply(ctx, rawConfig, options = {}) {
   // fallback file fills the gap, the built-in default applies otherwise.
   const sleepChoice = resolveShowSleepButton(rawConfig, stateDir)
   config.showSleepButton = sleepChoice.showSleepButton
+  // The same rule for the shutdown countdown (2026-11-11): the profile row
+  // decides, the degraded fallback file fills the gap, the built-in default
+  // applies otherwise. Without this line the countdown `persistConfigChoice`
+  // wrote into `install-choice.json` was never read back, so a choice made
+  // while the configEditor service was unavailable was silently lost.
+  config.sleepCountdownSeconds = resolveCountdownSeconds(rawConfig, stateDir).countdownSeconds
   const runtime = createRuntime(ctx, config, {
     backupChoiceSource: choice.source,
   })
@@ -13486,7 +13781,9 @@ export function apply(ctx, rawConfig, options = {}) {
     // blockers the restart gate consults.
     externalBlockers: () => externalBlockersNow(),
     // Nor may it cut a goal in half between two of its rounds (2026-11-11).
-    busyGoals: () => goalBusySessions(),
+    // The list comes from the runtime: the helper lives inside the runtime
+    // factory, so it must be reached THROUGH the runtime and never by name.
+    busyGoals: () => runtime.busyGoals(),
   })
 
   log.info('activated', {

@@ -19,6 +19,7 @@ import {
   INSTALL_COOLDOWN_MS,
   MARKET_STATUS_PATH,
   PROBE_TIMEOUT_MS,
+  UNREACHABLE_MAX_BLOCK_MS,
   applyMarketSample,
   emptyMarketState,
   marketInstallStatus,
@@ -107,6 +108,83 @@ test('a failing, missing or unparseable answer means "not installing"', async ()
     const state = applyMarketSample(emptyMarketState(), sample, { now: T })
     assert.equal(marketInstallStatus(state, { now: T }).installing, false, 'an unreadable market never holds the restart')
   }
+})
+
+/* ------------------------------------------------------------------ *
+ * ③b A MARKET THAT STOPS ANSWERING MUST NOT HOLD THE HOST FOR EVER
+ * (bug, 2026-11-11).
+ *
+ * The old state machine kept the last known `busy` when the probe could not be
+ * reached, and `marketInstallStatus` answered "installing" for it with no time
+ * limit at all: one single answer of "busy" and a market that then went silent
+ * blocked the restart AND the power-off for the rest of the process's life.
+ * That contradicts the rule of this module — a probe that cannot see must
+ * never hold the host hostage.
+ * ------------------------------------------------------------------ */
+
+test('a market that stops answering releases the gate after its own bound', async () => {
+  const busy = applyMarketSample(emptyMarketState(), parseMarketStatus({ busy: true, currentPackage: 'dsh-foo' }), { now: T })
+  assert.equal(marketInstallStatus(busy, { now: T }).installing, true, 'the market said it was working')
+
+  // The market goes silent: the probe cannot be reached any more.
+  const unreachable = await probeMarketStatus({
+    url: URL_OK,
+    fetchImpl: async () => { throw new Error('ECONNREFUSED') },
+  })
+  assert.equal(unreachable.reachable, false)
+  const silent = applyMarketSample(busy, unreachable, { now: T + 1000 })
+  assert.equal(silent.busy, true, 'the memory of the busy answer is kept')
+
+  // A REMEMBERED busy is an install in progress whose status we cannot read:
+  // it holds the gate for its OWN bound (`maxBlockMs` semantics), which is
+  // longer than the cooldown that bridges two operations of the market's queue.
+  const inside = marketInstallStatus(silent, { now: T + 1000 })
+  assert.equal(inside.installing, true)
+  assert.equal(inside.reason, 'cooldown')
+  assert.equal(inside.cooldownUntil, T + UNREACHABLE_MAX_BLOCK_MS)
+
+  // It is still held after the short cooldown — the market is NOT installing
+  // any more as far as anybody can tell, but a restart now would cut an
+  // install in half.
+  assert.equal(
+    marketInstallStatus(silent, { now: T + INSTALL_COOLDOWN_MS }).installing,
+    true,
+    'the short cooldown is not the bound of a silent market',
+  )
+
+  // PAST its own bound the remembered busy is gone: the gate opens again.
+  const outside = marketInstallStatus(silent, { now: T + UNREACHABLE_MAX_BLOCK_MS })
+  assert.equal(outside.installing, false, 'a market that cannot be reached must never hold the restart for ever')
+  assert.equal(outside.reason, 'idle')
+})
+
+test('the bound of a silent market can be configured', () => {
+  const busy = applyMarketSample(emptyMarketState(), parseMarketStatus({ busy: true }), { now: T })
+  const silent = applyMarketSample(busy, parseMarketStatus(null), { now: T + 1000 })
+  assert.equal(marketInstallStatus(silent, { now: T + 60000, maxBlockMs: 30000 }).installing, false,
+    'a shorter bound releases the gate sooner')
+  assert.equal(marketInstallStatus(silent, { now: T + 60000, maxBlockMs: 120000 }).installing, true,
+    'a longer bound keeps it closed')
+})
+
+test('the window is not pushed forward by more unreachable samples', async () => {
+  const busy = applyMarketSample(emptyMarketState(), parseMarketStatus({ busy: true }), { now: T })
+  const unreachable = await probeMarketStatus({
+    url: URL_OK,
+    fetchImpl: async () => { throw new Error('ECONNREFUSED') },
+  })
+  // The market stays silent for a long time.
+  let state = applyMarketSample(busy, unreachable, { now: T + 1000 })
+  state = applyMarketSample(state, unreachable, { now: T + 60000 })
+  state = applyMarketSample(state, unreachable, { now: T + 600000 })
+  // The bound is measured from the LAST moment the market said it was busy —
+  // the silence must not extend it.
+  assert.equal(
+    marketInstallStatus(state, { now: T + UNREACHABLE_MAX_BLOCK_MS }).installing,
+    false,
+    'the silence must not keep the gate closed',
+  )
+  assert.equal(marketInstallStatus(state, { now: T + 1000 }).installing, true, 'but inside the bound it still holds')
 })
 
 /* ------------------------------------------------------------------ *

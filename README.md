@@ -9,7 +9,7 @@ Restart DeepSeek Harness without losing the work that is currently running.
 
 Chinese version: [README.zh.md](docs/README.zh.md)
 
-Current version: **0.9.5**
+Current version: **0.9.6**
 
 ## What it does
 
@@ -52,15 +52,23 @@ The settings page writes these; the defaults are the ones in the code.
 | `settleMs` | `2000` | How long the host must stay quiet before the restart may start |
 | `restartGraceMs` | `0` | Extra wait after the last conversation went idle, before the host is really restarted — a dropdown: `0` / `5` / `10` / `20` / `30` / `60` seconds. `0` = no extra wait |
 | `queuedGraceMs` | `60000` | How long a queued inbox message may sit before it stops blocking the restart. A **running** conversation always blocks |
+| `marketStatusUrl` | `''` | Where the plugin market reports whether it is installing something. Empty = the status route of this host (`/dsh-market/status`). Read only — the probe never writes anything |
+| `marketProbeTimeoutMs` | `800` | Upper bound of one market probe in milliseconds (a caller can shorten it, never extend it past 800) |
+| `marketProbeIntervalMs` | `1500` | How often the market is asked while a restart is waiting (milliseconds) |
+| `marketInstallCooldownMs` | `15000` | How long the restart still waits after the market reported that it finished, to bridge the gap between two operations of its queue (milliseconds) |
+| `pluginFilesWatch` | `true` | Also wait while the profile's plugin files are being changed — `package.json`, `pnpm-lock.yaml`, `node_modules` and `node_modules-link`. This covers the installs that never go through the market: a manual `pnpm add`, or the host's own plugin manager |
+| `pluginFilesStableMs` | `15000` | How long the plugin files must stay unchanged before the change counts as finished (milliseconds) — a dropdown in the settings page: `5` / `10` / `15` / `30` / `60` seconds. A false positive clears itself after this window |
+| `pluginFilesMaxBlockMs` | `300000` | The longest a single file-change episode may hold a restart, so a stuck installation cannot pin the host shut (milliseconds) — a dropdown in the settings page: `5` / `10` / `30` / `60` minutes (the shortest wait is 5 minutes) |
 | `forceRestartWhenBusy` | `false` | Interrupt a running conversation instead of waiting. The default never interrupts a session |
 | `deferPollMs` | `3000` | Poll interval while waiting for the conversations to go idle |
 | `relaunchDelaySeconds` | `2` | How long the detached helper waits before it kills the app |
+| `restartWindow` | `background` | How the restart command script is started: `background` = no window at all, and it never takes the focus (the default since this version); `foreground` = the visible console window. An existing profile that already says `foreground` keeps it — only a missing or unreadable value falls back to `background` |
 | `backupOnRestart` | `true` | Take a snapshot before every restart |
 | `backupIncludePlugins` | `true` | Include the locally linked plugins in that snapshot (~117 MB here, ~3 s). `false` keeps only the configuration files |
 | `maxBackups` | `2` | How many snapshots to keep (2–10) |
 | `restartCommandTimeoutMs` | `30000` | How long the restart command may run before the plugin stops waiting for it |
 | `showSleepButton` | `true` | Show the countdown-shutdown button |
-| `sleepCountdownSeconds` | `20` | Countdown length before powering off — a dropdown: `0` / `10` / `20` / `30` / `60` seconds |
+| `sleepCountdownSeconds` | `10` | Countdown length before powering off — a dropdown: `0` / `10` / `20` / `30` / `60` seconds. `10` is only the default for an instance that never set it: a profile that already stores `20` (or `30`, or `60`) keeps that value — nothing is migrated or overwritten |
 | `sleepCommand` | `''` | Override the power-off command |
 | `resumeOnBoot` | `true` | Resume interrupted sessions after a restart |
 | `recoveryDelayMs` | `6000` | Wait before the first resume attempt |
@@ -76,16 +84,93 @@ The settings page writes these; the defaults are the ones in the code.
 | `watchDelayMs` | `8000` | How long the watch waits after boot before it reads |
 | `deferSoftMs`, `deferHardMs`, `deferPolicy` | `300000` / `900000` / `auto` | **Deprecated — read but completely ignored.** A pending restart has no deadline |
 
+Four of the keys above — `restartWindow`, `pluginFilesWatch`, `pluginFilesStableMs` and `pluginFilesMaxBlockMs` —
+have a control in the settings page, in the **More settings** block. The four `market*` keys are configuration
+keys without a settings-page control; the **More settings** subsection below says which is which.
+
 ### The settings page
 
-Four groups, all reachable from the settings page:
+Every section is one row per thing: the title is on the left, the control is on the right, and the explanation
+is folded behind **Show details** (`查看说明`) so the page stays readable. A row that is switched off in its own
+title is a **sliding switch**, not a checkbox. The control column is wide enough (260 px, dropdowns at least
+200 px) that a long choice such as *Background (no window at all, and it never takes the focus; the default)*
+is shown in full instead of being squeezed.
 
-| Group | What is in it |
+A row that only means something while the row above it is on is drawn as that row's **subordinate**: indented
+under it, behind a faint vertical line, and greyed out (its control cannot be used) when the parent is off.
+
+| Section | What is in it |
 |---|---|
-| **Restart settings** | The wait before the restart, the two backup switches, the backup limit, and the list of the snapshots — each with its time and a button that rolls back to that one copy |
+| **Restart settings** | The wait before the restart, **Back up before a restart** with **Include the installed plugins in the backup** as its subordinate row, the backup limit, and the **Backup info** fold |
 | **Shutdown settings** | The countdown of the graceful shutdown |
-| **Start at login** | How "start at login" works on *this* machine, with copyable commands. The plugin never changes your system configuration for you |
+| **More settings** | A block of its own, **closed by default**: how the restart command script runs, and the plugin-folder watchdog |
+| **Start at login** | How "start at login" works on *this* machine, with copyable commands. The plugin never changes your system configuration for you. Not shown on the desktop client — it relaunches itself, so there is nothing to install |
 | **Something is wrong** | The diagnostics and a **Report a problem** button that copies them and opens a pre-filled GitHub issue. The diagnostics carry no access token and no secrets |
+
+**Backup info** is the fold that explains what has been backed up: how many copies there are and what they take
+on disk, when a copy is taken, the list with a button that rolls back to that one copy, and the path. It is
+**closed by default** — except on a boot the system had to restore, where it opens itself and says so on its
+title, because an intervention is the one thing that must not be hidden. It used to be titled *Show details*
+like every other row's explanation, which read as "one more way to open the explanation of this row"; it has a
+name of its own now, and its contents are unchanged.
+
+The **last restart** row is gone from the page: which launcher really ran (`wscript`, the PowerShell fallback,
+the foreground window) is still reported by the host — it is in the status payload and in the diagnostics — it
+simply does not take up room on the settings page any more.
+
+### More settings (「更多设置」)
+
+A block of its own, after **Shutdown settings** and before **Something is wrong**, **closed by default** —
+until you click the title you only see the title.
+
+| Row (as it reads on the page) | Key | Control |
+|---|---|---|
+| **How the restart command script runs** | `restartWindow` | Dropdown: *Foreground (a window appears briefly)* / *Background (no window at all, and it never takes the focus; the default)* |
+| **Do not restart or shut down while plugins are installing** | `pluginFilesWatch` | Sliding switch |
+| **How many seconds without a file change mean the plugin is installed** | `pluginFilesStableMs` | Dropdown: 5 / 10 / 15 / 30 / 60 seconds |
+| **How long to wait at most for the plugin install** | `pluginFilesMaxBlockMs` | Dropdown: 5 / 10 / 30 / 60 minutes |
+
+The last two are **subordinate to the switch above them**: they are drawn indented under it, and they are
+greyed out (their dropdown cannot be used) while that switch is off. Their own sentence says so as well —
+"When the switch above is off, these two do nothing."
+
+A value that is not one of the offered choices is not rewritten: it shows up in the dropdown as **Current
+value**, so an existing profile keeps working and nothing changes until you pick a choice.
+
+**Background is the default since this version.** The restart command script used to run in the foreground, in
+a console window that stayed visible for the length of the grace delay. An existing profile that already says
+`foreground` keeps the foreground — the default only fills in a missing or unreadable value. Nothing else about
+the restart changed: the wait, the idle gate, the kill of the whole process tree, the cookie clear and the
+relaunch happen in the same order. If this machine does not allow such little scripts to run, a hidden
+PowerShell runs the same command instead and the reason is written into the restart report.
+
+The four **market probe** keys — `marketStatusUrl`, `marketProbeTimeoutMs`, `marketProbeIntervalMs` and
+`marketInstallCooldownMs` — have **no control in the settings page**. They are configuration keys: set them
+in the profile row or through the configuration API. The defaults in the table above are the ones the probe
+actually uses.
+
+## What the restart waits for
+
+A restart is queued, not cut through. The gate waits for the work that is still going on — and the graceful
+shutdown (the moon button) waits for the same three things plus one more, because a shutdown cuts an
+installation in half even more surely than a restart does.
+
+| It waits for | How it is decided | What you see |
+|---|---|---|
+| **Every conversation to be idle** | The plugin asks the host which sessions are still running. A queued (unclaimed) inbox message blocks for at most `queuedGraceMs`; a **running** conversation always blocks | The restart stays queued; `continuum_status` names the sessions that block it |
+| **The plugin market to be done** | A read-only `GET` of the market's status route (`/dsh-market/status`): `busy` or `active` means "installing". An answer that cannot be read — a timeout, a 404, a non-2xx answer, a body that is not an object — means **"nothing is being installed"**, and the restart goes on exactly as it did before this feature existed | The restart capsule shows a pill ("waiting for the plugin market to finish installing"); the sidebar dot's tooltip says the same thing |
+| **The plugin files to settle** | The profile's `package.json`, `pnpm-lock.yaml`, `node_modules` and `node_modules-link` are fingerprinted; while the fingerprint keeps moving, the restart waits. This catches the installs that never go through the market: a manual `pnpm add`, or the host's own plugin manager | The restart capsule shows a pill ("waiting for a plugin install to finish") |
+| **A goal that is still going** (the shutdown only) | A goal counts as running while it is still **armed**, has not reached a terminal phase (`paused` / `blocked` / `complete` / `completed` / `done`) and still has rounds left. A paused goal, a disarmed goal and a finished goal never hold the machine | The shutdown is held and names the goal that is still working |
+
+Both of the installation waits have an upper bound, so a broken signal cannot hold the host for ever:
+
+- **The market**: an "installing" answer is remembered for at most `marketInstallCooldownMs` (15 s by default),
+  and only while the market cannot be reached at all. Past that window the market counts as idle.
+- **The plugin files**: one episode of file changes holds a restart for at most `pluginFilesMaxBlockMs`
+  (5 minutes by default), and it only counts as "changing" while the last change is younger than
+  `pluginFilesStableMs` (15 s by default).
+
+Both probes are read-only: one `GET`, no body, no retry, nothing is written.
 
 ## Where it writes
 
@@ -196,13 +281,25 @@ The snapshots under `~/.dsh/storages/dsh-autorestart/backups/` are yours; they a
 
 ## Tests
 
-The plugin ships its own test suite in `plugins/dsh-autorestart/test/`. Run it with the bundled Node:
+The plugin ships its own test suite in `plugins/dsh-autorestart/test/`. There is no `node` on `PATH` in the
+desktop environment, so the repository ships a script that runs the suite with the bundled Node:
 
 ```
-node --test plugins/dsh-autorestart/test
+pwsh -NoProfile -File plugins/dsh-autorestart/scripts/run-tests.ps1
 ```
 
-All **939** test cases pass (939 passed, 0 failed, 0 skipped).
+On Windows PowerShell the same thing is:
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File plugins/dsh-autorestart/scripts/run-tests.ps1
+```
+
+**Do not hand a directory to `node --test`.** Node 24 and newer treat the positional arguments of `--test` as
+glob patterns, so `node --test plugins/dsh-autorestart/test` fails with `MODULE_NOT_FOUND`. The script passes
+the glob `plugins/dsh-autorestart/test/*.test.mjs` instead.
+
+All **1189** test cases pass (1189 passed, 0 failed, 0 skipped) — measured on 2026-11-11 with the bundled
+Node: `tests 1189 / pass 1189 / fail 0`, exit code 0.
 
 ## License
 
