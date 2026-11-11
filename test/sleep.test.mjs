@@ -1689,16 +1689,18 @@ test('the section shows two titled groups, the restart one first', async () => {
   assert.equal(titles[3], '遇到问题', 'the report group must have a visible title')
 
   // The restart group carries four controls plus the restart-window setting that
-  // used to be a group of its own.
+  // used to be a group of its own, and the three plugin-folder settings that
+  // fold under 「更多设置」 (user decision, 2026-11-11).
   const restartControls = walk(groups[0]).filter(
     (node) => node.type === 'select' || node.type === 'input',
   )
-  assert.equal(restartControls.length, 5, 'the restart group has exactly five controls')
+  assert.equal(restartControls.length, 8, 'the restart group has exactly eight controls')
   const restartKeys = restartControls.map((node) => node.props['data-dsh-autorestart-setting'])
   assert.deepEqual(
     restartKeys,
-    ['restartGraceMs', 'backupOnRestart', 'backupIncludePlugins', 'maxBackups', 'restartWindow'],
-    'the restart group ends with the helper window setting, and nothing else',
+    ['restartGraceMs', 'backupOnRestart', 'backupIncludePlugins', 'maxBackups', 'restartWindow',
+      'pluginFilesWatch', 'pluginFilesStableMs', 'pluginFilesMaxBlockMs'],
+    'the restart group ends with the helper window setting and the plugin-folder watchdog, and nothing else',
   )
 
   // The shutdown group carries exactly one: the countdown.
@@ -1734,12 +1736,16 @@ test('the section shows two titled groups, the restart one first', async () => {
     .map((node) => node.props.value)
   assert.deepEqual(graceOptions, ['0', '5', '10', '20', '30', '60'])
 
-  // The two backup switches show the values the Host reports.
+  // The two backup switches and the plugin-folder watchdog show the values the
+  // Host reports. The two numbers of the watchdog are inputs as well, so they
+  // are picked out by their setting key, not by counting.
   const switches = walk(panel).filter((node) => node.type === 'input')
-  assert.equal(switches.length, 2, 'the section has exactly two switches')
+  assert.equal(switches.length, 5, 'the section has five inputs: three switches and two numbers')
   const switchByKey = new Map(switches.map((node) => [node.props['data-dsh-autorestart-setting'], node]))
   assert.equal(switchByKey.get('backupOnRestart').props.checked, true)
   assert.equal(switchByKey.get('backupIncludePlugins').props.checked, false)
+  // The watchdog is ON unless the Host reports it switched off.
+  assert.equal(switchByKey.get('pluginFilesWatch').props.checked, true)
 
   // The labels and the explanation are on the page.
   const shown = textOf(panel)

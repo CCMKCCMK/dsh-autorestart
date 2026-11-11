@@ -7770,6 +7770,14 @@
             // (user decision, 2026-11-09). Both are restart settings, so they
             // live INSIDE this group, right after the backup section, instead of
             // a group of their own. They are independent of each other.
+            // THE ONCE-AND-DONE SETTINGS (user decision, 2026-11-11): the
+            // launcher mode and the plugin-folder watchdog are set once and then
+            // forgotten, so they fold away under 「更多设置」 and the group above
+            // stays readable instead of growing three more rows.
+            h(
+              'details',
+              { className: 'dsh-autorestart-settings__advanced', 'data-dsh-autorestart-advanced': 'section' },
+              h('summary', { className: 'dsh-autorestart-settings__advanced-summary' }, t('settings.advanced.title')),
             h(
               'label',
               { className: 'dsh-autorestart-settings__field' },
@@ -7792,6 +7800,71 @@
                 h('option', { key: 'background', value: 'background' }, t('settings.window.background')),
               ),
               h('span', { className: 'dsh-autorestart-settings__hint' }, t('settings.window.hint')),
+            ),
+            // THE PLUGIN-FOLDER WATCHDOG: an install that never goes through the
+            // market (a manual `pnpm add`, the host plugin manager) touches
+            // exactly these files, so a restart or a power-off holds while they
+            // move.
+            h(
+              'label',
+              { className: 'dsh-autorestart-settings__field' },
+              h('span', { className: 'dsh-autorestart-settings__label' }, t('settings.pluginFiles.watch')),
+              h('input', {
+                type: 'checkbox',
+                disabled: busy,
+                checked: !(status && status.pluginFiles && status.pluginFiles.watched === false),
+                'data-dsh-autorestart-setting': 'pluginFilesWatch',
+                onChange: (event) => {
+                  void save({ pluginFilesWatch: !!(event && event.target && event.target.checked) })
+                },
+              }),
+            ),
+            h(
+              'label',
+              { className: 'dsh-autorestart-settings__field' },
+              h('span', { className: 'dsh-autorestart-settings__label' }, t('settings.pluginFiles.stable')),
+              h('input', {
+                type: 'number',
+                min: 0,
+                step: 1,
+                className: 'dsh-autorestart-settings__select',
+                disabled: busy,
+                value: Math.round(
+                  ((status && status.pluginFiles && Number.isFinite(status.pluginFiles.stableMs))
+                    ? status.pluginFiles.stableMs
+                    : 15000) / 1000,
+                ),
+                'data-dsh-autorestart-setting': 'pluginFilesStableMs',
+                onChange: (event) => {
+                  const raw = event && event.target ? Number(event.target.value) : NaN
+                  if (!Number.isFinite(raw) || raw < 0) return
+                  void save({ pluginFilesStableMs: Math.round(raw * 1000) })
+                },
+              }),
+            ),
+            h(
+              'label',
+              { className: 'dsh-autorestart-settings__field' },
+              h('span', { className: 'dsh-autorestart-settings__label' }, t('settings.pluginFiles.max')),
+              h('input', {
+                type: 'number',
+                min: 0,
+                step: 1,
+                className: 'dsh-autorestart-settings__select',
+                disabled: busy,
+                value: Math.round(
+                  ((status && status.pluginFiles && Number.isFinite(status.pluginFiles.maxBlockMs))
+                    ? status.pluginFiles.maxBlockMs
+                    : 300000) / 60000,
+                ),
+                'data-dsh-autorestart-setting': 'pluginFilesMaxBlockMs',
+                onChange: (event) => {
+                  const raw = event && event.target ? Number(event.target.value) : NaN
+                  if (!Number.isFinite(raw) || raw < 0) return
+                  void save({ pluginFilesMaxBlockMs: Math.round(raw * 60000) })
+                },
+              }),
+            ),
             ),
             // THE LAST LAUNCH: background mode is invisible, so which launcher
             // really ran (and whether the shim cleaned up) is shown here.
