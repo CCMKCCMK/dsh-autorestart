@@ -239,6 +239,13 @@ So **the size of a backup floats — that is normal.** It does not mean the back
 a plugin was left out: the size follows the plugins' own working data. **The things to look at are the file count
 and the plugin list**, not the byte total.
 
+**This version copies everything, file by file.** There is **no exclusion by directory or by plugin** — which is
+why the running data of the backed-up plugins is in there too (`dsh-codekg`'s `data/`, 114 MB measured, of which
+`snapshots/` is 99.6 MB). That is **deliberate, not an oversight**: some people really do need their data backed up
+as well — moving to another machine, keeping a record, looking at it after an incident. **If it is ever offered, it
+should be a setting the user picks** — deciding for themselves what gets copied — rather than a decision made for
+everybody. **This version does not do that.**
+
 ## Platforms
 
 | Platform | Status |
