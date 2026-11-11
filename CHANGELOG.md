@@ -122,6 +122,24 @@
 
 **降级环境里选过的秒数以前读不回来（修缺陷）。** `configEditor` 服务不可用时，`persistConfigChoice` 会把选中的秒数写进 `install-choice.json`，`readInstallChoice` 也读得出来——但**没有任何 resolver 把它接进生效值**，于是「选过、写进了文件、重启后又变回默认」。现在照备份三项的写法新增 `resolveCountdownSeconds(rawConfig, stateDir)`：**profile 行 > `install-choice.json` > 内置默认**，返回 `source` 标明来源。两处刻意的不对称：行里的旧值仍按老规则就近取档（`15` → `20`），文件里的值**只认档位**（手可改的 JSON，`"30"` / `NaN` / `15` / `-5` 一律忽略、回落到下一级，不猜也不抛）。设置页浏览器端的兜底常量也同步改成 10，并加了一条「浏览器兜底必须等于 `lib/sleep.js` 的默认值」的测试，防止两处各说各话。
 
+### 十一、备份两组说明重写 + 「保留份数」挪成从属项（界面）
+
+这一轮只动文案与行的位置：备份怎么做、超出怎么删、回退怎么点，判定一处没改。
+
+**「重启前备份」的说明改成说清它实际怎么干活**：每次重启前先比对 DSH 配置和它下面两行覆盖的插件，**有变化才新建一份存档、没变化就沿用最近那份**；**默认保留 2 份**，超出自动删最旧的；份数在下面的**「保留份数」**里改；**关掉这个开关时不做比对，也不产生存档**；存档**不会自动还原**，要回退去**「备份信息」**里点。
+
+**「备份包含已安装插件」的说明分成三类**，因为这三类在代码里本来就是分开处理的：
+
+| 这一类 | 怎么处理 |
+|---|---|
+| **你自己写的插件**（`lib/backup.js` 里的 `link`：手写在本地目录、以链接方式装） | **连文件一起拷**，回退时能原样还原 |
+| 从线上下载后**又本地改过（做过本地化）**的插件（`localized`：其实是 npm 插件，但在这台机器上改过、带 `.git`） | **连文件一起拷**，回退时能原样还原 |
+| 其余**原样安装的线上第三方插件**（`thirdParty`） | **只记下名字和版本，不拷文件**；这些由插件作者维护，出问题重装一次即可 |
+
+这不是把三类「说成」分开：`lib/backup.js` 里 `localized` 与 `link` 都会被拷进各自的目录，而 `thirdParty` 在 manifest 里只有 `name` 与 `version` 两个字段。
+
+**「保留份数」从「备份信息」折叠里挪出来了**，现在是**「重启前备份」下的第三行从属项**——与「备份包含已安装插件」同组、同缩进、同一道淡竖线，父开关「重启前备份」关掉时它跟着变灰、不可用。「备份信息」折叠因此**只剩只读内容**：份数与占用空间、每份的时间与「回退到这一份」按钮、备份路径与复制按钮。把份数调小仍会先弹一次确认、问你要删掉几份，这一步没变。
+
 ### 文档
 
 - `README.md` 与 `docs/README.zh.md` 补上这一版新增的 8 个配置键（`restartWindow`、`marketStatusUrl`、`marketProbeTimeoutMs`、`marketProbeIntervalMs`、`marketInstallCooldownMs`、`pluginFilesWatch`、`pluginFilesStableMs`、`pluginFilesMaxBlockMs`），写明哪四个在设置页的「更多设置」里（默认收起）、哪四个是纯配置键（设置页没有控件），并新增一节讲「重启前会等什么」。
@@ -131,7 +149,7 @@
 
 ### 验证
 
-- 全量测试：`tests 1189 / pass 1189 / fail 0 / exit 0`（2026-11-11 本机，随附的 Node，`scripts/run-tests.ps1`）。
+- 全量测试：`tests 1191 / pass 1191 / fail 0 / exit 0`（2026-11-11 本机，随附的 Node，`scripts/run-tests.ps1`）。
 - 每一处都补了「**改前红、改后绿**」的用例：把 5 个源文件 stash 掉、只留测试，跑 6 个相关测试文件 → `tests 61 / fail 12`（红）；恢复后同一批全绿。
 - 逐条断言：`test/sleep-external-blockers.test.mjs`（真实插件：apply → POST /sleep arm → sleep controller tick → sleepGate → 关机命令桩 → sleepSpawn；paused / disarmed / complete 三个用例 `status.blockers` 为空且 `shutdowns === 1`——机器真的发出了关机命令，armed 用例 `status.phase === 'waiting'` 且 `shutdowns === 0`）、`test/lifecycle.test.mjs`（`isGoalRunning` / `selectBusyGoals` 单元口径）、`test/goal-rearm-after-restart.test.mjs`（旧 checkpoint → 真实开机恢复定时器 → 该会话回到 `pendingResume`）、`test/sleep-choice.test.mjs`（三个键落盘 + 宿主回读新值 + 非法值 400 且零写入 + `normalizeConfig` 钳制）、`test/market-probe.test.mjs`（先 busy 再持续不可达：窗口内仍挡、超窗放行、沉默不延长窗口）、`test/plugin-files.test.mjs`（一段结束清零、下一次安装重新被看见、`node_modules-link` 进入指纹）。
 
@@ -253,6 +271,24 @@ A value that is **not one of the choices** is never rewritten behind your back: 
 
 **A countdown chosen in a degraded environment could not be read back (defect fixed).** When the `configEditor` service is unavailable, `persistConfigChoice` writes the chosen seconds into `install-choice.json` and `readInstallChoice` can read it — but **no resolver fed it into the effective value**, so "you chose it, it was written to the file, and after a restart you were back to the default". Following the pattern of the three backup keys there is now `resolveCountdownSeconds(rawConfig, stateDir)`: **profile row > `install-choice.json` > built-in default**, with a `source` telling which one applied. Two deliberate asymmetries: an old value in the row is still snapped to the nearest tier by the old rule (`15` → `20`), while a value in the file **must be a tier** (it is hand-editable JSON: `"30"` / `NaN` / `15` / `-5` are all ignored and fall through to the next level — nothing is guessed and nothing is thrown). The browser-side fallback constant of the settings page moved to 10 as well, and a test now pins that "the browser fallback must equal the default in `lib/sleep.js`", so the two cannot drift apart.
 
+### 11. The two backup explanations rewritten, and "Copies kept" becomes a subordinate row (interface)
+
+This round only moves wording and the position of a row: how a copy is made, how the oldest is deleted and how you roll back did not change anywhere.
+
+**The "Back up before a restart" explanation now says what it really does**: before every restart it compares your DSH settings and the plugins covered by the two rows below it — a new copy is written **only when something changed**, and when nothing changed the most recent copy is reused; **two copies are kept by default** and the oldest is deleted when there are more; that number is changed under **Copies kept** below; **with the switch off nothing is compared and no copy is taken**; a copy is **never restored by itself** — to roll back, press the button in **Backup info**.
+
+**The "Include the installed plugins in the backup" explanation splits the plugins into three kinds**, because the code already treats them separately:
+
+| Kind | What happens |
+|---|---|
+| **the plugins you wrote yourself** (`link` in `lib/backup.js`: written by hand in a local directory and installed as a link) | **copied with their files**, so a rollback restores them exactly |
+| the ones you **downloaded and then changed on this machine** (`localized`: really an npm plugin, but edited here and carrying a `.git`) | **copied with their files**, so a rollback restores them exactly |
+| the rest of the **online third-party plugins, installed as they came** (`thirdParty`) | **only their name and version are recorded, no files are copied**; their authors keep them up to date, so if something breaks, install them once more |
+
+That is not the wording inventing a split: in `lib/backup.js` both `localized` and `link` are copied into their own directories, while a `thirdParty` entry carries only `name` and `version` in the manifest.
+
+**"Copies kept" moved out of the "Backup info" fold** and is now the **third subordinate row of "Back up before a restart"** — same group, same indentation and the same faint vertical line as "Include the installed plugins in the backup", and it goes grey and unusable when the parent switch is off. The **Backup info** fold therefore holds **read-only content only**: how many copies there are and what they take on disk, each copy's time with a "roll back to this one" button, and the path with its copy button. Shrinking the number still asks first how many copies will go — that step did not change.
+
 ### Documentation
 
 - `README.md` and `docs/README.zh.md` gained the 8 configuration keys this release adds (`restartWindow`, `marketStatusUrl`, `marketProbeTimeoutMs`, `marketProbeIntervalMs`, `marketInstallCooldownMs`, `pluginFilesWatch`, `pluginFilesStableMs`, `pluginFilesMaxBlockMs`), say which four live in the settings page's More settings (closed by default) and which four are pure configuration keys (no control in the settings page), and gained a section about "what the restart waits for".
@@ -262,7 +298,7 @@ A value that is **not one of the choices** is never rewritten behind your back: 
 
 ### Verification
 
-- Full suite: `tests 1189 / pass 1189 / fail 0 / exit 0` (2026-11-11 on this machine, the bundled Node, `scripts/run-tests.ps1`).
+- Full suite: `tests 1191 / pass 1191 / fail 0 / exit 0` (2026-11-11 on this machine, the bundled Node, `scripts/run-tests.ps1`).
 - Every fix came with a "**red before, green after**" case: stashing the 5 source files and running the 6 related test files gave `tests 61 / fail 12` (red); the same batch was green again after restoring them.
 - Case by case: `test/sleep-external-blockers.test.mjs` (the real plugin: apply → POST /sleep arm → sleep controller tick → sleepGate → shutdown-command stub → sleepSpawn; the paused / disarmed / complete cases assert an empty `status.blockers` and `shutdowns === 1` — the machine really issued the shutdown command — while the armed case asserts `status.phase === 'waiting'` and `shutdowns === 0`), `test/lifecycle.test.mjs` (the unit level of `isGoalRunning` / `selectBusyGoals`), `test/goal-rearm-after-restart.test.mjs` (an old checkpoint → the real boot-recovery timer → that session comes back with `pendingResume`), `test/sleep-choice.test.mjs` (the three keys are saved + the host reports the new values back + an illegal value answers 400 with zero writes + the `normalizeConfig` clamp), `test/market-probe.test.mjs` (busy first and then continuously unreachable: blocked inside the window, released past it, and silence does not extend the window), `test/plugin-files.test.mjs` (an episode clears its marker when it ends, the next install is seen again, `node_modules-link` is part of the fingerprint).
 

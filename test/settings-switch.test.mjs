@@ -445,7 +445,7 @@ test('every explanation sits behind one 「查看说明」 entry, closed by defa
   )
   assert.ok(backupFold, 'the backup row has its fold')
   assert.equal(
-    textOf(backupFold).includes('什么时候会备份？'),
+    textOf(backupFold).includes('每次重启前先比对'),
     true,
     'the explanation of the backup row is inside the fold',
   )
@@ -835,12 +835,19 @@ test('the backup fold carries the same title as every other fold', async () => {
   assert.ok(summary, 'the backup fold has a title')
   assert.equal(textOf(summary), '备份信息', 'the backup fold says what is inside it')
 
-  // And its content is still there.
+  // And its content is still there — the READ-ONLY part (user decision,
+  // 2026-11-11): the count, the rule, the per-copy rows and the path. The copy
+  // limit LEFT the fold and became a row under 「重启前备份」.
   const inside = new Set(walk(fold).map((node) => node.props && node.props['data-dsh-autorestart-backup'])
     .filter((value) => typeof value === 'string'))
-  for (const key of ['list', 'count', 'keep', 'limit-select']) {
+  for (const key of ['list', 'count', 'keep']) {
     assert.equal(inside.has(key), true, `"${key}" is still inside the fold`)
   }
+  assert.equal(
+    inside.has('limit-select'),
+    false,
+    'the copy limit is NOT inside the fold any more',
+  )
 })
 
 /* ------------------------------------------------------------------ *
@@ -901,8 +908,8 @@ test('「备份包含已安装插件」 is drawn as a child of the backup switch
   assert.ok(backupBlock, 'the 「include plugins」 row sits in a subordinate block')
   assert.deepEqual(
     backupBlock.children.map((child) => child.props['data-dsh-autorestart-row']),
-    ['backupIncludePlugins'],
-    'that block holds exactly that one row',
+    ['backupIncludePlugins', 'maxBackups'],
+    'that block holds the two items the backup switch governs',
   )
   // The switch above it is NOT inside the block: the block is its child.
   assert.equal(
@@ -980,8 +987,48 @@ test('the minutes are four lengths, and the dropdown is wide enough for them', a
   )
 })
 
-test('the stylesheet gives the control column and the dropdowns more room', async () => {
-  const css = fs.readFileSync(
+test('the copy limit is a child of the backup switch, and goes grey with it', async () => {
+  const on = mountSettings({ status: { backupOnRestart: true } })
+  const onPanel = await on.settled('dsh-autorestart')
+  const limitRow = rowOf(onPanel, 'maxBackups')
+  assert.equal(
+    textOf(limitRow).includes('保留份数'),
+    true,
+    'the row is the copy limit',
+  )
+  // It sits in the same subordinate block as 「备份包含已安装插件」.
+  const block = subrowBlocks(onPanel).find((candidate) => walk(candidate).some(
+    (inner) => inner.props['data-dsh-autorestart-row'] === 'maxBackups',
+  ))
+  assert.ok(block, 'the copy limit sits in a subordinate block')
+  assert.deepEqual(
+    block.children.map((child) => child.props['data-dsh-autorestart-row']),
+    ['backupIncludePlugins', 'maxBackups'],
+    'the block holds both items the backup switch governs',
+  )
+  const select = walk(limitRow).find((node) => node.type === 'select')
+  assert.ok(select, 'the control is still the dropdown')
+  assert.equal(select.props.disabled, false, 'usable while the backup is on')
+
+  const off = mountSettings({ status: { backupOnRestart: false } })
+  const offPanel = await off.settled('dsh-autorestart')
+  const offRow = rowOf(offPanel, 'maxBackups')
+  assert.equal(
+    String(offRow.props.className).includes('dsh-autorestart-settings__row--off'),
+    true,
+    'the row is marked as off while the backup switch is off',
+  )
+  assert.equal(offRow.props['aria-disabled'], 'true', 'and says it is disabled')
+  const offSelect = walk(offRow).find((node) => node.type === 'select')
+  assert.equal(offSelect.props.disabled, true, 'the dropdown is not clickable')
+  assert.equal(
+    textOf(offRow).includes('保留几份存档：默认 2 份，超出自动删最旧的。每份都占磁盘空间，够用就好。'),
+    true,
+    'and the row explains what it is for',
+  )
+})
+
+test('the stylesheet gives the control column and the dropdowns more room', async () => {  const css = fs.readFileSync(
     new URL('../client.js', import.meta.url),
     'utf8',
   )

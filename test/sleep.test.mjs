@@ -1851,7 +1851,7 @@ test('the section shows two titled groups, the restart one first', async () => {
   assert.ok(shown.includes('重启倒数时间'), `the restart countdown label must be there: ${shown}`)
   assert.ok(shown.includes('重启前备份'), `the label must be there: ${shown}`)
   assert.ok(shown.includes('备份包含已安装插件'), `the label must be there: ${shown}`)
-  assert.ok(shown.includes('不包含你装的那些插件'), `the scope must be explained: ${shown}`)
+  assert.ok(shown.includes('打开后，存档会连插件一起存'), `the scope must be explained: ${shown}`)
 })
 
 test('the countdown length is written into the profile configuration and read back', async () => {

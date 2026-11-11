@@ -214,19 +214,16 @@
     "backup": {
       "label": "Backup before a restart",
       "section": "Backup info",
-      "hint": "A copy is taken before every restart - an archive, not an automatic rollback: nothing is put back unless you click it below. What it holds: your settings (always); plugins you wrote and that live in a folder on this machine (copied file by file); plugins downloaded from the internet (only which ones and which version are recorded - never copied; they are reinstalled from that list).",
+      "hint": "Before every restart it compares your DSH settings and the plugins covered by the two items below. Only when something changed does it take a new copy; when nothing changed it keeps using the most recent one. Two copies are kept by default and the oldest is deleted when there are more; change that number under \"Copies kept\" below. With this switch off nothing is compared and no copy is taken. A copy is never restored by itself - to roll back, press the button under \"Backup info\".",
       "list": "What is backed up right now",
-      "when": "When is a backup taken?",
-      "whenBody": "Before every restart the DSH configuration is compared (with 「include the installed plugins」 on, the installed plugins too): only a real change writes a new copy; no change skips the copy and keeps the newest one. The number of copies equals the number of times the configuration really changed. With 「backup before a restart」 off there is no comparison and no copy.",
       "lastSkipped": "The last restart ({time}): no change to configuration or plugins, no new copy written, reusing {dir}",
       "lastSkippedConfig": "The last restart ({time}): no change to the configuration, no new copy written, reusing {dir}",
       "count": "{n} copies right now, using {size}.",
       "multiProfile": "More than one settings folder was found, so backups and rollbacks are paused: it cannot tell which one to back up. Fix it by starting with DSH_PROFILE set, or by keeping a single settings folder.",
       "keep": "At most {n} copies are kept; the oldest one is deleted when there are more.",
-      "kindsLocal": "The plugins you wrote yourself (the ones in a folder on this machine) are in the copy in full, so they can be rolled back.",
-      "kindsThirdParty": "Third-party plugins are maintained by their authors; if something is wrong, reinstall them.",
       "limitLabel": "Copies kept",
-      "limitHint": "Backups take disk space, so it is best to keep as few copies as possible.",
+      "limitHint": "How many copies to keep: two by default, the oldest is deleted when there are more. Every copy takes disk space — keep as few as you need.",
+      "limitCurrentOption": "Current value ({n} copies)",
       "limitAsk": "This deletes the {remove} oldest copies and cannot be undone. {from} copies now → {to} kept.",
       "limitConfirm": "Delete and keep {to}",
       "limitCancel": "Cancel",
@@ -274,7 +271,9 @@
     },
     "backupPlugins": {
       "label": "Include the installed plugins in the backup",
-      "hint": "Off: only DSH itself is backed up — the plugins you installed are left out.",
+      "hint": "With this on, the copy holds the plugins too:",
+      "kindsLocal": "the plugins you wrote yourself, and the ones you downloaded and then changed on this machine (localised ones) — their files are copied, so a rollback restores them exactly as they were;",
+      "kindsThirdParty": "the rest of the online third-party plugins, installed as they came — only their names and versions are recorded and no files are copied; their authors keep them up to date, so if something breaks, install them once more.",
       "offHint": "When the switch above (back up before a restart) is off, this one does nothing."
     },
     "restartBanner": {

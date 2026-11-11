@@ -788,21 +788,19 @@ test('④ the panel no longer writes the old tier out — and the true sentences
   assert.equal(value('purpose'), '', 'the paragraph that repeated the limit is gone')
   assert.equal(value('max-effective'), '', 'and so is the bare duplicate of it')
   assert.equal(value('footprint'), '', 'and the separate footprint line it replaced')
-  assert.equal(
-    value('kinds-local'),
-    '自己写的插件（直接放在本机目录里的）都已完整备份，可以回档。',
-    'the plugins you wrote yourself are in the copy in full',
-  )
-  assert.equal(
-    value('kinds-third-party'),
-    '第三方插件由插件作者维护，有异常建议重装',
-    'third-party plugins: reinstall, do not roll back',
-  )
+  // THE THREE CLASSES AND THE LIMIT LEFT THE FOLD (user decision, 2026-11-11):
+  // the classes are said once on the row that decides them, the limit is a row
+  // of its own. What stays here is read-only: the count, the rule, the rows, the
+  // path.
+  assert.equal(value('kinds-local'), '', 'the fold does not repeat the local plugins any more')
+  assert.equal(value('kinds-third-party'), '', 'nor the third-party ones')
   assert.equal(
     value('limit-hint'),
-    '备份会占用磁盘空间，建议尽量选更少的备份数。',
-    'the disk-space hint, now beside the dropdown',
+    '保留几份存档：默认 2 份，超出自动删最旧的。每份都占磁盘空间，够用就好。',
+    'the disk-space hint belongs to the copy-limit row now',
   )
+  assert.equal(textOf(panel).includes('你自己写的插件，以及从线上下载后又本地改过（做过本地化）的插件'), true,
+    'the row that decides it explains the local plugins')
 })
 
 test('④ the rollback speaks English too, and never shows a key name', async () => {

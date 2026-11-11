@@ -349,17 +349,17 @@
     'settings.window.background': '后台运行（不出现窗口，也不抢焦点，默认）',
     'settings.window.hint': '只决定重启时那条命令怎么被拉起来，改完在下次重启生效。后台运行不会弹出任何窗口，也不会把正在全屏的游戏切走；如果这台电脑不让运行这类小脚本，会自动换成另一种方式，并把原因写进重启报告。',
     'settings.backup.label': '重启前备份',
-    'settings.backup.when': '什么时候会备份？',
-    'settings.backup.whenBody': '每次重启前先比对 DSH 配置（勾了「备份包含已安装插件」时还会比对已安装插件）有没有变化：有变化才新建一份备份；没变化就跳过、沿用最近一份。备份条数等于「配置真正改过几次」。关掉「重启前备份」开关时不做比对，也不产生备份。',
     // THE TRACE OF A SKIPPED COPY (user decision, 2026-11-07): "no new backup"
     // must never look like "the backup broke" — the list says which restart
     // skipped it and which copy it kept on using.
     'settings.backup.lastSkipped': '上次重启（{time}）：配置和插件没有变化，未新建备份，沿用 {dir}',
     'settings.backup.lastSkippedConfig': '上次重启（{time}）：配置没有变化，未新建备份，沿用 {dir}',
     'settings.backup.section': '备份信息',
-    'settings.backup.hint': '重启前自动存一份存档；插件不会自动还原，要回退得在下面自己点。存的是：你的设置（一定）；你自己写的、就放在本机目录里的插件（连文件一起拷）；从网上下载装的插件（只记下装过哪些、什么版本，不拷文件，真出事时按清单重装）。',
+    'settings.backup.hint': '每次重启前先比对：DSH 配置、以及下面两项范围内的插件，有没有变化。有变化才新建一份存档，没变化就沿用最近那份。默认保留 2 份，超出自动删最旧的；份数在下面的「保留份数」里改。关掉这个开关时不做比对，也不产生存档。存档不会自动还原，要回退去「备份信息」里点。',
     'settings.backupPlugins.label': '备份包含已安装插件',
-    'settings.backupPlugins.hint': '关闭后只备份 DSH 自己，不包含你装的那些插件。',
+    'settings.backupPlugins.hint': '打开后，存档会连插件一起存：',
+    'settings.backupPlugins.kindsLocal': '你自己写的插件，以及从线上下载后又本地改过（做过本地化）的插件——连文件一起拷，回退时文件能原样还原；',
+    'settings.backupPlugins.kindsThirdParty': '其余原样安装的线上第三方插件——只记下名字和版本，不拷文件；这些由插件作者维护，出问题重装一次即可。',
     'settings.backupPlugins.offHint': '关掉上面那个开关（重启前备份）时，这一项不起作用。',
     'settings.restartBanner.title': '这台机器现在还没有重启能力：本插件不会重启，也不会在重启前备份。点一下「帮我配好」，我自动推导并写入；配错了可以撤销。',
     'settings.restartBanner.fix': '帮我配好',
@@ -457,13 +457,12 @@
     // paragraph about what the folder is for repeated the number a third time.
     // Two lines say everything the page can promise; the dropdown below changes
     // the number, so no sentence carries a frozen copy of it.
-    'settings.backup.kindsLocal': '自己写的插件（直接放在本机目录里的）都已完整备份，可以回档。',
-    'settings.backup.kindsThirdParty': '第三方插件由插件作者维护，有异常建议重装',
     'settings.backup.limitLabel': '保留份数',
     // THE DISK WARNING SITS NEXT TO THE DROPDOWN (user report, 2026-11-02): it
     // used to be a line BELOW the control, so the warning arrived after the
     // choice was made. Same place in the tree, right of the select.
-    'settings.backup.limitHint': '备份会占用磁盘空间，建议尽量选更少的备份数。',
+    'settings.backup.limitHint': '保留几份存档：默认 2 份，超出自动删最旧的。每份都占磁盘空间，够用就好。',
+    'settings.backup.limitCurrentOption': '当前值（{n} 份）',
     'settings.backup.limitAsk': '将删除 {remove} 份最旧的备份，删除后无法恢复。当前 {from} 份 → 保留 {to} 份。',
     'settings.backup.limitConfirm': '确认删除并改为保留 {to} 份',
     'settings.backup.limitCancel': '取消',
@@ -881,17 +880,17 @@
     'settings.window.background': 'Background (no window at all, and it never takes the focus; the default)',
     'settings.window.hint': 'It only decides how the restart command is started; a change applies to the NEXT restart. The background mode shows no window at all and never takes the focus, so a full-screen game is not switched away from. If this computer does not allow such little scripts to run, another way is used instead and the reason is written into the restart report.',
     'settings.backup.label': 'Backup before a restart',
-    'settings.backup.when': 'When is a backup taken?',
-    'settings.backup.whenBody': 'Before every restart the DSH configuration is compared (with 「include the installed plugins」 on, the installed plugins too): only a real change writes a new copy; no change skips the copy and keeps the newest one. The number of copies equals the number of times the configuration really changed. With 「backup before a restart」 off there is no comparison and no copy.',
     // THE TRACE OF A SKIPPED COPY (user decision, 2026-11-07): "no new backup"
     // must never look like "the backup broke" — the list says which restart
     // skipped it and which copy it kept on using.
     'settings.backup.lastSkipped': 'The last restart ({time}): no change to configuration or plugins, no new copy written, reusing {dir}',
     'settings.backup.lastSkippedConfig': 'The last restart ({time}): no change to the configuration, no new copy written, reusing {dir}',
     'settings.backup.section': 'Backup info',
-    'settings.backup.hint': 'A copy is taken before every restart - an archive, not an automatic rollback: nothing is put back unless you click it below. What it holds: your settings (always); plugins you wrote and that live in a folder on this machine (copied file by file); plugins downloaded from the internet (only which ones and which version are recorded - never copied; they are reinstalled from that list).',
+    'settings.backup.hint': 'Before every restart it compares your DSH settings and the plugins covered by the two items below. Only when something changed does it take a new copy; when nothing changed it keeps using the most recent one. Two copies are kept by default and the oldest is deleted when there are more; change that number under "Copies kept" below. With this switch off nothing is compared and no copy is taken. A copy is never restored by itself - to roll back, press the button under "Backup info".',
     'settings.backupPlugins.label': 'Include the installed plugins in the backup',
-    'settings.backupPlugins.hint': 'Off: only DSH itself is backed up — the plugins you installed are left out.',
+    'settings.backupPlugins.hint': 'With this on, the copy holds the plugins too:',
+    'settings.backupPlugins.kindsLocal': 'the plugins you wrote yourself, and the ones you downloaded and then changed on this machine (localised ones) — their files are copied, so a rollback restores them exactly as they were;',
+    'settings.backupPlugins.kindsThirdParty': 'the rest of the online third-party plugins, installed as they came — only their names and versions are recorded and no files are copied; their authors keep them up to date, so if something breaks, install them once more.',
     'settings.backupPlugins.offHint': 'When the switch above (back up before a restart) is off, this one does nothing.',
     'settings.restartBanner.title': 'This machine has no restart capability right now: this plugin will not restart, and will not take a backup before a restart. Press "Set it up for me" and I derive and write it — and that can be undone.',
     'settings.restartBanner.fix': 'Set it up for me',
@@ -972,10 +971,9 @@
     'settings.backup.count': '{n} copies right now, using {size}.',
     'settings.backup.multiProfile': 'More than one settings folder was found, so backups and rollbacks are paused: it cannot tell which one to back up. Fix it by starting with DSH_PROFILE set, or by keeping a single settings folder.',
     'settings.backup.keep': 'At most {n} copies are kept; the oldest one is deleted when there are more.',
-    'settings.backup.kindsLocal': 'The plugins you wrote yourself (the ones in a folder on this machine) are in the copy in full, so they can be rolled back.',
-    'settings.backup.kindsThirdParty': 'Third-party plugins are maintained by their authors; if something is wrong, reinstall them.',
     'settings.backup.limitLabel': 'Copies kept',
-    'settings.backup.limitHint': 'Backups take disk space, so it is best to keep as few copies as possible.',
+    'settings.backup.limitHint': 'How many copies to keep: two by default, the oldest is deleted when there are more. Every copy takes disk space — keep as few as you need.',
+    'settings.backup.limitCurrentOption': 'Current value ({n} copies)',
     'settings.backup.limitAsk': 'This deletes the {remove} oldest copies and cannot be undone. {from} copies now → {to} kept.',
     'settings.backup.limitConfirm': 'Delete and keep {to}',
     'settings.backup.limitCancel': 'Cancel',
@@ -7600,41 +7598,22 @@
                     void save({ backupOnRestart: value })
                   },
                 }),
-                hint: [
-                  h(
-                    'span',
-                    {
-                      key: 'when-title',
-                      className: 'dsh-autorestart-settings__row-help-title',
-                      'data-dsh-autorestart-backup': 'when-label',
-                    },
-                    t('settings.backup.when'),
-                  ),
-                  h(
-                    'span',
-                    {
-                      key: 'when-body',
-                      className: 'dsh-autorestart-settings__hint',
-                      'data-dsh-autorestart-backup': 'when-body',
-                    },
-                    t('settings.backup.whenBody'),
-                  ),
-                  h(
-                    'span',
-                    {
-                      key: 'what',
-                      className: 'dsh-autorestart-settings__hint',
-                      'data-dsh-autorestart-backup': 'content-hint',
-                    },
-                    t('settings.backup.hint'),
-                  ),
-                ],
+                hint: h(
+                  'span',
+                  {
+                    className: 'dsh-autorestart-settings__hint',
+                    'data-dsh-autorestart-backup': 'content-hint',
+                  },
+                  t('settings.backup.hint'),
+                ),
               }),
-              // ③ WHETHER THE COPY ALSO HOLDS THE PLUGINS — a SUBORDINATE row
-              // (user decision, 2026-11-11): it only means something when the
-              // backup above is on, so it is drawn as that switch's child —
-              // indented, behind the same faint line as the plugin-folder
-              // scales — and goes grey when the switch is off.
+              // ③④ THE TWO ITEMS THE BACKUP SWITCH GOVERNS — SUBORDINATE rows
+              // (user decision, 2026-11-11): 「include the plugins」 and 「copies
+              // kept」 only mean something when the backup above is on, so they
+              // are drawn as that switch's children — indented, behind the same
+              // faint line as the plugin-folder scales — and go grey when the
+              // switch is off. 「copies kept」 used to live inside the 「备份信息」
+              // fold, where nobody found it.
               h(
                 'div',
                 { className: 'dsh-autorestart-settings__subrows' },
@@ -7664,12 +7643,118 @@
                     ),
                     h(
                       'span',
+                      { key: 'local', className: 'dsh-autorestart-settings__hint' },
+                      '· ' + t('settings.backupPlugins.kindsLocal'),
+                    ),
+                    h(
+                      'span',
+                      { key: 'third-party', className: 'dsh-autorestart-settings__hint' },
+                      '· ' + t('settings.backupPlugins.kindsThirdParty'),
+                    ),
+                    h(
+                      'span',
                       { key: 'off', className: 'dsh-autorestart-settings__hint' },
                       t('settings.backupPlugins.offHint'),
                     ),
                   ],
                 }),
+                // THE COPY LIMIT, WHERE IT BELONGS (user decision, 2026-11-11):
+                // a dropdown of 2..10, seeded with the value the Host reports.
+                // It writes through the backup-limit route and the page re-reads
+                // the state, so "the number shown" is always "the number in
+                // force". A value the list does not hold is appended, never
+                // rewritten.
+                settingsRow(t, {
+                  rowKey: 'maxBackups',
+                  title: t('settings.backup.limitLabel'),
+                  controlId: 'dsh-autorestart-setting-maxBackups',
+                  disabled: !backupOnRestart,
+                  control: (() => {
+                    const inForce = limitValue === null ? backupsInfo.max : limitValue
+                    const choices = [2, 3, 4, 5, 6, 7, 8, 9, 10]
+                    const options = [2, 3, 4, 5, 6, 7, 8, 9, 10].map((value) =>
+                      h('option', { key: 'limit-' + value, value: String(value) }, String(value)))
+                    if (choices.indexOf(inForce) === -1) {
+                      options.push(h(
+                        'option',
+                        { key: 'limit-current', value: String(inForce) },
+                        fill(t('settings.backup.limitCurrentOption'), { n: String(inForce) }),
+                      ))
+                    }
+                    return h(
+                      'select',
+                      {
+                        className: 'dsh-autorestart-settings__select',
+                        id: 'dsh-autorestart-setting-maxBackups',
+                        'data-dsh-autorestart-backup': 'limit-select',
+                        'data-dsh-autorestart-setting': 'maxBackups',
+                        value: String(limitValue === null ? backupsInfo.max : limitValue),
+                        disabled: limitBusy || !backupOnRestart,
+                        onChange: (event) => {
+                          const wanted = Number(event.target.value)
+                          if (Number.isFinite(wanted) !== true) return
+                          // SHRINKING IS THE ONLY DANGEROUS DIRECTION: nothing is
+                          // written until the user confirms how many copies die.
+                          if (wanted < backupItems.length) {
+                            setLimitNote('')
+                            setLimitAsk({ wanted, from: backupItems.length, remove: backupItems.length - wanted })
+                            return
+                          }
+                          void submitBackupLimit(wanted)
+                        },
+                      },
+                      options,
+                    )
+                  })(),
+                  hint: h(
+                    'span',
+                    {
+                      className: 'dsh-autorestart-settings__hint',
+                      'data-dsh-autorestart-backup': 'limit-hint',
+                    },
+                    t('settings.backup.limitHint'),
+                  ),
+                }),
               ),
+              // THE CONFIRMATION AND THE RESULT OF A SHRINK stay with the
+              // dropdown they belong to — so they sit right under the block,
+              // never inside the fold.
+              limitAsk === null
+                ? null
+                : h(
+                  'div',
+                  { className: 'dsh-autorestart-settings__backup-row', key: 'limit-ask' },
+                  h(
+                    'span',
+                    { className: 'dsh-autorestart-settings__backup-label', 'data-dsh-autorestart-backup': 'limit-ask-body' },
+                    fill(t('settings.backup.limitAsk'), {
+                      remove: String(limitAsk.remove),
+                      from: String(limitAsk.from),
+                      to: String(limitAsk.wanted),
+                    }),
+                  ),
+                  h('button', {
+                    type: 'button',
+                    className: 'dsh-autorestart-announcement__cta',
+                    'data-dsh-autorestart-backup': 'limit-confirm',
+                    disabled: limitBusy,
+                    onClick: () => { void submitBackupLimit(limitAsk.wanted) },
+                  }, t('settings.backup.limitConfirm')),
+                  h('button', {
+                    type: 'button',
+                    className: 'dsh-autorestart-announcement__cta',
+                    'data-dsh-autorestart-backup': 'limit-cancel',
+                    // CANCELLING SENDS NOTHING: no route call, no write, no delete.
+                    onClick: () => { setLimitAsk(null); setLimitNote('') },
+                  }, t('settings.backup.limitCancel')),
+                ),
+              limitNote === ''
+                ? null
+                : h(
+                  'span',
+                  { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-backup': 'limit-note' },
+                  limitNote,
+                ),
             ),
             // MORE THAN ONE PROFILE = NO BACKUPS AT ALL (2026-11-02): the Host
             // cannot tell which profile to copy, so backups and rollbacks are
@@ -7765,98 +7850,11 @@
                 { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-backup': 'keep' },
                 fill(t('settings.backup.keep'), { n: backupsInfo.max }),
               ),
-              h(
-                'span',
-                { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-backup': 'kinds-local' },
-                t('settings.backup.kindsLocal'),
-              ),
-              h(
-                'span',
-                { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-backup': 'kinds-third-party' },
-                t('settings.backup.kindsThirdParty'),
-              ),
-              // THE COPY LIMIT IS EDITABLE HERE (user decision, 2026-11-02): a
-              // dropdown of 1..10, defaulting to the value the Host reports. It
-              // writes through the backup-limit route and the page re-reads the
-              // state, so "the number shown" is always "the number in force".
-              h(
-                'div',
-                { className: 'dsh-autorestart-settings__backup-row', key: 'backup-limit' },
-                h(
-                  'span',
-                  { className: 'dsh-autorestart-settings__backup-label' },
-                  t('settings.backup.limitLabel'),
-                ),
-                h(
-                  'select',
-                  {
-                    className: 'dsh-autorestart-settings__select',
-                    'data-dsh-autorestart-backup': 'limit-select',
-                    'data-dsh-autorestart-setting': 'maxBackups',
-                    value: String(limitValue === null ? backupsInfo.max : limitValue),
-                    disabled: limitBusy,
-                    onChange: (event) => {
-                      const wanted = Number(event.target.value)
-                      if (Number.isFinite(wanted) !== true) return
-                      // SHRINKING IS THE ONLY DANGEROUS DIRECTION: nothing is
-                      // written until the user confirms how many copies die.
-                      if (wanted < backupItems.length) {
-                        setLimitNote('')
-                        setLimitAsk({ wanted, from: backupItems.length, remove: backupItems.length - wanted })
-                        return
-                      }
-                      void submitBackupLimit(wanted)
-                    },
-                  },
-                  [2, 3, 4, 5, 6, 7, 8, 9, 10].map((value) =>
-                    h('option', { key: 'limit-' + value, value: String(value) }, String(value))),
-                ),
-                // THE DISK WARNING SITS TO THE RIGHT OF THE DROPDOWN (user
-                // report, 2026-11-02): as its own line BELOW the control it
-                // arrived after the choice had already been made.
-                h(
-                  'span',
-                  { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-backup': 'limit-hint' },
-                  t('settings.backup.limitHint'),
-                ),
-              ),
-              limitAsk === null
-                ? null
-                : h(
-                  'div',
-                  { className: 'dsh-autorestart-settings__backup-row', key: 'limit-ask' },
-                  h(
-                    'span',
-                    { className: 'dsh-autorestart-settings__backup-label', 'data-dsh-autorestart-backup': 'limit-ask-body' },
-                    fill(t('settings.backup.limitAsk'), {
-                      remove: String(limitAsk.remove),
-                      from: String(limitAsk.from),
-                      to: String(limitAsk.wanted),
-                    }),
-                  ),
-                  h('button', {
-                    type: 'button',
-                    className: 'dsh-autorestart-announcement__cta',
-                    'data-dsh-autorestart-backup': 'limit-confirm',
-                    disabled: limitBusy,
-                    onClick: () => { void submitBackupLimit(limitAsk.wanted) },
-                  }, t('settings.backup.limitConfirm')),
-                  h('button', {
-                    type: 'button',
-                    className: 'dsh-autorestart-announcement__cta',
-                    'data-dsh-autorestart-backup': 'limit-cancel',
-                    // CANCELLING SENDS NOTHING: no route call, no write, no delete.
-                    onClick: () => { setLimitAsk(null); setLimitNote('') },
-                  }, t('settings.backup.limitCancel')),
-                ),
-              limitNote === ''
-                ? null
-                : h(
-                  'span',
-                  { className: 'dsh-autorestart-settings__hint', 'data-dsh-autorestart-backup': 'limit-note' },
-                  limitNote,
-                ),
-              // THE TWO EXPLAINING PARAGRAPHS ARE GONE (user report, 2026-11-02).
+              // THE COPY LIMIT IS NOT HERE ANY MORE (user decision, 2026-11-11):
+              // it is a row under 「重启前备份」 now, where the switch that owns
+              // it can disable it. The fold keeps only what is READ-ONLY — the
+              // count, the per-copy rows, the path — plus the `keep` line above.
+              // THE EXPLAINING PARAGRAPHS ARE GONE (user report, 2026-11-02).
               //
               // They said a backup has "one of two identities" and that only a
               // "safe" copy is ever rolled back — but since 2026-11-02 the list

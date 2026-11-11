@@ -63,9 +63,9 @@ The settings page writes these; the defaults are the ones in the code.
 | `deferPollMs` | `3000` | Poll interval while waiting for the conversations to go idle |
 | `relaunchDelaySeconds` | `2` | How long the detached helper waits before it kills the app |
 | `restartWindow` | `background` | How the restart command script is started: `background` = no window at all, and it never takes the focus (the default since this version); `foreground` = the visible console window. An existing profile that already says `foreground` keeps it — only a missing or unreadable value falls back to `background` |
-| `backupOnRestart` | `true` | Take a snapshot before every restart |
-| `backupIncludePlugins` | `true` | Include the locally linked plugins in that snapshot (~117 MB here, ~3 s). `false` keeps only the configuration files |
-| `maxBackups` | `2` | How many snapshots to keep (2–10) |
+| `backupOnRestart` | `true` | Take a copy before every restart. It compares first, so a copy is only written when something changed. Two copies are kept by default and the oldest is deleted when there are more. With the switch off nothing is compared and no copy is taken |
+| `backupIncludePlugins` | `true` | The copy holds plugins too, in three kinds: the plugins **you wrote yourself** and online plugins you **downloaded and then changed on this machine** (localised ones) are copied with their files, so a rollback restores them exactly; the rest of the **online third-party plugins, installed as they came**, only get their name and version recorded — their authors keep them up to date, so if something breaks, install them once more (~117 MB here, ~3 s with the files) |
+| `maxBackups` | `2` | How many copies to keep (2–10). Its dropdown is a row of its own under **Back up before a restart** — no longer inside the **Backup info** fold. Past that number the oldest copy is deleted; shrinking asks first how many copies will go |
 | `restartCommandTimeoutMs` | `30000` | How long the restart command may run before the plugin stops waiting for it |
 | `showSleepButton` | `true` | Show the countdown-shutdown button |
 | `sleepCountdownSeconds` | `10` | Countdown length before powering off — a dropdown: `0` / `10` / `20` / `30` / `60` seconds. `10` is only the default for an instance that never set it: a profile that already stores `20` (or `30`, or `60`) keeps that value — nothing is migrated or overwritten |
@@ -101,18 +101,36 @@ under it, behind a faint vertical line, and greyed out (its control cannot be us
 
 | Section | What is in it |
 |---|---|
-| **Restart settings** | The wait before the restart, **Back up before a restart** with **Include the installed plugins in the backup** as its subordinate row, the backup limit, and the **Backup info** fold |
+| **Restart settings** | The wait before the restart, **Back up before a restart** with **two subordinate rows** — **Include the installed plugins in the backup** and **Copies kept** — and the **Backup info** fold (read-only) |
 | **Shutdown settings** | The countdown of the graceful shutdown |
 | **More settings** | A block of its own, **closed by default**: how the restart command script runs, and the plugin-folder watchdog |
 | **Start at login** | How "start at login" works on *this* machine, with copyable commands. The plugin never changes your system configuration for you. Not shown on the desktop client — it relaunches itself, so there is nothing to install |
 | **Something is wrong** | The diagnostics and a **Report a problem** button that copies them and opens a pre-filled GitHub issue. The diagnostics carry no access token and no secrets |
 
-**Backup info** is the fold that explains what has been backed up: how many copies there are and what they take
-on disk, when a copy is taken, the list with a button that rolls back to that one copy, and the path. It is
+**Back up before a restart** compares first, so it says what actually happens: your DSH settings and the plugins
+covered by the two rows below it are compared; only when something changed is a new copy written, and when
+nothing changed the most recent copy is reused. **Two copies are kept by default** and the oldest is deleted
+when there are more — that number is changed under **Copies kept**, the third row of this group. With the
+switch off nothing is compared and no copy is taken. A copy is **never restored by itself**: to roll back, press
+the button in **Backup info**.
+
+**Include the installed plugins in the backup** splits the plugins into three kinds:
+
+- the plugins **you wrote yourself**, and the online plugins you **downloaded and then changed on this machine**
+  (localised ones) — their files are copied, so a rollback restores them exactly as they were;
+- the rest of the **online third-party plugins, installed as they came** — only their names and versions are
+  recorded and no files are copied; their authors keep them up to date, so if something breaks, install them
+  once more.
+
+That split is not a figure of speech: `lib/backup.js` really does treat a hand-written `link`, a localised
+`localized` and the remaining `thirdParty` separately, and the localised ones are copied with their files.
+
+**Backup info** is the fold that shows what has been backed up: how many copies there are and what they take
+on disk, when a copy is taken, the list with a button that rolls back to that one copy, and the path with a
+copy button. Since this version it holds **read-only content only** — the **Copies kept** dropdown moved out of
+it and became the third subordinate row of **Back up before a restart**, where the number is actually set. It is
 **closed by default** — except on a boot the system had to restore, where it opens itself and says so on its
-title, because an intervention is the one thing that must not be hidden. It used to be titled *Show details*
-like every other row's explanation, which read as "one more way to open the explanation of this row"; it has a
-name of its own now, and its contents are unchanged.
+title, because an intervention is the one thing that must not be hidden.
 
 The **last restart** row is gone from the page: which launcher really ran (`wscript`, the PowerShell fallback,
 the foreground window) is still reported by the host — it is in the status payload and in the diagnostics — it
@@ -298,8 +316,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File plugins/dsh-autorestart/scri
 glob patterns, so `node --test plugins/dsh-autorestart/test` fails with `MODULE_NOT_FOUND`. The script passes
 the glob `plugins/dsh-autorestart/test/*.test.mjs` instead.
 
-All **1189** test cases pass (1189 passed, 0 failed, 0 skipped) — measured on 2026-11-11 with the bundled
-Node: `tests 1189 / pass 1189 / fail 0`, exit code 0.
+All **1191** test cases pass (1191 passed, 0 failed, 0 skipped) — measured on 2026-11-11 with the bundled
+Node: `tests 1191 / pass 1191 / fail 0`, exit code 0.
 
 ## License
 

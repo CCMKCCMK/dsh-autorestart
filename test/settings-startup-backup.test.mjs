@@ -1020,20 +1020,26 @@ test('③ the page no longer promises a tier — the old 安全份 paragraphs ar
   assert.deepEqual(backupValues(panel, 'max-effective'), [], 'the bare duplicate of the limit is gone')
   assert.deepEqual(backupValues(panel, 'purpose'), [], 'and the paragraph that repeated it is gone too')
   assert.deepEqual(backupValues(panel, 'footprint'), [], 'the old separate footprint line is gone as well')
+  // THE THREE CLASSES MOVED TO THE SWITCH THEY BELONG TO (user decision,
+  // 2026-11-11): the fold no longer repeats them — the 「备份包含已安装插件」
+  // row says them once, in the words the user approved.
+  assert.deepEqual(backupValues(panel, 'kinds-local'), [], 'the fold does not repeat the local plugins any more')
+  assert.deepEqual(backupValues(panel, 'kinds-third-party'), [], 'nor the third-party ones')
+  const page = textOf(panel)
   assert.equal(
-    backupValues(panel, 'kinds-local')[0],
-    '自己写的插件（直接放在本机目录里的）都已完整备份，可以回档。',
-    'the plugins you wrote yourself are in the copy in full',
+    page.includes('你自己写的插件，以及从线上下载后又本地改过（做过本地化）的插件——连文件一起拷，回退时文件能原样还原；'),
+    true,
+    'the local plugins are explained on the row that decides them',
   )
   assert.equal(
-    backupValues(panel, 'kinds-third-party')[0],
-    '第三方插件由插件作者维护，有异常建议重装',
-    'third-party plugins: reinstall instead of rolling back',
+    page.includes('其余原样安装的线上第三方插件——只记下名字和版本，不拷文件；这些由插件作者维护，出问题重装一次即可。'),
+    true,
+    'and so are the third-party ones',
   )
   assert.equal(
     backupValues(panel, 'limit-hint')[0],
-    '备份会占用磁盘空间，建议尽量选更少的备份数。',
-    'the disk-space hint, next to the dropdown',
+    '保留几份存档：默认 2 份，超出自动删最旧的。每份都占磁盘空间，够用就好。',
+    'the copy-limit hint, on the row that owns the dropdown',
   )
 })
 
@@ -1974,6 +1980,34 @@ test('a data URI that is not a PNG is ignored instead of half-rendered', async (
 })
 
 // ---------------------------------------------------------------------------
+// THE COPY LIMIT LEFT THE FOLD (user decision, 2026-11-11).
+//
+// It is a row under 「重启前备份」 now, in the same subordinate block as
+// 「备份包含已安装插件」. A value the dropdown does not offer is appended and
+// selected — a stored configuration is never rewritten behind the user's back.
+test('a copy limit the list does not hold is appended as 「当前值」, never rewritten', async () => {
+  const mounted = mountSettings({
+    info: {
+      instance: { isDesktopApp: true, platform: 'win32' },
+      supervisor: { mode: 'app', installed: false, startup: { mode: 'desktop' } },
+      backups: { ...twoBackups(), max: 12 },
+    },
+  })
+  const panel = await mounted.settled('dsh-autorestart')
+  const select = walk(panel).find(
+    (node) => node.type === 'select'
+      && node.props['data-dsh-autorestart-backup'] === 'limit-select',
+  )
+  assert.ok(select, 'the dropdown is on the page')
+  const options = walk(select).filter((node) => node.type === 'option')
+  assert.equal(options.length, 10, 'the nine usual values plus the one in force')
+  assert.equal(options[9].props.value, '12', 'the value in force is appended, as it is')
+  assert.equal(select.props.value, '12', 'and it is the one selected')
+  assert.equal(textOf(options[9]).includes('当前值'), true, 'the appended option says so')
+  assert.equal(textOf(options[9]).includes('12'), true, 'and names the number')
+})
+
+// ---------------------------------------------------------------------------
 // THE COPY LIMIT IS EDITABLE (user decision, 2026-11-02).
 //
 // A dropdown writes maxBackups through the backup-limit route. Shrinking is the
@@ -1997,11 +2031,11 @@ test('the limit dropdown offers exactly 1-10 and shows the value in force', () =
   )
 })
 
-test('the disk hint is verbatim, and sits to the RIGHT of the dropdown', async () => {
-  assert.equal(backupLocale('zh').limitHint, '备份会占用磁盘空间，建议尽量选更少的备份数。')
+test('the copy-limit hint is verbatim, and belongs to the row it explains', async () => {
+  assert.equal(backupLocale('zh').limitHint, '保留几份存档：默认 2 份，超出自动删最旧的。每份都占磁盘空间，够用就好。')
   assert.equal(
     backupLocale('en').limitHint,
-    'Backups take disk space, so it is best to keep as few copies as possible.',
+    'How many copies to keep: two by default, the oldest is deleted when there are more. Every copy takes disk space — keep as few as you need.',
   )
   const mounted = mountSettings({
     info: {
@@ -2011,26 +2045,22 @@ test('the disk hint is verbatim, and sits to the RIGHT of the dropdown', async (
     },
   })
   const panel = await mounted.settled('dsh-autorestart')
-  // THE WARNING MUST ARRIVE WITH THE CHOICE (user report, 2026-11-02): as its own
-  // line BELOW the control it showed up after the number had been picked. So it
-  // has to be a child of the SAME row as the select, positioned after it.
+  // THE DROPDOWN IS A ROW NOW (user decision, 2026-11-11): it left the 「备份信息」
+  // fold and sits under 「重启前备份」, so its warning arrives with it — as the
+  // row's own explanation, in the same row, not as a line of its own.
   const rows = walk(panel).filter(
-    (node) => node.props && typeof node.props.className === 'string'
-      && node.props.className.includes('dsh-autorestart-settings__backup-row'),
+    (node) => node.props && typeof node.props['data-dsh-autorestart-row'] === 'string',
   )
   const limitRow = rows.find((row) => walk(row).some(
     (node) => node.props && node.props['data-dsh-autorestart-backup'] === 'limit-select',
   ))
   assert.ok(limitRow, 'the dropdown sits in a row')
-  const children = limitRow.children || []
-  const selectAt = children.findIndex(
-    (node) => node.props && node.props['data-dsh-autorestart-backup'] === 'limit-select',
+  assert.equal(limitRow.props['data-dsh-autorestart-row'], 'maxBackups', 'the row is the copy limit')
+  assert.notEqual(
+    walk(limitRow).find((node) => node.props && node.props['data-dsh-autorestart-backup'] === 'limit-hint'),
+    undefined,
+    'the warning is inside that row',
   )
-  const hintAt = children.findIndex(
-    (node) => node.props && node.props['data-dsh-autorestart-backup'] === 'limit-hint',
-  )
-  assert.notEqual(hintAt, -1, 'the disk warning is in that row, not on a line of its own')
-  assert.equal(hintAt > selectAt, true, 'and it comes after the dropdown — to its right')
   assert.deepEqual(backupValues(panel, 'limit-hint'), [backupLocale('zh').limitHint], 'printed once, verbatim')
 })
 
