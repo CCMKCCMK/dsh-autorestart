@@ -5,7 +5,7 @@
 插件装在哪台机器上，就只有那台机器的答案 —— 所以每一行能力都按环境分开写，
 每一格要么能在代码里找到对应实现（带文件名），要么明确写「不支持 / 查不到」。
 
-**本表只写 0.9.0 真正有的能力**：排队重启、重启前快照、清登录 cookie、会话续接、关机倒计时。
+**本表只写 0.9.6 真正有的能力**：排队重启、重启前快照、清登录 cookie、会话续接、关机倒计时。
 0.9.0 **删掉**了自动救场与手工救场那一整条线，所以表里没有那一类格子 —— 「插件不做什么」
 写在第六节。
 
@@ -41,9 +41,9 @@
 
 | 能力 | Windows 桌面 | Windows web | Linux web · 有 systemd | Linux web · 无 systemd | WSL web · 有 systemd | WSL web · 无 systemd | 实现与测试 |
 |---|---|---|---|---|---|---|---|
-| **重启**（把 DSH 自己重启起来） | ✅ 插件用一条**脱离进程树**的命令 kill + 重新 start 应用（WMI 主、`schtasks` 兜底） | ✅ 走 `restartCommand`；**没配就什么都不拉起**，只留检查点并如实报告 | ⚠️ 走 `restartCommand` + POSIX 脱离守护（`setsid`）：单测覆盖，**真实 Linux 实例未验** | ⚠️ 同左 | ✅ 走 `restartCommand`（`/home/fg/restart-web.sh`）+ WSL 里的 `supervise-web.sh` 守护；**真机验过（2026-11-03）**：`generation` 29 → 30、pid 73512 → 114454、`last-restart-verdict.json` 的 `result: "ok"` | ⚠️ 同左（本机 WSL 开着 systemd，无 systemd 那一档未验） | `lib/restart.js`（命令拼装、WMI、POSIX 脱离守护、Windows 调度、执行 `restartCommand`）、`lib/supervisor.js`、`lib/restart-phase.js`、`lib/restart-verdict.js`。测试：`restart.test.mjs`、`restart-phase.test.mjs`、`restart-safety.test.mjs` |
+| **重启**（把 DSH 自己重启起来） | ✅ 插件用一条**脱离进程树**的命令 kill + 重新 start 应用（WMI 主、`schtasks` 兜底）；**0.9.6 本版真机已验**（**人工目视确认**设置页，见下面那一节） | ✅ 走 `restartCommand`；**没配就什么都不拉起**，只留检查点并如实报告 | ⚠️ 走 `restartCommand` + POSIX 脱离守护（`setsid`）：单测覆盖，**真实 Linux 实例未验** | ⚠️ 同左 | ✅ 走 `restartCommand`（只杀不拉起的 `/home/fg/restart-web.sh`）+ WSL 里的 `supervise-web.sh` 守护；**真机验过（2026-11-11）**：`generation` **53 → 54**、pid **95091 → 103723**、约 **40 秒**后页面重新可用，健康路由 `phase: restarting → idle`，日志只有**一条** `relaunching in 2s`（早一轮读数：2026-11-03，`generation` 29 → 30、pid 73512 → 114454） | ⚠️ 同左（本机 WSL 开着 systemd，无 systemd 那一档未验） | `lib/restart.js`（命令拼装、WMI、POSIX 脱离守护、Windows 调度、执行 `restartCommand`）、`lib/supervisor.js`、`lib/restart-phase.js`、`lib/restart-verdict.js`。测试：`restart.test.mjs`、`restart-phase.test.mjs`、`restart-safety.test.mjs` |
 | **会话续接**（重启后接着干） | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 检查点 `lib/checkpoint.js`、启动恢复 `index.js`、`lib/lifecycle.js`（`bootPlan` 与续接提示）。**前提**：宿主真的被拉起来了（桌面靠自带重启，其余靠你的 `restartCommand` / 守护）。测试：`checkpoint.test.mjs`、`lifecycle.test.mjs`、`integration.test.mjs` |
-| **重启前备份**（profile 快照） | ✅ | ✅ | ✅ | ✅ | ✅ 真机验过（2026-11-03）：`snapshot.taken: true`，落在 `<stateDir>/backups/2026-11-03T00-09-28-780Z`（6 756 009 字节，含 `node_modules-link/dsh-autorestart`） | ✅ | `lib/backup.js`（`createBackup`、`<stateDir>/backups/`）；默认 **2 份**、可设 **2–10** 份（`backupLimitInfo` 的 `BACKUP_LIMIT`，配置项 `maxBackups`）。测试：`backup.test.mjs`、`hosted-backup.test.mjs`、`backup-hygiene.test.mjs` |
+| **重启前备份**（profile 快照） | ✅ | ✅ | ✅ | ✅ | ✅ 真机验过（**2026-11-11**）：新备份目录 `2026-11-11T05-33-49-351Z`；manifest 里 **三类插件口径真的成立** —— `link` 安装的 `dsh-autorestart 0.9.6` → `copied: true`、**156 文件 / 5,339,766 字节**，`link` 安装的 `dsh-release-board 0.1.0` → **22 文件 / 568,298 字节**；`thirdParty` 列表**约 180 项只有 name 与 version，没有任何文件**；总 `bytes` **5,958,563**（早一轮读数：2026-11-03，`snapshot.taken: true`，`<stateDir>/backups/2026-11-03T00-09-28-780Z`，6 756 009 字节，含 `node_modules-link/dsh-autorestart`） | ✅ | `lib/backup.js`（`createBackup`、`<stateDir>/backups/`）；默认 **2 份**、可设 **2–10** 份（`backupLimitInfo` 的 `BACKUP_LIMIT`，配置项 `maxBackups`）。**三类插件分开处理**：手写的 `link` 与本地化的 `localized` **连文件一起拷**（回退能原样还原），其余 `thirdParty` **只记 name + version、不拷文件**。测试：`backup.test.mjs`、`hosted-backup.test.mjs`、`backup-hygiene.test.mjs` |
 | **备份完整性把关**（半份快照不许冒充备份） | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | `lib/backup.js` 的 `backupIsComplete`（要有可读 manifest **且**至少一个配置文件）；发布前校验，不完整就删掉、不给正式名字。测试：`backup-completeness.test.mjs`、`backup-identity.test.mjs` |
 | **备份目录清扫**（启动时） | ⚠️ 只清插件自己留下的 | ⚠️ 同左 | ⚠️ 同左 | ⚠️ 同左 | ⚠️ 同左 | ⚠️ 同左 | 启动时有一次备份目录清扫 `removeIncompleteBackups`（`index.js` 调用、`lib/backup.js` 实现），扫掉「既无 manifest 又无配置文件」的空壳目录；但它**按设计跳过所有 `.` 开头的目录**，所以真正的「半份快照」`*.staging-*` 残留**不会被启动清掉** —— `cleanupStaleStaging` 已经写好，但**没有任何生产代码调用它**（只有测试调用）。手动删掉这类残留是安全的。测试：`backup-hygiene.test.mjs`、`backup-staging.test.mjs` |
 | **登录 cookie 清理**（重启前清掉过期凭证） | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | `lib/cookie-clear.js` + `scripts/clear-dsh-auth-cookies.mjs`；结果写进 `<stateDir>/last-cookie-clear.json`（清掉几枚、成功与否）。清不掉**不阻拦**重启，但会如实报出来。测试：`cookie-clear.test.mjs` |
@@ -57,7 +57,48 @@
 > **为什么这一列不写行号**：0.9.0 删掉了自动救场那一整条线（一整套模块与脚本），代码行号整体位移，
 > 任何写死的行号都会指错地方。**文件名与测试文件名才是稳定的**，改完代码请回来同步这一列。
 
-### WSL web · 有 systemd 的真机验收（2026-11-03）
+### Windows 桌面端 0.9.6 的真机确认（2026-11-11）
+
+用户在 **DSH 桌面版**打开「**设置 → 自动重启与关机**」，逐项目视确认（**人工看截图确认**，不是跑自动化测试）：
+
+| 项 | 确认到的 |
+|---|---|
+| ① 「重启前备份」说明 | 是新的**整段**：比对什么、**默认保留 2 份**、份数在下方「保留份数」里改、关掉不比对也不产存档、存档不自动还原 |
+| ② 「备份包含已安装插件」 | **三行三类口径**，**缩进在「重启前备份」下面、左侧有淡竖线** |
+| ③ 「保留份数」 | 显示 **2**，与「备份包含已安装插件」在**同一个缩进组**里（**已不在「备份信息」折叠内**） |
+| ④ 「备份信息」折叠 | **只剩只读内容** |
+| ⑤ 关机倒数秒数 | 显示 **10 秒** |
+
+用户原话：「设置页面我看了觉得没有问题了」。
+
+> 这一节只覆盖**设置页界面**的目视确认；Windows 桌面端**重启本身**的行为仍由上表「重启」那一行的实现与测试列负责。
+
+### WSL web · 有 systemd 的真机验收（2026-11-11）
+
+隔离实例（按 `docs/web-dev-instance.md` 搭起，**没碰 Windows 桌面版**）：
+
+| 项 | 实测 |
+|---|---|
+| 端口 / profile | `5601` / `/home/fg/.dsh/profiles/web` |
+| 加载的版本 | manifest 里是 `dsh-autorestart 0.9.6` |
+| ① 页面与鉴权 | 不带 token 访问 `/` → **401**；用日志里的 token 换 cookie → **303**；带 cookie 访问 `/` → **200** |
+| ② 命令模式重启 | 重启前 `generation=53`、`pid=95091`；经 `POST /__dsh_autorestart/park` 入队一次重启；约 **40 秒**后 `pid=103723`、`generation=54`，健康路由 `phase: restarting → idle`，页面重新 **200**；日志里只有**一条** `relaunching in 2s` |
+| ③ 重启前备份 | 新备份目录 `2026-11-11T05-33-49-351Z`，总 `bytes` **5,958,563**。三类插件口径真的成立：`dsh-autorestart 0.9.6`（`link`）→ `copied: true`、**156 文件 / 5,339,766 字节**；`dsh-release-board 0.1.0`（`link`）→ **22 文件 / 568,298 字节**；`thirdParty` 列表**约 180 项只有 name 与 version，没有任何文件** |
+| 未验 | Windows web、真实 Linux、WSL **无 systemd** 三档仍为 ⚠️（没跑过，不用推断冒充） |
+
+#### 踩到的坑：`restartCommand` 指向「自己拉起新进程」的脚本
+
+实例曾把 `restartCommand` 指向 `restart-web-self.sh`：那个脚本 `pkill` 之后**自己 `setsid` 拉起一个新进程**，
+而 `supervise-web.sh` 守护循环在子进程退出后**也会**拉起一个。两套同时拉：一个先抢到 5601，另一个撞
+`listen EADDRINUSE: address already in use 127.0.0.1:5601` 秒退，守护循环每 ~10 秒重试一次——
+日志里刷出一串失败，**看起来像「插件在无限重启」，其实插件只重启了一次**（`generation` 一直停在 53）。
+
+**正确配对**：`restartCommand` 指向**只杀不拉起**的 `restart-web.sh`，拉起完全交给 `supervise-web.sh`。
+判据：重启一次后 `pgrep -af "dsh web --port 5601"` 只有 **1 个**进程、`pgrep -c -f supervise-web.sh` 只有 **1 个**
+循环，日志里每次重启只有**一条** `relaunching in 2s` —— 改成这样之后，这次实测就是**一次重启、一条 relaunch、
+gen 53 → 54**。完整写法见 [`docs/web-dev-instance.md`](../../docs/web-dev-instance.md)（工作区根目录那份）。
+
+### WSL web · 有 systemd 的真机验收（2026-11-03，早一轮读数）
 
 隔离实例（按 `docs/web-dev-instance.md` 搭起，**没碰 Windows 桌面版**）：
 
@@ -139,7 +180,7 @@ macOS 上没有任何一处代码做过真机验证；远程 SSH 无图形环境
 纯 Linux 的计划里不许出现任何 Windows 命令、不支持的平台命令为空且**什么都不执行**）。
 **Windows 真关电在本机跑过**；**POSIX 没有真关电** —— 用户决定不真关：为一条常识证据把所有人的会话都断掉不划算。
 
-## 六、0.9.0 明确不做的事
+## 六、0.9.6 明确不做的事
 
 这一节是**承诺的反面**：写清楚插件**不会**替你做什么，免得把「有备份」听成「有人救」。
 
@@ -150,8 +191,9 @@ macOS 上没有任何一处代码做过真机验证；远程 SSH 无图形环境
 - **没有要手工跑的东西。** 0.9.0 把旧的手工还原脚本与桌面快捷方式一起删掉了，
   出事后请用 DSH 自己的崩溃对话框，或者卸载这个插件。
 - **不替你改系统配置。** 开机自启只给建议与可复制的命令，要不要用由你决定。
-- **不保证第三方插件可恢复。** 备份里只有配置与**你自己开发的、以 `link:` 方式安装的插件**；
-  从 npm 装的插件不在备份里（它们的版本由 `pnpm-lock.yaml` 钉死，重装即可）。
+- **不保证第三方插件可恢复。** 备份里**连文件一起拷**的只有**你自己写的插件**与**你在本机改过的插件**
+  （`link` 与 `localized` 两类）；其余**原样安装的线上第三方插件**只记名字和版本、**不拷文件**
+  （它们的版本由 `pnpm-lock.yaml` 钉死，重装即可）。
 
 ## 七、旧版本文档里已经订正的说法
 
@@ -172,6 +214,6 @@ node --test
 
 ---
 
-**事实核对日期**：2026-11-03（对照 0.9.0 收窄后的源码逐个函数核对）。
+**事实核对日期**：2026-11-11（对照 0.9.6 的源码逐个函数核对）。
 **这一版不再写行号**：0.9.0 删掉了一整套自动救场模块，行号整体位移，写死行号会指错地方；
 文件名与测试文件名是稳定的，改完代码请回来同步这一列。
