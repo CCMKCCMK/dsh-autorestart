@@ -1,6 +1,6 @@
 # Changelog
 
-本文中英双语：先中文，后英文。 / This document is bilingual: Chinese first, then English.
+中文 / English
 
 ## 0.9.6 — 2026-11-11
 
