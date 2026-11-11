@@ -1,5 +1,7 @@
 # Changelog
 
+本文中英双语：先中文，后英文。 / This document is bilingual: Chinese first, then English.
+
 ## 0.9.6 — 2026-11-11
 
 这一版给「重启前等什么」补上了两个**装插件**的信号（市场在装、插件目录在动），并修掉了它们带来的四处判据缺陷：
@@ -132,6 +134,137 @@
 - 全量测试：`tests 1189 / pass 1189 / fail 0 / exit 0`（2026-11-11 本机，随附的 Node，`scripts/run-tests.ps1`）。
 - 每一处都补了「**改前红、改后绿**」的用例：把 5 个源文件 stash 掉、只留测试，跑 6 个相关测试文件 → `tests 61 / fail 12`（红）；恢复后同一批全绿。
 - 逐条断言：`test/sleep-external-blockers.test.mjs`（真实插件：apply → POST /sleep arm → sleep controller tick → sleepGate → 关机命令桩 → sleepSpawn；paused / disarmed / complete 三个用例 `status.blockers` 为空且 `shutdowns === 1`——机器真的发出了关机命令，armed 用例 `status.phase === 'waiting'` 且 `shutdowns === 0`）、`test/lifecycle.test.mjs`（`isGoalRunning` / `selectBusyGoals` 单元口径）、`test/goal-rearm-after-restart.test.mjs`（旧 checkpoint → 真实开机恢复定时器 → 该会话回到 `pendingResume`）、`test/sleep-choice.test.mjs`（三个键落盘 + 宿主回读新值 + 非法值 400 且零写入 + `normalizeConfig` 钳制）、`test/market-probe.test.mjs`（先 busy 再持续不可达：窗口内仍挡、超窗放行、沉默不延长窗口）、`test/plugin-files.test.mjs`（一段结束清零、下一次安装重新被看见、`node_modules-link` 进入指纹）。
+
+---
+
+This release gives "what a restart waits for" two **plugin-installation** signals (the market is installing, the plugin folder is moving) and fixes the four judgement defects they exposed: the shutdown gate's goal test, the missing upper bound of the market block, the three settings keys that could not be saved, and the goals that were never adopted after a boot. It also carries two small fixes, two rounds of settings-page work (background becomes the default), a shutdown-countdown default of 20 → 10 seconds, and the documentation brought in line.
+
+### 1. Market install probe: a restart and a power-off both wait for the market (new)
+
+**The problem**: while the market (`dshmarket`) installs or upgrades a plugin its pnpm run is still going, followed by retargeting and validation. Restarting the host at that moment leaves a **half-installed plugin** behind. The gate knew nothing about it.
+
+**Now** the gate asks the market one question: "are you installing something?"
+
+- One **read-only** `GET` (this host's own status route, `/dsh-market/status`; `marketStatusUrl` can point elsewhere). No body, no retry, nothing is written.
+- `busy` or `active` means "installing"; **an answer that cannot be read always means "nothing is installing"** — a timeout, a 404 (the market is not installed at all), a non-2xx answer, a body that is not an object. The restart proceeds exactly as it did before. **A probe that cannot see must never hold the host hostage.**
+- One probe takes at most **800 ms** (`marketProbeTimeoutMs`: it can be shortened, never extended past 800); while waiting, the market is asked every **1500 ms** (`marketProbeIntervalMs`).
+- After the market says it finished, the gate still waits **another 15 seconds** (`marketInstallCooldownMs`), to bridge the gap between two operations of its queue.
+- **The graceful shutdown uses the same test**: a power-off cuts an installation in half even more surely than a restart does.
+- In the interface: the restart capsule shows a pill ("· waiting for the plugin market to finish installing") and the sidebar dot's tooltip says the same sentence — both read the same field, so they cannot contradict each other.
+
+### 2. Plugin-folder watchdog: installs that skip the market are seen too (new)
+
+**The problem**: the market probe only knows what the market itself reports. A plugin installed by hand (a `pnpm add` in a terminal, or the host's own plugin manager) **never touches the market's busy flag**, so the gate saw "nothing is installing" and cut that install in half — that is exactly how dsh-mnemon was lost on 2026-11-10.
+
+**Now** there is a second, market-independent signal. The plugin watches what an install always touches in the profile directory and ordinary use never does:
+
+- `package.json` (adding or removing a dependency), `pnpm-lock.yaml` (almost every install rewrites it), `node_modules` (its own mtime plus the number of entries).
+- The test is "**the fingerprint is still moving**": less than `pluginFilesStableMs` (15 seconds by default) since the last change counts as "still changing". This is not a sliding "somebody changed a file recently" window, so a false positive clears itself right after the last real change.
+- One episode of changes blocks for at most `pluginFilesMaxBlockMs` (5 minutes by default), so **a stuck installation cannot pin the host for ever**.
+- The state lives **in memory only**: a fresh baseline after every restart. Persisting it would produce false positives — the host itself touches `node_modules` while it boots (local plugins are hot-mounted), so a stored fingerprint would mean "the new process compares against the old one" and lock itself.
+- In the interface: the restart capsule shows a pill ("· waiting for a plugin install to finish").
+
+### 3. The shutdown gate's goal test: only goals that are really running block (fix)
+
+**What was wrong**: `goalBusySessions` read `goal.activated === false` / `goal.active === false` — the host **never sets either boolean**, so the test was constantly false and **both a paused (`paused`) and a disarmed (`disarmed`) goal counted as "running"**: the machine could never be shut down.
+
+**There was a harder one too**: `apply()` referenced `goalBusySessions` although it is not in its scope (that closure lives inside `createRuntime()`), so every call threw `ReferenceError: goalBusySessions is not defined`, `sleepGate`'s try/catch swallowed it, the goal list stayed empty and **the goal branch of the shutdown gate was dead code**. The real symptom was not "always blocked" but "**never blocked**": the machine was switched off in the middle of a goal. The list now hangs on the runtime (`runtime.busyGoals`) and `apply` reads it from there.
+
+**How it is decided now** (`lib/lifecycle.js` has two new pure functions, `isGoalRunning` / `selectBusyGoals`, which read the **real fields**):
+
+| Condition | Counts as "running" |
+|---|---|
+| `phase` ∈ {`paused`, `blocked`, `complete`, `completed`, `done`} | no |
+| `activation !== 'armed'` (disarmed) | no |
+| `roundsStarted >= maxGoalRounds` (round budget spent) | no |
+| everything else (armed, not terminal, rounds left) | yes, holds the shutdown |
+
+A probe that throws is still **fail-open** (it does not block) — when the answer cannot be worked out, the machine is not gambled on.
+
+### 4. The market block has an upper bound: an unreadable market no longer blocks for ever (fix)
+
+**What was wrong**: `applyMarketSample` **keeps** the previous busy flag when the probe is unreachable, and `marketInstallStatus` returned "installing" for `busy === true` with **no time limit** — once the market had answered busy and then stopped answering, a restart and a shutdown were blocked by an install that had **ended long ago**. That is the opposite of this module's own rule ("a probe that cannot see must never hold the host hostage").
+
+**Now** `marketInstallStatus` looks at `current.reachable` first. When the last sample was unreachable, that busy flag is only a **memory** and is kept inside this round's cooldown window (`INSTALL_COOLDOWN_MS`, 15 seconds by default); past it the market counts as "not installing" (reason `idle`). The window is measured from **the last moment the market said it was busy** — **silence does not extend it**.
+
+### 5. The three new settings keys are really saved now (fix)
+
+**What was wrong**: the three controls `pluginFilesWatch` / `pluginFilesStableMs` / `pluginFilesMaxBlockMs` were drawn in the settings page and did POST to `/choice`, but the backend **did not know them in three places**:
+
+- the route's whitelist did not list them → a body that carried only them got `400 no-choice`;
+- the `changes` assembly did not carry them → even a route that accepted them stopped there;
+- `persistConfigChoice` had no branch for them → **the route received the value and dropped it here**.
+
+**Now** all three are in place, with validation that matches the schema: the switch must be a boolean and both durations must be **finite millisecond numbers that are not negative**. An illegal value answers 400 and **not a single line is written** (zero writes to the profile row). `normalizeConfig` clamps as well, so a hand-edited profile row cannot break the watchdog (a non-boolean → true; a non-finite or negative duration → the default; otherwise rounded to an integer).
+
+**Along the way**: those four "set once and forget" options (the three new keys plus `restartWindow`) moved out of the group they were in and into the settings page's **More settings** block (**closed by default**), so the group above it stops growing. The full set of interface changes of that round is in section 8.
+
+### 6. A goal disarmed by a restart is adopted on boot (fix)
+
+**What was wrong** (three places):
+
+- `adoptDisarmedGoals` fell back to `state.lastRestart.requestedAt`, a field that is not in `TOP_LEVEL_KEYS` — **it is dropped the moment the file is read and was never written either**, so that branch could never be true. Only `state.restart.requestedAt` counts now.
+- `entry.contextOverflow === true` became an object test (what is really stored is an `{ over: true, … }` object, so the old test was always false).
+- The most important one is the **order**: the boot pass used to **compute the plan first and adopt afterwards**, and the plan only looks at sessions that **already carry `pendingResume`** — so `plan.recover === false` ended the boot before the adoption could ever run. A session whose only pending work was a goal this restart disarmed **was never recovered** and waited for someone to type `recover_now`. Adoption now comes first and the plan second (new `bootRecoveryPlan`), so the boot itself recovers that session.
+
+### 7. Two small fixes
+
+- **A linked plugin is seen as well**: the `readFingerprint` fingerprint had only `package.json` / `pnpm-lock.yaml` / `node_modules`, while a plugin installed with `link:` (or a junction) only touches `node_modules-link` next to the profile — so all three watched paths stayed **exactly the same** and the watchdog was **completely blind** to that kind of install. The fingerprint includes `node_modules-link` now.
+- **The marker is cleared when an episode ends**: `sampleFingerprint` never cleared `firstChangeAt` (once the cap had released an episode, the "start of this episode" stayed valid for the rest of the process), so **after the cap released once, every later install was compared against that old timestamp and was over the cap from the first second** — the watchdog stopped working for good. Now the marker is cleared when the episode ends (the files have been quiet for longer than `stableMs`, or the cap released it), and the next change is a **fresh episode**.
+
+### 8. Settings page rework + background running becomes the default (interface)
+
+This round only touches the interface and defaults; it does not change how a restart or a shutdown is decided.
+
+**One row per thing.** Every section is now "**title on the left, control on the right**"; the title no longer shares a line with the control to serve as its explanation, and the long explanation each row used to carry moved into a **Show details** fold — without opening it you see only the title and the control, which turns the page from a wall of text into a list you can scan. Every "on / off" row is a **sliding switch** (the checkbox is still the real control, so the keyboard and the space bar keep working), no longer styled like a checkbox.
+
+**More settings is a block of its own.** It used to be the bottom part of the Restart settings group; it is its own section now, placed **after Shutdown settings and before Something is wrong**, **closed by default**. It holds four rows: how the restart command script runs, the plugin-folder watchdog switch, and the watchdog's two durations.
+
+**The two durations turned from input fields into dropdowns.** Asking people to type milliseconds by hand is a bad idea:
+
+| Row | Choices |
+|---|---|
+| How many seconds without a file change mean the plugin is installed (`pluginFilesStableMs`) | 5 / 10 / 15 / 30 / 60 seconds |
+| How long to wait at most for the plugin install (`pluginFilesMaxBlockMs`) | 5 / 10 / 30 / 60 minutes |
+
+A value that is **not one of the choices** is never rewritten behind your back: it appears in the dropdown as **Current value**, and the existing configuration keeps working until you pick one yourself.
+
+**Two titles name their subject, and two rows became subordinates.** The titles changed from a subject-less "quiet for how long counts as done" to "How many seconds without a file change mean the plugin is installed" and "How long to wait at most for the plugin install"; the switch row reads "Do not restart or shut down while plugins are installing". The two durations are **drawn indented under the switch** behind a faint vertical line, so it is obvious at a glance that they belong to the switch above; while the switch is off both **go grey and their dropdowns cannot be used**, and the switch row says so itself: "When the switch above is off, these two do nothing."
+
+**The "last restart" row is gone.** Background mode is silent, so there used to be a row showing which launcher really ran (`wscript`, the PowerShell fallback, the foreground window). It no longer takes up room on the settings page — **the information did not disappear**: the host still reports `lastLaunch` in the state data and in the diagnostics, it simply no longer has a row of its own.
+
+**How the restart command script runs now defaults to background.** That row's title also changed, from "how the helper script runs" to "**How the restart command script runs**", and the choices spell out the consequences: *Foreground (a window appears briefly)* / *Background (no window at all, and it never takes the focus; the default)*. The default went from `foreground` to `background` (both the schema in `index.js` and `DEFAULTS` say `background`, and `normalizeConfig` keeps only an **explicit `foreground`** in the foreground; a missing or unreadable value falls back to background) — **an existing configuration that explicitly chose the foreground stays in the foreground**. Nothing else about the restart changed: the grace wait, the idle gate, killing the whole process tree, clearing the cookies, the relaunch and the watchdog keep the same order and the same error-code semantics; when this machine does not allow such little scripts to run, the hidden PowerShell is used as before and the reason is written into the restart report.
+
+### 9. Third settings round: Backup info, subordinate rows, minute tiers (interface)
+
+**"Backup explanation" has a name of its own: "Backup info" (`settings.backup.section`).** It used to be called "Show details" like the explanation of every other row — a dozen "Show details" on one page, one of them opening this row's explanation and another opening a whole backup list, so a reader could not tell from the title what would unfold. The contents did not change by a single character: how many copies, how much space they take, when a copy is taken, each with its time and a "roll back to this one" button, and the backup path. It is still **closed by default** and opens itself only when "this boot was restored by the system", saying so in its title — a restore is the one thing that must not be hidden.
+
+**"Include the installed plugins in the backup" became a subordinate row of "Back up before a restart".** It only means something while that switch above is on, so it is drawn as that switch's child: indented under it, behind the same faint vertical line as the watchdog's two durations; while "Back up before a restart" is off it **goes grey and its switch cannot be used** (the host does not read it either), and it says so itself: "When the switch above (back up before a restart) is off, this one does nothing."
+
+**The tiers of "How long to wait at most for the plugin install" became 5 / 10 / 30 / 60 minutes** (`PLUGIN_FILES_MAX_CHOICES` holds only these four values; the old 1- and 3-minute tiers are gone — the shortest wait is 5 minutes). The seconds row is still 5 / 10 / 15 / 30 / 60 seconds. An old value that is **not one of the tiers** is never rewritten: it shows up in the dropdown as "Current value" and keeps working until you pick one yourself.
+
+**The control column is wider.** The row grid went from `… 220px` to `… 260px`, and a dropdown is at least 200 px wide — so a long choice such as "Background (no window at all, and it never takes the focus; the default)" is shown in full instead of being squeezed into two lines by the title next to it.
+
+### 10. Shutdown countdown default 20 → 10 seconds (default)
+
+**Only the default changed**: `DEFAULT_COUNTDOWN_SECONDS` (`lib/sleep.js`) 20 → 10. The tiers `0 / 10 / 20 / 30 / 60` and the meaning of "0 = shut down immediately" did not change by a single character, and neither did the value check of `/choice`.
+
+**It only decides what an instance that never set this option gets.** All three consumers (the schema's `.default(...)`, `DEFAULTS`, and the controller's fallback) read this one constant; there is no second hardcoded 20; an instance whose profile already stores `20` / `30` / `60` still reads its own value — **nothing is migrated and nothing is overwritten**. The four fallback branches of `snapCountdownChoice` (not a number, empty string, null/undefined, NaN) follow from 20 to 10.
+
+**A countdown chosen in a degraded environment could not be read back (defect fixed).** When the `configEditor` service is unavailable, `persistConfigChoice` writes the chosen seconds into `install-choice.json` and `readInstallChoice` can read it — but **no resolver fed it into the effective value**, so "you chose it, it was written to the file, and after a restart you were back to the default". Following the pattern of the three backup keys there is now `resolveCountdownSeconds(rawConfig, stateDir)`: **profile row > `install-choice.json` > built-in default**, with a `source` telling which one applied. Two deliberate asymmetries: an old value in the row is still snapped to the nearest tier by the old rule (`15` → `20`), while a value in the file **must be a tier** (it is hand-editable JSON: `"30"` / `NaN` / `15` / `-5` are all ignored and fall through to the next level — nothing is guessed and nothing is thrown). The browser-side fallback constant of the settings page moved to 10 as well, and a test now pins that "the browser fallback must equal the default in `lib/sleep.js`", so the two cannot drift apart.
+
+### Documentation
+
+- `README.md` and `docs/README.zh.md` gained the 8 configuration keys this release adds (`restartWindow`, `marketStatusUrl`, `marketProbeTimeoutMs`, `marketProbeIntervalMs`, `marketInstallCooldownMs`, `pluginFilesWatch`, `pluginFilesStableMs`, `pluginFilesMaxBlockMs`), say which four live in the settings page's More settings (closed by default) and which four are pure configuration keys (no control in the settings page), and gained a section about "what the restart waits for".
+- The settings descriptions in both READMEs were rewritten for the interface of sections 8 and 9: one row per thing, explanations folded behind Show details, switches are sliding switches, subordinate rows (the watchdog's two durations, include-plugins-in-the-backup) are indented and unusable while the parent switch is off, both durations are dropdowns (with every tier listed), the backup fold is called "Backup info", the control column is 260 px, `restartWindow` defaults to background while an explicit foreground is unaffected, More settings is a block of its own, and the "last restart" row is gone from the page (the information is still in the state and the diagnostics).
+- The configuration tables in both READMEs were updated for section 10: `sleepCountdownSeconds` defaults to `10`, with the sentence "it only affects an instance that never set this option; an explicitly stored value is neither migrated nor overwritten".
+- The way to run the suite that both READMEs gave, `node --test plugins/dsh-autorestart/test`, **was wrong**: since Node 24 the positional arguments of `--test` are glob patterns, so passing a directory fails with `MODULE_NOT_FOUND`. It now points at the `scripts/run-tests.ps1` the repository actually ships.
+
+### Verification
+
+- Full suite: `tests 1189 / pass 1189 / fail 0 / exit 0` (2026-11-11 on this machine, the bundled Node, `scripts/run-tests.ps1`).
+- Every fix came with a "**red before, green after**" case: stashing the 5 source files and running the 6 related test files gave `tests 61 / fail 12` (red); the same batch was green again after restoring them.
+- Case by case: `test/sleep-external-blockers.test.mjs` (the real plugin: apply → POST /sleep arm → sleep controller tick → sleepGate → shutdown-command stub → sleepSpawn; the paused / disarmed / complete cases assert an empty `status.blockers` and `shutdowns === 1` — the machine really issued the shutdown command — while the armed case asserts `status.phase === 'waiting'` and `shutdowns === 0`), `test/lifecycle.test.mjs` (the unit level of `isGoalRunning` / `selectBusyGoals`), `test/goal-rearm-after-restart.test.mjs` (an old checkpoint → the real boot-recovery timer → that session comes back with `pendingResume`), `test/sleep-choice.test.mjs` (the three keys are saved + the host reports the new values back + an illegal value answers 400 with zero writes + the `normalizeConfig` clamp), `test/market-probe.test.mjs` (busy first and then continuously unreachable: blocked inside the window, released past it, and silence does not extend the window), `test/plugin-files.test.mjs` (an episode clears its marker when it ends, the next install is seen again, `node_modules-link` is part of the fingerprint).
 
 ## 0.9.5
 
