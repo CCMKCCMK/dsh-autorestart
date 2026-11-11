@@ -201,7 +201,43 @@ Both probes are read-only: one `GET`, no body, no retry, nothing is written.
 
 ## About that backup
 
-It holds the **configuration files** (`package.json`, `cordis.patch.yml`, `pnpm-lock.yaml`) and the **local `link:` plugin directories**. Plugins installed from npm are not in it — they can be reinstalled from `package.json` + `pnpm-lock.yaml`. So it is good for "what did this look like before" and "put this one plugin version back", not a one-click reinstall.
+It holds the **configuration files** (`package.json`, `cordis.patch.yml`, `pnpm-lock.yaml`) and the **plugins that are copied with their files** — the ones you wrote yourself and the online ones you changed on this machine. The **online third-party plugins installed as they came are not in it**: the manifest only records their name and version, and they can be reinstalled from `package.json` + `pnpm-lock.yaml`. So it is good for "what did this look like before" and "put this one plugin version back", not a one-click reinstall.
+
+### How big is a backup, and where does the size come from?
+
+**Almost all of it is the plugins that are copied with their files.** The online third-party plugins only
+contribute a name and a version to the manifest, so they cost nothing on disk.
+
+Measured on this machine (2026-11-11, desktop client; read from the manifest and the disk):
+
+| Backup | Size | Files | `links` | `localized` | `thirdParty` |
+|---|---|---|---|---|---|
+| `2026-11-11T06-36-48-336Z` | **132.1 MB** | **820** | 7 | 0 | 145 (name + version only) |
+| `2026-11-11T04-13-04-262Z` | 129.2 MB | 820 | 7 | 0 | 145 (name + version only) |
+
+`linkBytes` is **138,395,369** — essentially every byte of the copy. The two backups have the **same structure**;
+only the byte count moved.
+
+Where those 138 MB sit — the seven copied plugins:
+
+| Plugin | Size |
+|---|---|
+| `dsh-codekg` | **118.7 MB** |
+| `dsh-goal-guard` | 6.1 MB |
+| `dsh-autorestart` | 5.1 MB |
+| `dsh-secret-vault` | 1.2 MB |
+| `dsh-github-guard` | 0.4 MB |
+| `dsh-security-scan` | 0.3 MB |
+| `dsh-web-fetch-fallback` | 0.1 MB |
+
+**`dsh-codekg` alone is about 86% of the whole backup**, and almost all of that is its own `data/` directory
+(**114.0 MB**): `snapshots/` **99.6 MB** (108 files, mostly the `run-*.json` baselines the tool writes),
+`graphs/` 11.4 MB, `runs/` 2.9 MB. That is **run data the tool produced**, and it grows and shrinks with use and
+with the tool's own retention.
+
+So **the size of a backup floats — that is normal.** It does not mean the backup went wrong, and it does not mean
+a plugin was left out: the size follows the plugins' own working data. **The things to look at are the file count
+and the plugin list**, not the byte total.
 
 ## Platforms
 

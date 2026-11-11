@@ -43,7 +43,7 @@
 |---|---|---|---|---|---|---|---|
 | **重启**（把 DSH 自己重启起来） | ✅ 插件用一条**脱离进程树**的命令 kill + 重新 start 应用（WMI 主、`schtasks` 兜底）；**0.9.6 本版真机已验**（**人工目视确认**设置页，见下面那一节） | ✅ 走 `restartCommand`；**没配就什么都不拉起**，只留检查点并如实报告 | ⚠️ 走 `restartCommand` + POSIX 脱离守护（`setsid`）：单测覆盖，**真实 Linux 实例未验** | ⚠️ 同左 | ✅ 走 `restartCommand`（只杀不拉起的 `/home/fg/restart-web.sh`）+ WSL 里的 `supervise-web.sh` 守护；**真机验过（2026-11-11）**：`generation` **53 → 54**、pid **95091 → 103723**、约 **40 秒**后页面重新可用，健康路由 `phase: restarting → idle`，日志只有**一条** `relaunching in 2s`（早一轮读数：2026-11-03，`generation` 29 → 30、pid 73512 → 114454） | ⚠️ 同左（本机 WSL 开着 systemd，无 systemd 那一档未验） | `lib/restart.js`（命令拼装、WMI、POSIX 脱离守护、Windows 调度、执行 `restartCommand`）、`lib/supervisor.js`、`lib/restart-phase.js`、`lib/restart-verdict.js`。测试：`restart.test.mjs`、`restart-phase.test.mjs`、`restart-safety.test.mjs` |
 | **会话续接**（重启后接着干） | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 检查点 `lib/checkpoint.js`、启动恢复 `index.js`、`lib/lifecycle.js`（`bootPlan` 与续接提示）。**前提**：宿主真的被拉起来了（桌面靠自带重启，其余靠你的 `restartCommand` / 守护）。测试：`checkpoint.test.mjs`、`lifecycle.test.mjs`、`integration.test.mjs` |
-| **重启前备份**（profile 快照） | ✅ | ✅ | ✅ | ✅ | ✅ 真机验过（**2026-11-11**）：新备份目录 `2026-11-11T05-33-49-351Z`；manifest 里 **三类插件口径真的成立** —— `link` 安装的 `dsh-autorestart 0.9.6` → `copied: true`、**156 文件 / 5,339,766 字节**，`link` 安装的 `dsh-release-board 0.1.0` → **22 文件 / 568,298 字节**；`thirdParty` 列表**约 180 项只有 name 与 version，没有任何文件**；总 `bytes` **5,958,563**（早一轮读数：2026-11-03，`snapshot.taken: true`，`<stateDir>/backups/2026-11-03T00-09-28-780Z`，6 756 009 字节，含 `node_modules-link/dsh-autorestart`） | ✅ | `lib/backup.js`（`createBackup`、`<stateDir>/backups/`）；默认 **2 份**、可设 **2–10** 份（`backupLimitInfo` 的 `BACKUP_LIMIT`，配置项 `maxBackups`）。**三类插件分开处理**：手写的 `link` 与本地化的 `localized` **连文件一起拷**（回退能原样还原），其余 `thirdParty` **只记 name + version、不拷文件**。测试：`backup.test.mjs`、`hosted-backup.test.mjs`、`backup-hygiene.test.mjs` |
+| **重启前备份**（profile 快照） | ✅ | ✅ | ✅ | ✅ | ✅ 真机验过（**2026-11-11**）：新备份目录 `2026-11-11T05-33-49-351Z`；manifest 里 **三类插件口径真的成立** —— `link` 安装的 `dsh-autorestart 0.9.6` → `copied: true`、**156 文件 / 5,339,766 字节**，`link` 安装的 `dsh-release-board 0.1.0` → **22 文件 / 568,298 字节**；`thirdParty` 列表**约 180 项只有 name 与 version，没有任何文件**；总 `bytes` **5,958,563**（早一轮读数：2026-11-03，`snapshot.taken: true`，`<stateDir>/backups/2026-11-03T00-09-28-780Z`，6 756 009 字节，含 `node_modules-link/dsh-autorestart`） | ✅ | `lib/backup.js`（`createBackup`、`<stateDir>/backups/`）；默认 **2 份**、可设 **2–10** 份（`backupLimitInfo` 的 `BACKUP_LIMIT`，配置项 `maxBackups`）。**三类插件分开处理**：手写的 `link` 与本地化的 `localized` **连文件一起拷**（回退能原样还原），其余 `thirdParty` **只记 name + version、不拷文件**。**体积浮动的原因见下面那一节**（体积跟着插件自己的运行数据走，判据是文件数与插件清单，不是字节数）。测试：`backup.test.mjs`、`hosted-backup.test.mjs`、`backup-hygiene.test.mjs` |
 | **备份完整性把关**（半份快照不许冒充备份） | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | `lib/backup.js` 的 `backupIsComplete`（要有可读 manifest **且**至少一个配置文件）；发布前校验，不完整就删掉、不给正式名字。测试：`backup-completeness.test.mjs`、`backup-identity.test.mjs` |
 | **备份目录清扫**（启动时） | ⚠️ 只清插件自己留下的 | ⚠️ 同左 | ⚠️ 同左 | ⚠️ 同左 | ⚠️ 同左 | ⚠️ 同左 | 启动时有一次备份目录清扫 `removeIncompleteBackups`（`index.js` 调用、`lib/backup.js` 实现），扫掉「既无 manifest 又无配置文件」的空壳目录；但它**按设计跳过所有 `.` 开头的目录**，所以真正的「半份快照」`*.staging-*` 残留**不会被启动清掉** —— `cleanupStaleStaging` 已经写好，但**没有任何生产代码调用它**（只有测试调用）。手动删掉这类残留是安全的。测试：`backup-hygiene.test.mjs`、`backup-staging.test.mjs` |
 | **登录 cookie 清理**（重启前清掉过期凭证） | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | `lib/cookie-clear.js` + `scripts/clear-dsh-auth-cookies.mjs`；结果写进 `<stateDir>/last-cookie-clear.json`（清掉几枚、成功与否）。清不掉**不阻拦**重启，但会如实报出来。测试：`cookie-clear.test.mjs` |
@@ -72,6 +72,37 @@
 用户原话：「设置页面我看了觉得没有问题了」。
 
 > 这一节只覆盖**设置页界面**的目视确认；Windows 桌面端**重启本身**的行为仍由上表「重启」那一行的实现与测试列负责。
+
+### 备份体积从哪来、为什么会浮动（桌面端实测，2026-11-11）
+
+**体积几乎全来自「连文件一起拷」的那几类插件**；线上第三方插件只往 manifest 里记名字和版本，**在磁盘上不占空间**。
+
+桌面端实测（读数来自 `backups/<stamp>/manifest.json` 与磁盘 stat）：
+
+| 备份 | 体积 | 文件数 | `links` | `localized` | `thirdParty` |
+|---|---|---|---|---|---|
+| `2026-11-11T06-36-48-336Z` | **132.1 MB** | **820** | 7 | 0 | 145（只记名字 + 版本） |
+| `2026-11-11T04-13-04-262Z` | 129.2 MB | 820 | 7 | 0 | 145（只记名字 + 版本） |
+
+`linkBytes` 是 **138,395,369** ≈ 整份副本的字节；两份备份的**结构完全一致**，只有字节数动了。
+
+被连文件拷的 7 个插件各占多少：
+
+| 插件 | 体积 |
+|---|---|
+| `dsh-codekg` | **118.7 MB** |
+| `dsh-goal-guard` | 6.1 MB |
+| `dsh-autorestart` | 5.1 MB |
+| `dsh-secret-vault` | 1.2 MB |
+| `dsh-github-guard` | 0.4 MB |
+| `dsh-security-scan` | 0.3 MB |
+| `dsh-web-fetch-fallback` | 0.1 MB |
+
+**`dsh-codekg` 一个占约 86%**，它内部几乎全是自己的 `data/`（**114.0 MB**）：`snapshots/` **99.6 MB**
+（108 个文件，绝大多数是工具自己写的 `run-*.json` 基线）、`graphs/` 11.4 MB、`runs/` 2.9 MB。
+
+> **体积浮动的原因**：备份体积跟着插件**自己的运行数据**涨落（这里是 codekg 的图谱与基线）。
+> **体积浮动不代表备份出错、也没漏插件**——判据是**文件数与插件清单**，不是字节总数。
 
 ### WSL web · 有 systemd 的真机验收（2026-11-11）
 
