@@ -91,3 +91,47 @@ test('a throwing hook is treated as "no blockers", not as a reason to refuse', (
   assert.equal(typeof gate, 'object')
   assert.notEqual(gate.reason, 'plugin-files')
 })
+
+// ---------------------------------------------------------------------------
+// A GOAL THAT IS STILL GOING IS WORK (user report, 2026-11-11):
+// "有一个目标在跑，但是呢，他自己停了下来，然后直接就关机了".
+// A goal drives itself one round at a time; between two rounds the session has
+// no running turn, so a busy-only check called it idle and the machine went
+// down mid-work. The power-off path cannot park a goal the way the restart
+// does, so it has to WAIT.
+// ---------------------------------------------------------------------------
+
+test('an armed goal holds the power-off path even between two of its rounds', () => {
+  const gate = sleepGate(baseRuntime({
+    busyGoals: () => [{ sessionId: 'session-g', goal: { id: 'goal-1' } }],
+  }))
+  assert.equal(gate.allow, false)
+  assert.equal(gate.reason, 'goal-active')
+  assert.equal(gate.blockedBy.length, 1)
+  assert.equal(gate.blockedBy[0].kind, 'goal-active')
+  assert.equal(gate.blockedBy[0].sessionId, 'session-g')
+})
+
+test('the goal reason never masquerades as an install reason', () => {
+  const gate = sleepGate(baseRuntime({
+    busyGoals: () => [{ sessionId: 'session-g', goal: { id: 'goal-1' } }],
+  }))
+  assert.notEqual(gate.reason, 'plugin-install')
+  assert.notEqual(gate.reason, 'plugin-files')
+})
+
+test('a throwing goal probe fails open instead of pinning the machine', () => {
+  const gate = sleepGate(baseRuntime({
+    busyGoals: () => {
+      throw new Error('goal service exploded')
+    },
+  }))
+  assert.equal(typeof gate, 'object')
+  assert.notEqual(gate.reason, 'goal-active')
+})
+
+test('no goals means the goal branch is skipped entirely', () => {
+  const gate = sleepGate(baseRuntime({ busyGoals: () => [] }))
+  assert.notEqual(gate.reason, 'goal-active')
+})
+

@@ -3667,6 +3667,43 @@ let queueDiagLog = { at: 0, requestedAt: 0 }
     return undefined
   }
 
+  /**
+   * SESSIONS THAT STILL HAVE A GOAL TO FINISH (bug, 2026-11-11).
+   *
+   * WHY (user report, verbatim): "有一个目标在跑，但是呢，他自己停了下来，然后
+   * 直接就关机了". A goal drives itself one round at a time, and between two
+   * rounds the session has NO running turn — so `busyAgents()` called it idle
+   * and the power-off path took the machine down in the middle of the work.
+   *
+   * The restart does not need this: it parks the goal first on purpose. The
+   * power-off path cannot park anything (the machine is about to be gone), so
+   * it must WAIT while an armed goal still has work to do.
+   *
+   * @returns {{ sessionId: string, goal: object }[]}
+   */
+  const goalBusySessions = () => {
+    const out = []
+    let agents = []
+    try {
+      agents = ctx.agents.list() || []
+    } catch {
+      agents = []
+    }
+    for (const agent of agents) {
+      try {
+        if (!agent || !agent.id) continue
+        const sessionId = String(agent.id)
+        const goal = goalFor(sessionId, agent)
+        if (!goal || typeof goal !== 'object') continue
+        // A goal that is switched off or finished is not work in progress.
+        if (goal.activated === false || goal.active === false) continue
+        if (goal.phase === 'completed' || goal.phase === 'complete' || goal.phase === 'done') continue
+        out.push({ sessionId, goal })
+      } catch {}
+    }
+    return out
+  }
+
   /** The live goal of a session, or undefined when it has none. */
   const goalFor = (sessionId, agent) => {
     const target = agent || liveAgent(sessionId)
@@ -12406,6 +12443,25 @@ export function sleepGate(runtime) {
       })),
     }
   }
+  // A GOAL THAT IS STILL GOING IS WORK, even between two of its rounds.
+  let goals = []
+  try {
+    goals = typeof runtime.busyGoals === 'function' ? runtime.busyGoals() : []
+  } catch {
+    goals = []
+  }
+  if (Array.isArray(goals) && goals.length > 0) {
+    return {
+      allow: false,
+      reason: 'goal-active',
+      blockedBy: goals.map((entry) => ({
+        sessionId: entry.sessionId ?? null,
+        kind: 'goal-active',
+        label: '目标',
+        name: '会话里的目标还没做完',
+      })),
+    }
+  }
   let busy = []
   try {
     busy = runtime.busyAgents()
@@ -12494,7 +12550,11 @@ function createSleepService(ctx, runtime, config, options = {}) {
   const invocation = () => effectiveSleepPlan(plan, config)
   // The same external blockers the restart gate uses — passed through the
   // runtime so `sleepGate` stays a plain function.
-  const gate = () => sleepGate({ ...runtime, externalBlockers: options.externalBlockers })
+  const gate = () => sleepGate({
+    ...runtime,
+    externalBlockers: options.externalBlockers,
+    busyGoals: options.busyGoals,
+  })
   const final = invocation()
   const now = typeof options.sleepNow === 'function' ? options.sleepNow : () => Date.now()
   const spawn = typeof options.sleepSpawn === 'function' ? options.sleepSpawn : undefined
@@ -13425,6 +13485,8 @@ export function apply(ctx, rawConfig, options = {}) {
     // A shutdown must not cut an installation in half either: the very same
     // blockers the restart gate consults.
     externalBlockers: () => externalBlockersNow(),
+    // Nor may it cut a goal in half between two of its rounds (2026-11-11).
+    busyGoals: () => goalBusySessions(),
   })
 
   log.info('activated', {
