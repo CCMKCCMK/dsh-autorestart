@@ -433,3 +433,74 @@ test('the restart reserve is independent of the shutdown countdown', () => {
   assert.equal(counted.effectiveSettleMs, 2000, 'the countdown does not change the restart window')
   assert.equal(counted.graceMs, 0, 'the countdown does not create a reserve')
 })
+
+// ------------------------------------------------------------------ *
+// A FORCED RESTART IS AN ALLOW (user report, 2026-11-13).
+//
+// `restart-gate.json` is the one file an operator reads to find out why a restart
+// did or did not happen. It mapped the decision with
+// `decision.action === 'restart' ? 'allow' : 'wait'`, so a FORCED restart — which
+// really does restart, over the running conversations — was written down as
+// `wait`. The record then contradicted itself:
+// `{action: "wait", reason: "force-restart-while-busy"}`. The user hit exactly
+// that while debugging a restart that looked inexplicably stuck.
+//
+// `allow` must mean "the gate let the restart through", so it is true for both
+// restart actions and false for every outcome that leaves the restart pending.
+// ------------------------------------------------------------------ */
+
+test('a forced restart is recorded as allow, not wait', () => {
+  const { stateFile } = applyPendingRestart('gate-force')
+  const root = { id: 'sess-root', status: 'running' }
+  const made = createEventContext({
+    agents: { list: () => [root], roots: () => [root], get: () => root },
+  })
+  const runtime = apply(made.ctx, {
+    stateFile,
+    recoveryDelayMs: 0,
+    enabled: true,
+    settleMs: 60000,
+    forceRestartWhenBusy: true,
+  })
+
+  made.fire('agent/status', { agent: root, status: 'running' })
+  // `tick()` is what evaluates the gate; `quietSince()` was just refreshed, so
+  // without the force path this would settle into a wait.
+  try {
+    runtime.tick()
+  } catch {
+    // The force path may proceed to the restart command, which this fake host
+    // does not provide. The RECORD is written before that, which is what is read.
+  }
+
+  const recorded = readGateRecord(stateFile)
+  assert.equal(
+    recorded.reason,
+    'force-restart-while-busy',
+    'the record names the force path as the reason',
+  )
+  assert.equal(
+    recorded.action,
+    'allow',
+    'and it says the gate ALLOWED it — a forced restart is not a wait',
+  )
+})
+
+test('an ordinary wait is still recorded as wait', () => {
+  const { stateFile } = applyPendingRestart('gate-wait')
+  const root = { id: 'sess-root', status: 'running' }
+  const made = createEventContext({
+    agents: { list: () => [root], roots: () => [root], get: () => root },
+  })
+  const runtime = apply(made.ctx, { stateFile, recoveryDelayMs: 0, enabled: true, settleMs: 60000 })
+
+  made.fire('agent/status', { agent: root, status: 'running' })
+  try {
+    runtime.tick()
+  } catch {
+    // No restart command here either; only the record matters.
+  }
+
+  const recorded = readGateRecord(stateFile)
+  assert.equal(recorded.action, 'wait', 'without the opt-in the gate really does wait')
+})

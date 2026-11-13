@@ -7471,10 +7471,17 @@ const titleOfSummary = (item) => {
         : now
       const record = {
         at: now,
-        // `allow` means "the gate let the restart through" (the decision says
-        // `restart`); every other outcome — wait / warn / long-wait — is a
-        // wait, because the restart has not happened.
-        action: decision.action === 'restart' ? 'allow' : 'wait',
+        // `allow` means "the gate let the restart through" — the decision says
+        // `restart` OR `force-restart`. Every other outcome — wait / warn /
+        // long-wait / give-up — is a wait, because the restart has not happened.
+        //
+        // `force-restart` used to be recorded as `wait`, which is simply false and
+        // made the one file people read to find out why a restart did or did not
+        // happen say the opposite of what was going on: the force path DOES restart
+        // over the running conversations, so the gate allowed it. An operator
+        // looking at `{action: "wait", reason: "force-restart-while-busy"}` had to
+        // notice that the reason and the action contradicted each other.
+        action: decision.action === 'restart' || decision.action === 'force-restart' ? 'allow' : 'wait',
         reason: typeof decision.reason === 'string' ? decision.reason : 'unknown',
         blockedBy: busy.map((entry) => ({
           sessionId: entry && entry.sessionId !== undefined && entry.sessionId !== null
