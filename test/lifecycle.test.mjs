@@ -178,21 +178,60 @@ test('a forced restart that was already attempted gives up instead of looping', 
   assert.equal(waiting.reason, 'waiting-for-conversations');
 });
 
-test('the force path needs the deferred phase — every other phase keeps waiting', () => {
-  const state = deferredState();
-  state.phase = 'running';
-  const decision = restartDecision(state, { anyAgentRunning: true, now: T + 1, policy: 'auto' });
-  assert.equal(decision.action, 'long-wait');
-  assert.equal(decision.reason, 'waiting-for-conversations');
+// THE ONE CASE THE OPTION EXISTS FOR (user report, 2026-11-13).
+//
+// The test that used to sit here asserted the opposite — "the force path needs the
+// deferred phase" — and so locked the defect in: it only ever exercised
+// `deferredState()`, whose phase is `'deferred'`, which is exactly the state a
+// restart requested OVER a busy conversation never reaches. `'deferred'` is set
+// only after a restart has already begun and gone wrong (rollback watcher, denied
+// idle gate, mid-restart activity, post-snapshot activity). The realistic
+// sequence is the one below: an idle-looking state with its phase untouched, a
+// restart requested, and then a conversation that is busy by the time the poller
+// looks. With the phase guard the option silently did nothing here.
+test('forceRestartWhenBusy fires wherever the request was queued, not only in deferred', () => {
+  for (const phase of ['idle', 'deferred', 'recovering', 'running']) {
+    const state = deferredState();
+    state.phase = phase;
+    const decision = restartDecision(state, {
+      anyAgentRunning: true,
+      now: T + 1,
+      policy: 'auto',
+      forceRestartWhenBusy: true,
+    });
+    assert.equal(decision.action, 'force-restart', `phase ${phase} must be forced`);
+    assert.equal(decision.reason, 'force-restart-while-busy');
+  }
+});
 
-  const forced = restartDecision(state, {
+test('without the opt-in a busy conversation still keeps the restart waiting', () => {
+  // The option is the ONLY thing that acts on a running conversation, so removing
+  // the phase guard must not turn an ordinary request into an interrupting one.
+  for (const phase of ['idle', 'deferred', 'running']) {
+    const state = deferredState();
+    state.phase = phase;
+    const decision = restartDecision(state, {
+      anyAgentRunning: true,
+      now: T + 1,
+      policy: 'auto',
+      forceRestartWhenBusy: false,
+    });
+    assert.equal(decision.action, 'long-wait', `phase ${phase} must wait`);
+    assert.equal(decision.reason, 'waiting-for-conversations');
+    assert.ok(Array.isArray(decision.blockedBy), 'a long wait names what holds it');
+  }
+});
+
+test('the policy still vetoes the force path', () => {
+  const state = deferredState();
+  const decision = restartDecision(state, {
     anyAgentRunning: true,
     now: T + 1,
-    policy: 'auto',
+    policy: 'manual',
     forceRestartWhenBusy: true,
   });
-  assert.equal(forced.action, 'long-wait');
-  assert.equal(forced.reason, 'waiting-for-conversations');
+  assert.equal(decision.action, 'long-wait');
+  assert.equal(decision.reason, 'waiting-for-conversations');
 });
 
 test('resumeStep skips unknown sessions', () => {
