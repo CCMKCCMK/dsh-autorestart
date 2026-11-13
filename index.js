@@ -9852,6 +9852,44 @@ export function buildLifecycleTools(runtime, config) {
           now,
         })
       }
+      // EVERY OTHER CONVERSATION RUNNING RIGHT NOW MUST BE MARKED TOO (incident
+      // 2026-11-11, fixed here). Only the session that ASKED for the restart used
+      // to be marked. The others relied on `beginBoot()` converting a session it
+      // already knew about into `pendingResume` — but a session the checkpoint has
+      // no entry for is invisible to that loop, so the restart killed it and it was
+      // NEVER woken again. With `forceRestartWhenBusy` on this is the common case,
+      // not an edge case: the whole point of forcing is that other conversations
+      // are running when the restart lands. Those were the ones the user then had
+      // to revive by hand, by typing a fresh message.
+      //
+      // Marking them here is what makes "interrupt and resume" honest: requesting
+      // the restart is the consent to interrupt, so every session that will be
+      // interrupted is written down as pending BEFORE anything is killed.
+      let alsoMarked = 0
+      try {
+        const live = typeof runtime.busyAgents === 'function' ? runtime.busyAgents() : []
+        for (const blocker of Array.isArray(live) ? live : []) {
+          const otherId = blocker && typeof blocker.sessionId === 'string' ? blocker.sessionId : null
+          if (otherId === null || otherId === sessionId) continue
+          // A subagent is not a conversation: it has no inbox to continue and
+          // `sessionController.resolveAgent` refuses subagent-owned sessions.
+          if (blocker.kind === 'subagent' || blocker.isSubagent === true) continue
+          const otherEntry = sessionEntry(state, otherId)
+          if (otherEntry && otherEntry.handoff != null) continue
+          markPendingResume(state, {
+            sessionId: otherId,
+            reason: 'interrupted by a restart another session requested',
+            goalId: otherEntry && otherEntry.goal ? otherEntry.goal.goalId : undefined,
+            now,
+          })
+          alsoMarked += 1
+        }
+      } catch (error) {
+        log.warn('could not mark the other running conversations for recovery:', String(error))
+      }
+      if (alsoMarked > 0) {
+        log.info(`${alsoMarked} other running conversation(s) were marked for recovery before this restart`, { alsoMarked })
+      }
       if (typeof args.defer_seconds === 'number' && Number.isFinite(args.defer_seconds) && args.defer_seconds > 0) {
         state.restart.requestedAt = now + Math.min(args.defer_seconds, 3600) * 1000
       }
