@@ -13532,6 +13532,22 @@ function registerHealthRoute(ctx, runtime, config, sleep) {
       const origin = typeof webServer.getOrigin === 'function' ? String(webServer.getOrigin()) : ''
       const portMatch = /:(\d+)\/?$/.exec(origin)
       if (portMatch) runtime.webPort = Number(portMatch[1])
+      // THE HOST MAY NOT EXPOSE getOrigin() AT ALL (2026-11-13, dsh 0.2.0-rc.2):
+      // `@deepseek-ai/dsh-host-webserver` declares `get port()` and no
+      // `getOrigin()`, so `origin` stays empty, `runtime.webPort` stays 0 and
+      // the instance record is published with `port: 0`. Everything that reads
+      // that record then fails:
+      //   - the rollback watcher requires `record.port` before it polls the new
+      //     instance, so it never sees it come back;
+      //   - `waitForHealthyInstance` requires `port > 0`, so the in-process
+      //     confirmation never succeeds either.
+      // Both end the same way: the restart is judged FAILED after
+      // `rollbackTimeoutMs` and the pre-restart snapshot is restored over the
+      // live profile, silently reverting configuration written after the
+      // snapshot was taken.
+      if (!(Number(runtime.webPort) > 0) && Number(webServer.port) > 0) {
+        runtime.webPort = Number(webServer.port)
+      }
       // THE INSTANCE RECORD. The new instance publishes its own port and its
       // own access link (with the boot token), so:
       //   - the rollback watcher learns the port of the NEW instance instead
